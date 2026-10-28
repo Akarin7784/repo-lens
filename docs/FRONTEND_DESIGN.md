@@ -472,7 +472,7 @@ type GraphData = { nodes: GraphNode[] /* ≤300，id 唯一 */; edges: GraphEdge
 
 Tailwind 映射为 `bg-bg / bg-panel / text-fg / text-muted / border-line / bg-accent / bg-cite / bg-canvas / bg-node-* / border-node-stroke`；深色通过 `<html data-theme="dark">` 覆盖变量（`@custom-variant dark`），默认浅色，可用 `?theme=dark` 或右上角切换（存 localStorage）。实测对比度见 T-004 的 PR 描述。
 
-> 注：§6.5、§8.4、§8.5 中仍出现的旧 token 名（`--surface`、`--surface-2`、`--accent-strong`、`--text-3`、`--danger`）属于对话面板，不在 T-004 范围；实现对话面板时按 DESIGN_STYLE.md 统一替换。
+> 注：§6.5、§8.4、§8.5 中仍出现的旧 token 名（`--surface`、`--surface-2`、`--text-3`、`--danger`；`--accent-strong` 现已是 DESIGN_STYLE.md 中的正式令牌，含义见该文件）属于对话面板，不在 T-004 范围；实现对话面板时按 DESIGN_STYLE.md 统一替换。
 
 **不按目录上色**（DESIGN_STYLE：暖中性色阶，不用彩虹色）。陶土色只用于交互强调、选中描边和引用高亮。
 
@@ -488,9 +488,9 @@ Tailwind 映射为 `bg-bg / bg-panel / text-fg / text-muted / border-line / bg-a
 | external | `<ExternalNode>` | 虚线胶囊 | 150×28 | `--canvas`；默认隐藏，工具栏「外部依赖」开启 |
 
 边（`<WeightedEdge>`，smoothstep + 闭合小箭头，颜色 `--edge`）：
-- 原始边：1.25px 实线；`kind: type-only` 点线，`dynamic` 短虚线。
+- 原始边：1.25px 实线；`kind: type-only` 更淡的圆点线（`1 5`，透明度 0.55），`dynamic` 短虚线（`6 4`）。
 - `aggregated:true`：线宽 `1 + 1.5·log2(weight)`，上限 8px，不透明度 75%；weight>1 时中点显示 `×weight` 小胶囊。
-- 循环依赖（加分项）：待定，不用红色霓虹；建议 `--accent` 虚线。
+- 循环依赖：`--accent-strong` 长虚线（`8 4`，比普通边粗 0.75px，对画布 ≥3:1：浅色 4.35、深色 6.37）+ 边中点 `↻` 小标记；优先级高于 kind 线型。数据来自 `meta.cycles`（环上 file id 按依赖方向排列），原始边上卷到可见层级后判断。图区左下图例列出「依赖 / 仅类型引用 / 循环依赖」，状态条显示可见环边数。T-004 只用 hono 示例 fixture 里人为加的一个环验证，真实环数据随 T-003 接入。
 
 高亮：
 - 选中：2px `--accent` 描边 + `--cite-bg` 填充。

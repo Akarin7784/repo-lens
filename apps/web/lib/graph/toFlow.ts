@@ -18,6 +18,8 @@ export type RepoEdgeData = {
   kind: GraphEdge['kind'];
   /** 有选中节点时:与之相连为 on,否则 dim;无选中为 undefined */
   highlight?: 'on' | 'dim';
+  /** 在 meta.cycles 的某个环上 */
+  cycle?: boolean;
 };
 export type RepoFlowEdge = Edge<RepoEdgeData, 'weighted'>;
 
@@ -38,6 +40,7 @@ export function toFlow(
   layout: LayoutResult,
   expanded: ReadonlySet<string>,
   childCounts: ReadonlyMap<string, number>,
+  cycleKeys: ReadonlySet<string> = new Set(),
 ): { nodes: RepoFlowNode[]; edges: RepoFlowEdge[] } {
   const visibleIds = new Set(visible.map((n) => n.id));
   const placed = new Set<string>();
@@ -80,7 +83,12 @@ export function toFlow(
     target: e.target,
     type: 'weighted',
     zIndex: 2,
-    data: { weight: e.weight, aggregated: e.aggregated === true, kind: e.kind },
+    data: {
+      weight: e.weight,
+      aggregated: e.aggregated === true,
+      kind: e.kind,
+      cycle: cycleKeys.has(`${e.source}->${e.target}`),
+    },
   }));
   return { nodes, edges: flowEdges };
 }

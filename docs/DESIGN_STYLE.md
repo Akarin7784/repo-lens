@@ -37,7 +37,7 @@
 | `--node-external` | 外部依赖节点(虚线) | `#F0EEE6` | `#262624` |
 | `--node-stroke` | 节点描边 | `#7A756A` | `#8A877F` |
 | `--node-muted` | 节点内次要文字 | `#5C5B59` | `#A8A7A2` |
-| `--edge` | 依赖边 | `#8A8579` | `#77746C` |
+| `--edge` | 依赖边(`type-only` 用同色圆点线、透明度 0.55;循环依赖边改用 `--accent-strong` 长虚线 + `↻` 标记) | `#8A8579` | `#77746C` |
 | 选中节点 | `--accent-strong` 2px 描边 + 引用高亮底色 | 同上 | 同上 |
 
 - **字体**:标题使用衬线字体(`"Tiempos Headline", "Source Serif 4", Georgia, serif`),正文使用无衬线(`system-ui, "Inter", sans-serif`),代码使用等宽(`"JetBrains Mono", ui-monospace, monospace`)。开源项目不得内嵌商业字体,实际加载 Source Serif 4 与 Inter;中文标题回退 Noto Serif SC(next/font,`display: swap`、不 preload,按 unicode-range 分片只下载用到的字)。

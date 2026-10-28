@@ -11,6 +11,8 @@ export interface GraphSource {
   loadChildren(parentId: string | null): Promise<GraphSlice>;
   /** fixture 模式:任意节点(含未加载)的 parentId,用于把原始边上卷到可见祖先 */
   parentOf?(id: string): string | null | undefined;
+  /** meta.cycles(环上的 file id);接真实接口后来自 T-003 的响应 */
+  cycles?(): readonly (readonly string[])[];
 }
 
 export function createFixtureSource(repoLabel: string, data: unknown): GraphSource {
@@ -22,5 +24,6 @@ export function createFixtureSource(repoLabel: string, data: unknown): GraphSour
     rawEdges: () => full.edges,
     loadChildren: async (parentId) => sliceGraph(full, parentId),
     parentOf: (id) => parents.get(id),
+    cycles: () => full.meta.cycles ?? [],
   };
 }

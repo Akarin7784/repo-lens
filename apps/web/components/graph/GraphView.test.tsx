@@ -22,6 +22,27 @@ async function mount() {
 }
 const mwFile = '[data-testid^="node-f:src/middleware/"]';
 
+describe('<GraphView> 环边与图例', () => {
+  it('hono 示例的收起视图里有环边标记,图例含「循环依赖」与「仅类型引用」', async () => {
+    const s = SAMPLE_REPOS.hono;
+    const engine = await createInlineEngine();
+    render(
+      <div style={{ width: 1000, height: 700 }}>
+        <GraphView
+          source={createFixtureSource('honojs/hono', s.data)}
+          owner={s.owner}
+          repo={s.repo}
+          engine={engine}
+        />
+      </div>,
+    );
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('环边 2'));
+    const legend = screen.getByLabelText('图例');
+    expect(legend).toHaveTextContent('循环依赖');
+    expect(legend).toHaveTextContent('仅类型引用');
+  });
+});
+
 describe('<GraphView> 交互', () => {
   it('单击节点主体只选中、不展开;Esc 取消选中', async () => {
     const { container } = await mount();

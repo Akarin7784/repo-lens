@@ -12,6 +12,7 @@ import {
 import {
   aggregateEdges,
   countChildren,
+  cycleEdgeKeys,
   deriveExternal,
   makeVisibility,
   SliceTooLargeError,
@@ -92,6 +93,7 @@ function Inner({ source, owner, repo, engine }: GraphViewProps) {
     const vis = makeVisibility(state.nodes, state.expanded, source.parentOf);
     const visible = state.nodes.filter((n) => vis.isVisible(n.id));
     let edges = aggregateEdges(state.edges, vis.visibleAncestor);
+    const cycleKeys = cycleEdgeKeys(state.edges, source.cycles?.() ?? [], vis.visibleAncestor);
     let nodes = visible;
     if (state.includeExternal) {
       const files = state.nodes.filter((n) => n.type === 'file');
@@ -99,7 +101,7 @@ function Inner({ source, owner, repo, engine }: GraphViewProps) {
       nodes = [...visible, ...ext.nodes];
       edges = [...edges, ...ext.edges];
     }
-    return { nodes, edges };
+    return { nodes, edges, cycleKeys };
   }, [state.nodes, state.edges, state.expanded, state.includeExternal, source]);
 
   useEffect(() => {
@@ -118,10 +120,20 @@ function Inner({ source, owner, repo, engine }: GraphViewProps) {
           for (const [id, [x, y]] of Object.entries(file.positions))
             if (layout.positions.has(id)) layout.positions.set(id, { x, y });
         setFlow(
-          toFlow(derived.nodes, derived.edges, layout, state.expanded, countChildren(state.nodes)),
+          toFlow(
+            derived.nodes,
+            derived.edges,
+            layout,
+            state.expanded,
+            countChildren(state.nodes),
+            derived.cycleKeys,
+          ),
         );
+        const nCycle = derived.edges.filter((e) =>
+          derived.cycleKeys.has(`${e.source}->${e.target}`),
+        ).length;
         setStatus(
-          `${derived.nodes.length} 个节点 · ${derived.edges.length} 条边 · 布局 ${Math.round(performance.now() - t0)} ms`,
+          `${derived.nodes.length} 个节点 · ${derived.edges.length} 条边${nCycle ? ` · 环边 ${nCycle}` : ''} · 布局 ${Math.round(performance.now() - t0)} ms`,
         );
         requestAnimationFrame(() => fitView({ padding: 0.12, duration: 300 }));
       })
@@ -185,6 +197,7 @@ function Inner({ source, owner, repo, engine }: GraphViewProps) {
           <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="var(--border)" />
           <Controls showInteractive={false} position="bottom-right" />
         </ReactFlow>
+        <Legend />
         <div
           role="status"
           className="absolute bottom-3 left-3 z-10 rounded-full border border-line bg-panel px-3 py-1 text-[12px] text-muted"
@@ -196,6 +209,59 @@ function Inner({ source, owner, repo, engine }: GraphViewProps) {
         </div>
       </div>
     </ToggleContext.Provider>
+  );
+}
+
+/** 图例:投屏时靠颜色 + 线型 + 标记三重区分 */
+function Legend() {
+  const row = 'flex items-center gap-2';
+  return (
+    <div
+      aria-label="图例"
+      className="absolute bottom-12 left-3 z-10 flex flex-col gap-1 rounded-control border border-line bg-panel px-3 py-2 text-[12px] text-fg shadow-soft"
+    >
+      <div className={row}>
+        <svg width="36" height="8" aria-hidden>
+          <line x1="0" y1="4" x2="36" y2="4" stroke="var(--edge)" strokeWidth="2" />
+        </svg>
+        依赖
+      </div>
+      <div className={row}>
+        <svg width="36" height="8" aria-hidden>
+          <line
+            x1="0"
+            y1="4"
+            x2="36"
+            y2="4"
+            stroke="var(--edge)"
+            strokeWidth="2"
+            strokeDasharray="1 5"
+            strokeLinecap="round"
+            strokeOpacity="0.55"
+          />
+        </svg>
+        仅类型引用
+      </div>
+      <div className={row}>
+        <svg width="36" height="8" aria-hidden>
+          <line
+            x1="0"
+            y1="4"
+            x2="36"
+            y2="4"
+            stroke="var(--accent-strong)"
+            strokeWidth="2.5"
+            strokeDasharray="8 4"
+          />
+        </svg>
+        <span className="inline-flex items-center gap-1">
+          循环依赖
+          <span className="rounded-full bg-accent-strong px-1 text-[10px] leading-4 text-on-accent">
+            ↻
+          </span>
+        </span>
+      </div>
+    </div>
   );
 }
 

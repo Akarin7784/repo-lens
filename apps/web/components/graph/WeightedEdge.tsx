@@ -3,7 +3,9 @@ import { memo } from 'react';
 import { BaseEdge, EdgeLabelRenderer, getSmoothStepPath, type EdgeProps } from '@xyflow/react';
 import { edgeWidth, type RepoFlowEdge } from '../../lib/graph/toFlow';
 
-const DASH: Record<string, string | undefined> = { 'type-only': '2 4', dynamic: '6 4' };
+// type-only:更淡的圆点线;dynamic:短虚线;环边:--accent-strong 长虚线 + 中点 ↻ 标记(优先级最高)
+const DASH: Record<string, string | undefined> = { 'type-only': '1 5', dynamic: '6 4' };
+const CYCLE_DASH = '8 4';
 
 /** 聚合边按 weight 定粗细并标注 weight;type-only 点线、dynamic 短虚线 */
 export const WeightedEdge = memo(function WeightedEdge(props: EdgeProps<RepoFlowEdge>) {
@@ -21,18 +23,37 @@ export const WeightedEdge = memo(function WeightedEdge(props: EdgeProps<RepoFlow
   const weight = data?.weight ?? 1;
   const aggregated = data?.aggregated ?? false;
   const hl = data?.highlight;
+  const cycle = data?.cycle === true;
+  const typeOnly = !cycle && data?.kind === 'type-only';
+  const base = hl === 'on' || cycle ? 'var(--accent-strong)' : 'var(--edge)';
+  const opacity = hl === 'dim' ? 0.15 : typeOnly ? 0.55 : aggregated ? 0.75 : 0.9;
   return (
     <>
       <BaseEdge
         path={path}
         markerEnd={markerEnd}
         style={{
-          stroke: hl === 'on' ? 'var(--accent-strong)' : 'var(--edge)',
-          strokeWidth: edgeWidth(weight, aggregated) + (hl === 'on' ? 0.75 : 0),
-          strokeOpacity: hl === 'dim' ? 0.15 : aggregated ? 0.75 : 0.9,
-          strokeDasharray: DASH[data?.kind ?? ''],
+          stroke: base,
+          strokeWidth: edgeWidth(weight, aggregated) + (hl === 'on' || cycle ? 0.75 : 0),
+          strokeOpacity: opacity,
+          strokeDasharray: cycle ? CYCLE_DASH : DASH[data?.kind ?? ''],
+          strokeLinecap: typeOnly ? 'round' : undefined,
         }}
       />
+      {cycle && hl !== 'dim' && (
+        <EdgeLabelRenderer>
+          <div
+            data-testid={`cycle-mark-${props.id}`}
+            title="循环依赖"
+            className="pointer-events-none absolute rounded-full bg-accent-strong px-1 text-[10px] leading-4 text-on-accent"
+            style={{
+              transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY - 14}px)`,
+            }}
+          >
+            ↻
+          </div>
+        </EdgeLabelRenderer>
+      )}
       {aggregated && weight > 1 && hl !== 'dim' && (
         <EdgeLabelRenderer>
           <div

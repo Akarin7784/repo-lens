@@ -709,12 +709,22 @@
       "kind": "static",
       "srcFileId": "f:src/jsx/dom/render.ts",
       "weight": 1
+    },
+    {
+      "id": "e:src/utils/url.ts->src/request.ts:type-only",
+      "source": "f:src/utils/url.ts",
+      "target": "f:src/request.ts",
+      "type": "imports",
+      "kind": "type-only",
+      "srcFileId": "f:src/utils/url.ts",
+      "weight": 1
     }
   ],
   "meta": {
     "repoId": 1,
     "commitSha": "0000000000000000000000000000000000000000",
     "parentId": null,
-    "language": "typescript"
+    "language": "typescript",
+    "cycles": [["f:src/request.ts", "f:src/utils/url.ts"]]
   }
 }

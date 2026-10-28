@@ -8,6 +8,7 @@ import {
 import { SAMPLE_REPOS } from '../fixtures';
 import {
   aggregateEdges,
+  cycleEdgeKeys,
   assertSliceSize,
   makeVisibility,
   sliceGraph,
@@ -257,5 +258,32 @@ describe('highlightSelection', () => {
     expect(v.nodes.find((n) => n.id === 'a')!.selected).toBe(true);
     expect(v.edges.map((e) => e.data!.highlight)).toEqual(['on', 'on', 'dim']);
     expect([v.out, v.in]).toEqual([1, 1]);
+  });
+});
+
+describe('cycleEdgeKeys(环边)', () => {
+  const hono = GraphDataSchema.parse(SAMPLE_REPOS.hono.data);
+  const parents = new Map(hono.nodes.map((n) => [n.id, n.parentId]));
+  const topModule = (id: string): string | null => {
+    let cur: string | null | undefined = id;
+    while (cur && parents.get(cur)) cur = parents.get(cur);
+    return cur ?? null;
+  };
+  it('hono 示例 fixture 带一个合法的示例环', () => {
+    expect(hono.meta.cycles).toEqual([['f:src/request.ts', 'f:src/utils/url.ts']]);
+  });
+  it('文件层:环上的两条原始边都被标记,其余不标', () => {
+    const keys = cycleEdgeKeys(hono.edges, hono.meta.cycles!, (id) => id);
+    expect([...keys].sort()).toEqual([
+      'f:src/request.ts->f:src/utils/url.ts',
+      'f:src/utils/url.ts->f:src/request.ts',
+    ]);
+  });
+  it('上卷到 module 层后变成 m:. ⇄ m:src/utils 两条聚合边', () => {
+    const keys = cycleEdgeKeys(hono.edges, hono.meta.cycles!, topModule);
+    expect([...keys].sort()).toEqual(['m:.->m:src/utils', 'm:src/utils->m:.']);
+  });
+  it('环内两端上卷到同一节点时不产生环边', () => {
+    expect(cycleEdgeKeys(hono.edges, hono.meta.cycles!, () => 'm:.').size).toBe(0);
   });
 });

@@ -188,3 +188,25 @@ export function countChildren(nodes: readonly GraphNode[]): Map<string, number> 
   for (const n of nodes) if (n.parentId) m.set(n.parentId, (m.get(n.parentId) ?? 0) + 1);
   return m;
 }
+
+/**
+ * 环上的边:原始边 (a→b) 若是某个 meta.cycles 环里相邻两项(含末项→首项),就是环边;
+ * 上卷到当前可见层级后返回 `源->目标` 键集合,原始边与聚合边都按这个键判断。
+ */
+export function cycleEdgeKeys(
+  raw: readonly GraphEdge[],
+  cycles: readonly (readonly string[])[],
+  lift: (id: string) => string | null,
+): Set<string> {
+  const pairs = new Set<string>();
+  for (const c of cycles)
+    c.forEach((id, i) => c.length > 1 && pairs.add(`${id}->${c[(i + 1) % c.length]}`));
+  const keys = new Set<string>();
+  for (const e of raw) {
+    if (!pairs.has(`${e.source}->${e.target}`)) continue;
+    const s = lift(e.source);
+    const t = lift(e.target);
+    if (s && t && s !== t) keys.add(`${s}->${t}`);
+  }
+  return keys;
+}

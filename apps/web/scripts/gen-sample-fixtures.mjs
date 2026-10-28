@@ -9,7 +9,7 @@ import { posix as P } from 'node:path';
 
 const ZERO_SHA = '0'.repeat(40);
 
-function build({ repoId, files, imports }) {
+function build({ repoId, files, imports, cycles }) {
   const nodes = new Map();
   const add = (n) => (nodes.has(n.id) ? nodes.get(n.id) : (nodes.set(n.id, n), n));
   const moduleOf = (p) => {
@@ -54,7 +54,13 @@ function build({ repoId, files, imports }) {
   return {
     nodes: list,
     edges,
-    meta: { repoId, commitSha: ZERO_SHA, parentId: null, language: 'typescript' },
+    meta: {
+      repoId,
+      commitSha: ZERO_SHA,
+      parentId: null,
+      language: 'typescript',
+      ...(cycles ? { cycles: cycles.map((c) => c.map((f) => `f:${f}`)) } : {}),
+    },
   };
 }
 
@@ -129,7 +135,11 @@ const hono = build({
     ['src/jsx/base.ts', 'src/utils/html.ts', 'static'],
     ['src/jsx/dom/index.ts', 'src/jsx/dom/render.ts', 're-export'],
     ['src/jsx/dom/render.ts', 'src/jsx/base.ts', 'static'],
+    // 示例数据:人为加的一条回边,构成 request.ts ⇄ utils/url.ts 的环,仅用于验证环边样式(不是 hono 真实依赖)
+    ['src/utils/url.ts', 'src/request.ts', 'type-only'],
   ],
+  // 示例数据:meta.cycles 每项为环上的 file id,按依赖方向排列(最后一个指回第一个)
+  cycles: [['src/request.ts', 'src/utils/url.ts']],
 });
 
 const zustand = build({
