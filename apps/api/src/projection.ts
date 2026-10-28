@@ -125,6 +125,22 @@ function topKind(kinds: Map<ImportKind, number>): ImportKind {
  * - includeExternal=true 时按 file.externalDeps 派生 x: 节点与边。
  */
 export function projectGraph(ix: GraphIndex, o: ProjectOptions): GraphData | null {
+  return projectGraphWithInfo(ix, o)?.graph ?? null;
+}
+
+export interface ProjectionInfo {
+  graph: GraphData;
+  /** P 的直接子节点(或根层 module)因 300 上限被截掉了一部分 */
+  truncated: boolean;
+  /** 因名额不足被丢弃的边界节点数 */
+  droppedBoundary: number;
+}
+
+/**
+ * 名额顺序:x: 外部包(includeExternal 时,≤50)→ P 的子节点按 weight 截断 → 剩余名额按 weight 给边界节点。
+ * 即边界节点永远排在 P 的子节点之后;子节点自身超 300 时照旧截断并标记 truncated。
+ */
+export function projectGraphWithInfo(ix: GraphIndex, o: ProjectOptions): ProjectionInfo | null {
   if (o.parentId && !ix.nodes.has(o.parentId)) return null;
   if (o.parentId && ix.nodes.get(o.parentId)!.type === 'file') return null;
   const max = o.maxNodes ?? MAX_NODES_PER_RESPONSE;
@@ -255,7 +271,7 @@ export function projectGraph(ix: GraphIndex, o: ProjectOptions): GraphData | nul
     }
   }
 
-  return {
+  const graph: GraphData = {
     nodes: [...shown, ...boundary, ...extNodes],
     edges,
     meta: {
@@ -265,6 +281,11 @@ export function projectGraph(ix: GraphIndex, o: ProjectOptions): GraphData | nul
       language: 'typescript',
       ...(cycles.length ? { cycles: cycles as never } : {}),
     },
+  };
+  return {
+    graph,
+    truncated: shown.length < kids.length,
+    droppedBoundary: boundaryIds.size - boundary.length,
   };
 }
 

@@ -12,7 +12,13 @@ import {
   RepoStatusSchema,
   CreateRepoResponseSchema,
 } from '@repolens/shared';
-import { MemoryStore, publicJobId, redisKeys, type GraphInput } from '@repolens/db';
+import {
+  GRAPH_PROJECTION_VERSION,
+  MemoryStore,
+  publicJobId,
+  redisKeys,
+  type GraphInput,
+} from '@repolens/db';
 import { buildApp, type AnalyzeJobData, type JobQueue } from './app.js';
 import { createGitHost, parseLsRemote, type GitHost } from './githost.js';
 
@@ -305,7 +311,9 @@ describe.skipIf(!hasRedis)('路由(真实 Redis + 内存 Store)', () => {
     expect(g.edges.every((e) => e.type === 'imports' && e.aggregated)).toBe(true);
     expect(g.nodes.some((n) => n.type === 'external')).toBe(false);
     expect(g.meta.cycles).toEqual([['m:src/a', 'm:src/b']]);
-    expect((await app.inject(`/api/repos/${repoId}/graph`)).headers['x-cache']).toBe('hit');
+    const hit = await app.inject(`/api/repos/${repoId}/graph`);
+    expect([hit.headers['x-cache'], hit.headers['x-graph-truncated']]).toEqual(['hit', 'false']);
+    expect(hit.json()).toEqual(r1.json());
 
     const sub = GraphDataSchema.parse(
       (await app.inject(`/api/repos/${repoId}/graph?parentId=m:src/a`)).json(),
@@ -373,6 +381,25 @@ describe.skipIf(!hasRedis)('路由(真实 Redis + 内存 Store)', () => {
     await app.close();
   });
 
+  it('图缓存 key 带投影版本号:旧版本/无版本的缓存不会被命中', async () => {
+    const app = make();
+    const { repoId } = await seedGraph();
+    const stale = Buffer.from('stale-not-gzip');
+    // #10 的无版本 key 与上一版本 key 都写入脏数据
+    await redis.set(`graph:${repoId}:${SHA}:root`, stale);
+    await redis.set(redisKeys.graph(repoId, SHA, null, false, GRAPH_PROJECTION_VERSION - 1), stale);
+    await redis.del(redisKeys.graph(repoId, SHA, null));
+    const r = await app.inject(`/api/repos/${repoId}/graph`);
+    expect(r.statusCode).toBe(200);
+    expect(r.headers['x-cache']).toBe('miss');
+    expect(GraphDataSchema.parse(r.json()).nodes.length).toBe(3);
+    const key = redisKeys.graph(repoId, SHA, null);
+    expect(key.startsWith(`graph:v${GRAPH_PROJECTION_VERSION}:`)).toBe(true);
+    expect(await redis.exists(key)).toBe(1);
+    expect((await app.inject(`/api/repos/${repoId}/graph`)).headers['x-cache']).toBe('hit');
+    await app.close();
+  });
+
   it('图:单层 >300 节点截断(按 weight),x: 占名额', async () => {
     const app = make();
     const repo = await store.upsertRepo({
@@ -405,6 +432,11 @@ describe.skipIf(!hasRedis)('路由(真实 Redis + 内存 Store)', () => {
     );
     expect(g.nodes).toHaveLength(300);
     expect(g.nodes[0]!.id).toBe('f:f000.ts');
+    // 子节点自身超 300:照旧截断,并用响应头标记(缓存命中时同样带上)
+    const t1 = await app.inject(`/api/repos/${repo.id}/graph?parentId=m:.`);
+    expect([t1.headers['x-cache'], t1.headers['x-graph-truncated']]).toEqual(['hit', 'true']);
+    const root = await app.inject(`/api/repos/${repo.id}/graph`);
+    expect(root.headers['x-graph-truncated']).toBe('false');
     const e = GraphDataSchema.parse(
       (await app.inject(`/api/repos/${repo.id}/graph?parentId=m:.&includeExternal=true`)).json(),
     );

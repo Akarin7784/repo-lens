@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { GraphDataSchema, type ImportKind } from '@repolens/shared';
 import type { StoredGraph } from '@repolens/db';
-import { GraphIndex, projectGraph } from './projection.js';
+import { GraphIndex, projectGraph, projectGraphWithInfo } from './projection.js';
 
 // monorepo 形态:m:packages/core、m:packages/utils、m:packages/app
 const paths = [
@@ -134,5 +134,30 @@ describe('跨子树聚合边', () => {
     })!;
     expect(() => GraphDataSchema.parse(g)).not.toThrow();
     expect(g.nodes.length).toBe(3);
+  });
+
+  it('300 名额顺序:先保留 P 的子节点,再按 weight 裁剪边界节点;子节点超限照旧截断并标记', () => {
+    const opt = (maxNodes: number) => ({
+      repoId: 1,
+      commitSha: 'a'.repeat(40),
+      parentId: 'd:packages/core/src',
+      includeExternal: false,
+      maxNodes,
+    });
+    // 子节点 2 个(deep、index.ts),边界节点 2 个:m:packages/utils(2 个文件)> m:packages/app(1)
+    const full = projectGraphWithInfo(ix, opt(300))!;
+    expect([full.truncated, full.droppedBoundary]).toEqual([false, 0]);
+    const three = projectGraphWithInfo(ix, opt(3))!;
+    expect(three.graph.nodes.map((n) => n.id)).toEqual([
+      'f:packages/core/src/index.ts', // 子节点按 weight:index.ts 入度 4 > deep 2 个文件
+      'd:packages/core/src/deep',
+      'm:packages/utils',
+    ]);
+    expect([three.truncated, three.droppedBoundary]).toEqual([false, 1]);
+    expect(three.graph.edges.some((e) => e.source === 'm:packages/app')).toBe(false);
+    const one = projectGraphWithInfo(ix, opt(1))!;
+    expect(one.graph.nodes.map((n) => n.id)).toEqual(['f:packages/core/src/index.ts']);
+    expect([one.truncated, one.droppedBoundary]).toEqual([true, 2]);
+    expect(() => GraphDataSchema.parse(one.graph)).not.toThrow();
   });
 });
