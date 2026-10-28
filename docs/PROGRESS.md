@@ -26,12 +26,12 @@
 - 语法错误文件数(tree-sitter-typescript 不支持部分语法):zustand 5 个、hono 8 个(共 450 个文件)、zod 4 个(共 522 个文件)。import 仍能提取,只影响这些文件的符号和切块。
 
 - ✅ 已验证(T-003,PR #10,[CI run](https://github.com/Akarin7784/repo-lens/actions/runs/40764333935)):真实 `mysql:8.4` 上 api 迁移通过,api 监听 4000,worker 进入队列监听;启动顺序靠 healthcheck、`service_healthy`、有限次重试和 `waitForSchema` 保证。
-- 未验证:api 到 worker 的完整业务链路(提交真实分析任务、等 `graph_ready` 和 `done`、请求图接口),由架构师的 smoke 业务步骤 PR 覆盖;本机没有 Docker,compose 行为以 CI 为准。
+- 已验证(PR #14,CI smoke):api → MySQL 8.4 → Redis(BullMQ)→ worker 的真实业务链路。提交 zustand 固定 commit `382d29c`,SSE 收到 `graph_ready` 与 `done`(约 2s,stats 23 节点/23 边),再逐层请求图接口并校验 id 前缀、边类型、`srcFileId`、端点在 nodes 内。仍未覆盖:Qdrant、真实 LLM(summarizing/embedding 目前是空阶段)、问答(`/chat`)、聚合边(#12 未做)、web 接真实接口。
 
 ## 后续项(来自 T-003 评审)
 - [#12](https://github.com/Akarin7784/repo-lens/issues/12):请求 `parentId` 时返回跨子树聚合边(`aggregated:true`、`weight`,外端为 LCA(P,Y) 的直接子节点,外端节点要放进 nodes)。验证例子用 zustand 的 `m:src/middleware`(hono 根层没有跨模块边,需换一个展开例子)。负责:后端与AI设计师。
 - 非法图查询改返回 400(`BAD_REQUEST` 已在 [#13](https://github.com/Akarin7784/repo-lens/pull/13) 加入 shared),后端另开 PR。
-- smoke 业务步骤:提交 zustand 任务,等 `graph_ready` 与 `done`,再请求图接口并校验节点数和 `srcFileId`。负责:架构师。
+- ~~smoke 业务步骤~~:PR [#14](https://github.com/Akarin7784/repo-lens/pull/14) 已合并(提交 1ada2f0)。#12 合并后在 smoke 里补聚合边断言。
 - 仓库体积限制:`MAX_REPO_MB` 统一为 300(#11 与本次);worker 扫描后另设 `MAX_SOURCE_MB`(默认 50),并给克隆目录加体积上限(目前只有超时保护)。
 - 前端接真实图接口,替换示例数据并去掉「示例数据」标签;用 hono 的 5 个环验证环边样式。负责:前端可视化设计师。
 
@@ -50,3 +50,4 @@
 - 2026-10-29 04:1x:T-005 合并(PR #9,squash,提交 f05d368)。评审时核对了 CI 日志:`ci` 与 `smoke` 两个 job 在 rebase 后的最新提交上都通过,三个镜像无缓存构建 77 秒,`/health` 返回 `status:ok`,web 返回 200,镜像内 Node 20.20.2,tree-sitter 0.22.4 在 node:20-alpine 上能加载并解析 TS。第一次评审时发现 PR 与 `main` 有冲突导致最新提交没有触发 CI,已让作者 rebase 后重跑再合并。未覆盖:api 连 MySQL/Redis/Qdrant 的业务链路和 worker 取任务,待 T-003 后在 smoke 里补一次真实提交分析任务。第 1 周的 Docker 与镜像内 tree-sitter 未验证项全部关闭。
 - 2026-10-29 04:2x:T-004 合并(PR #8,squash,提交 503db47)。第一轮评审发现 CI 失败:`jsdom@30` 依赖的 `undici@8` 在 Node 20 下报错,作者本机 Node 24 没有复现;要求降级并在 Node 20 下本地验证,jsdom 现为 `^26.1.0`。同时定了设计决定:新增 `--accent-strong`(浅色 `#B5502F`,深色 `#E08A6A`)用于按钮和选中描边,按钮文字对比度 5.06/6.35,选中描边对画布 4.35;图区令牌写进 `DESIGN_STYLE.md`;交互为单击选中并高亮邻居、双击或点 ▸ 展开(采纳绿色三角形的投屏防误触建议);环边用赭色虚线加 ↻ 标记,type-only 边改为更淡的点线,图例两项都有;中文标题加 Noto Serif SC 回退。图页目前读的是手写示例数据,页面带「示例数据」标签。后续项:选中后变暗的边箭头没有变暗;环边待 T-003 真实数据(hono 有 5 个环)验证;首页副标题空格偏散;真实投影仪、Safari、Firefox 未验证;T-003 合并后把示例数据换成真实预解析结果。
 - 2026-10-29 04:5x:T-003 合并(PR #10,squash,提交 66ef384)。第一轮评审发现 `smoke` 失败:MySQL 容器未就绪时 api 和 worker 在 `runMigrations` 报 `ECONNREFUSED` 后直接退出,本机 MariaDB 复现不了。要求加 healthcheck 与 `service_healthy`、连接有限次重试、只让 api 迁移并用 `GET_LOCK` 互斥、加 `restart: unless-stopped`。修复后我在最新提交 3a7b4de 上独立重跑 install、lint、typecheck、build、test 全通过(shared 20、analyzer 32、db 9、api 18、worker 16、web 27),CI 日志确认 api 和 worker 在真实 MySQL 8.4 上正常启动。范围决定:聚合边(#12)和非法查询返回 400 不进本 PR,分别单独做;`BAD_REQUEST` 经 #13 加入 shared。仓库大小上限统一为 300MB(#11)。安全上,克隆只走 https、服务端拼地址、干净环境并关闭 hooks。扫描排除规则实测:zustand 23 个节点、hono 338 个、zod 196 个,默认仍以 module 层加 `parentId` 懒加载。
+- 2026-10-29 04:5x:smoke 业务步骤合并(PR #14,squash,提交 1ada2f0)。评审时核对 CI 日志:提交 zustand 固定 commit 后 202 受理,SSE 依次经过 cloning、scanning、parsing,约 0.9s 到 `done`,stats 为 18 个文件、4 个模块、23 个节点、23 条边;逐层请求图接口,root 4 个节点 5 条边,展开 `m:src/middleware` 得到 7 个节点和 1 条带 `srcFileId` 的文件边。脚本只用 Node 20 自带 fetch,失败时打印 api、worker、mysql 日志尾部。局限:依赖从 GitHub 克隆 zustand,网络抖动可能偶发失败;Qdrant、LLM、`/chat`、聚合边未覆盖,#12 合并后补断言。

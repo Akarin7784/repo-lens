@@ -7,7 +7,6 @@ import {
   GraphQuerySchema,
   NodeIdSchema,
   type CreateRepoResponse,
-  type GraphData,
   type HealthResponse,
   type NodeDetail,
   type RepoStatus,
@@ -23,7 +22,7 @@ import {
 } from '@repolens/db';
 import { HttpError } from './errors.js';
 import type { GitHost } from './githost.js';
-import { GraphIndex, nodeDetail, projectGraph } from './projection.js';
+import { GraphIndex, nodeDetail, projectGraphWithInfo } from './projection.js';
 import { streamJobEvents } from './sse.js';
 
 export interface AnalyzeJobData {
@@ -208,22 +207,32 @@ export function buildApp(deps?: AppDeps): FastifyInstance {
     if (!repo) throw new HttpError('REPO_NOT_FOUND', '仓库不存在');
     const task = await store.latestGraphTask(repoId);
     if (!task) throw new HttpError('REPO_NOT_READY', '依赖图尚未生成');
+    // key 带投影版本号(GRAPH_PROJECTION_VERSION),改投影逻辑时递增,旧缓存自然失效
     const key = redisKeys.graph(repoId, task.commitSha, parentId, ext);
     const cached = await redis.getBuffer(key);
     reply.header('content-type', 'application/json; charset=utf-8');
-    if (cached) return reply.header('x-cache', 'hit').send(gunzipSync(cached));
+    // 缓存值 = 1 字节截断标记('0'/'1') + gzip(JSON)
+    if (cached)
+      return reply
+        .header('x-cache', 'hit')
+        .header('x-graph-truncated', cached[0] === 0x31 ? 'true' : 'false')
+        .send(gunzipSync(cached.subarray(1)));
     const ix = new GraphIndex(await store.loadGraph(repoId, task.commitSha));
-    const g: GraphData | null = projectGraph(ix, {
+    const p = projectGraphWithInfo(ix, {
       repoId,
       commitSha: task.commitSha,
       parentId,
       includeExternal: ext,
       cycles: task.stats.cycles,
     });
-    if (!g) throw new HttpError('REPO_NOT_FOUND', `节点 ${parentId} 不存在或不可展开`);
-    const json = JSON.stringify(GraphDataSchema.parse(g));
-    await redis.set(key, gzipSync(json), 'EX', GRAPH_CACHE_TTL_S);
-    return reply.header('x-cache', 'miss').send(json);
+    if (!p) throw new HttpError('REPO_NOT_FOUND', `节点 ${parentId} 不存在或不可展开`);
+    const json = JSON.stringify(GraphDataSchema.parse(p.graph));
+    const flag = Buffer.from(p.truncated ? '1' : '0');
+    await redis.set(key, Buffer.concat([flag, gzipSync(json)]), 'EX', GRAPH_CACHE_TTL_S);
+    return reply
+      .header('x-cache', 'miss')
+      .header('x-graph-truncated', String(p.truncated))
+      .send(json);
   });
 
   // nodeId 含 '/'(如 f:src/a.ts),用通配符接收;编码与未编码两种写法都支持
