@@ -4,6 +4,13 @@ set -euo pipefail
 TIMEOUT="${SMOKE_TIMEOUT:-120}"
 [ -f .env ] || cp .env.example .env
 
+# 失败时打印关键服务日志尾部,便于排错(成功时不打印;compose down 由 workflow 的 always 步骤负责)
+on_fail() {
+  echo "SMOKE: 失败,输出 api/worker/mysql 日志尾部"
+  docker compose logs --no-color --tail=200 api worker mysql || true
+}
+trap 'rc=$?; [ $rc -ne 0 ] && on_fail; exit $rc' EXIT
+
 t0=$(date +%s)
 docker compose build api worker web
 t1=$(date +%s)
@@ -37,4 +44,7 @@ done
 
 # 镜像内 tree-sitter 0.22.4 原生绑定:用 TypeScriptAnalyzer 真实解析一小段 TS,失败即 CI 失败
 docker compose run --rm --no-deps -T worker node scripts/smoke-analyzer.mjs
+
+# 真实业务链路:提交 zustand 固定 commit → SSE 等 graph_ready/done → 校验图接口
+node scripts/ci-smoke-analyze.mjs
 echo "SMOKE PASS"
