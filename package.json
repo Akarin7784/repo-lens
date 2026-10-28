@@ -3,7 +3,7 @@
   "private": true,
   "packageManager": "pnpm@10.34.6",
   "engines": {
-    "node": ">=20"
+    "node": ">=20 <21"
   },
   "scripts": {
     "build": "turbo run build",
@@ -21,5 +21,13 @@
     "typescript": "^5.7.2",
     "typescript-eslint": "^8.18.0",
     "vitest": "^2.1.8"
+  },
+  "pnpm": {
+    "peerDependencyRules": {
+      "allowedVersions": {
+        "tree-sitter-typescript>tree-sitter": "0.22",
+        "tree-sitter-javascript>tree-sitter": "0.22"
+      }
+    }
   }
 }
