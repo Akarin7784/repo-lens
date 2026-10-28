@@ -17,6 +17,7 @@ import {
   makeVisibility,
   SliceTooLargeError,
 } from '../../lib/graph/hierarchy';
+import { userMessageOf } from '../../lib/api/errors';
 import { graphReducer, initialGraphState } from '../../lib/graph/state';
 import type { GraphSource } from '../../lib/graph/source';
 import { toFlow, type RepoFlowEdge, type RepoFlowNode } from '../../lib/graph/toFlow';
@@ -34,6 +35,8 @@ import { ToggleContext } from './ToggleContext';
 
 export type GraphViewProps = {
   source: GraphSource;
+  /** 根层加载完成(含耗时)后回调,用于页头显示 commit 等信息 */
+  onRootLoaded?: (info: { commitSha: string; nodes: number; ms: number }) => void;
   owner: string;
   repo: string;
   /** 测试时注入同步布局引擎;默认走 web worker 里的 elkjs */
@@ -44,7 +47,7 @@ const defaultEdgeOptions = {
   markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: 'var(--edge)' },
 };
 
-function Inner({ source, owner, repo, engine }: GraphViewProps) {
+function Inner({ source, owner, repo, engine, onRootLoaded }: GraphViewProps) {
   const [state, dispatch] = useReducer(graphReducer, initialGraphState);
   const [flow, setFlow] = useState<{ nodes: RepoFlowNode[]; edges: RepoFlowEdge[] }>({
     nodes: [],
@@ -57,15 +60,30 @@ function Inner({ source, owner, repo, engine }: GraphViewProps) {
   const layoutFile = useRef<LayoutFile | null>(null);
   const { fitView } = useReactFlow();
 
+  const onRootRef = useRef(onRootLoaded);
+  onRootRef.current = onRootLoaded;
+
   useEffect(() => {
     let alive = true;
-    Promise.all([source.loadChildren(null), loadLayoutFile(owner, repo, source.commitSha)]).then(
-      ([slice, file]) => {
+    const t0 = performance.now();
+    source
+      .loadChildren(null)
+      .then(async (slice) => {
+        const ms = Math.round(performance.now() - t0);
+        const file = await loadLayoutFile(owner, repo, slice.meta.commitSha);
         if (!alive) return;
         layoutFile.current = file;
-        dispatch({ type: 'init', nodes: slice.nodes, edges: source.rawEdges() });
-      },
-    );
+        onRootRef.current?.({ commitSha: slice.meta.commitSha, nodes: slice.nodes.length, ms });
+        dispatch({
+          type: 'init',
+          nodes: slice.nodes,
+          // fixture 给全量原始边;真实接口用本层返回的边
+          edges: source.rawEdges ? source.rawEdges() : slice.edges,
+          cycles: slice.meta.cycles,
+        });
+        if (slice.nodes.length === 0) setStatus('这个仓库没有可展示的模块');
+      })
+      .catch((e: unknown) => alive && setError(`加载依赖图失败:${userMessageOf(e)}`));
     return () => {
       alive = false;
     };
@@ -78,9 +96,17 @@ function Inner({ source, owner, repo, engine }: GraphViewProps) {
       if (!state.loaded.has(id)) {
         try {
           const slice = await source.loadChildren(id);
-          dispatch({ type: 'childrenLoaded', parentId: id, nodes: slice.nodes });
+          dispatch({
+            type: 'childrenLoaded',
+            parentId: id,
+            nodes: slice.nodes,
+            ...(source.rawEdges ? {} : { edges: slice.edges }),
+            cycles: slice.meta.cycles,
+          });
         } catch (e) {
-          setError(e instanceof SliceTooLargeError ? e.message : `加载 ${id} 失败`);
+          setError(
+            e instanceof SliceTooLargeError ? e.message : `加载 ${id} 失败:${userMessageOf(e)}`,
+          );
           return;
         }
       }
@@ -93,7 +119,7 @@ function Inner({ source, owner, repo, engine }: GraphViewProps) {
     const vis = makeVisibility(state.nodes, state.expanded, source.parentOf);
     const visible = state.nodes.filter((n) => vis.isVisible(n.id));
     let edges = aggregateEdges(state.edges, vis.visibleAncestor);
-    const cycleKeys = cycleEdgeKeys(state.edges, source.cycles?.() ?? [], vis.visibleAncestor);
+    const cycleKeys = cycleEdgeKeys(state.edges, state.cycles, vis.visibleAncestor);
     let nodes = visible;
     if (state.includeExternal) {
       const files = state.nodes.filter((n) => n.type === 'file');
@@ -102,7 +128,7 @@ function Inner({ source, owner, repo, engine }: GraphViewProps) {
       edges = [...edges, ...ext.edges];
     }
     return { nodes, edges, cycleKeys };
-  }, [state.nodes, state.edges, state.expanded, state.includeExternal, source]);
+  }, [state.nodes, state.edges, state.cycles, state.expanded, state.includeExternal, source]);
 
   useEffect(() => {
     if (derived.nodes.length === 0) return;

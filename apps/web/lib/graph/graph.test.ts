@@ -3,6 +3,7 @@ import {
   GraphDataSchema,
   MAX_NODES_PER_RESPONSE,
   type GraphData,
+  type GraphEdge,
   type GraphNode,
 } from '@repolens/shared';
 import { SAMPLE_REPOS } from '../fixtures';
@@ -285,5 +286,96 @@ describe('cycleEdgeKeys(环边)', () => {
   });
   it('环内两端上卷到同一节点时不产生环边', () => {
     expect(cycleEdgeKeys(hono.edges, hono.meta.cycles!, () => 'm:.').size).toBe(0);
+  });
+});
+
+describe('真实接口模式(T-007)', () => {
+  const SHA = 'a'.repeat(40);
+  const mod = (id: string) =>
+    ({ id, type: 'module', parentId: null, label: id.slice(2), path: id.slice(2) }) as GraphNode;
+  const file = (path: string, parentId: string) =>
+    ({ id: `f:${path}`, type: 'file', parentId, label: path.split('/').pop()!, path }) as GraphNode;
+  const e = (s: string, t: string, extra: Partial<GraphEdge> = {}) =>
+    ({
+      id: `${s}->${t}`,
+      source: s,
+      target: t,
+      type: 'imports',
+      kind: 'static',
+      srcFileId: s.startsWith('f:') ? s : 'f:x.ts',
+      weight: 1,
+      ...extra,
+    }) as GraphEdge;
+
+  it('childrenLoaded 累积切片边(按 id 去重)和 meta.cycles', () => {
+    let s = graphReducer(initialGraphState, {
+      type: 'init',
+      nodes: [mod('m:a'), mod('m:b')],
+      edges: [e('m:a', 'm:b', { aggregated: true, weight: 3 })],
+    });
+    s = graphReducer(s, {
+      type: 'childrenLoaded',
+      parentId: 'm:a',
+      nodes: [file('a/x.ts', 'm:a'), file('a/y.ts', 'm:a')],
+      edges: [e('f:a/x.ts', 'f:a/y.ts'), e('f:a/y.ts', 'f:a/x.ts')],
+      cycles: [['f:a/x.ts', 'f:a/y.ts']],
+    });
+    s = graphReducer(s, {
+      type: 'childrenLoaded',
+      parentId: 'm:a',
+      nodes: [],
+      edges: [e('f:a/x.ts', 'f:a/y.ts')],
+      cycles: [['f:a/y.ts', 'f:a/x.ts']],
+    });
+    expect(s.edges).toHaveLength(3);
+    expect(s.cycles).toEqual([['f:a/x.ts', 'f:a/y.ts']]);
+    void SHA;
+  });
+
+  it('边界节点(parentId !== 请求的 P)只作占位:不加入、不渲染进 P、折叠时不受影响', () => {
+    let s = graphReducer(initialGraphState, {
+      type: 'init',
+      nodes: [mod('m:a'), mod('m:b')],
+      edges: [],
+    });
+    s = graphReducer(s, {
+      type: 'childrenLoaded',
+      parentId: 'm:a',
+      // m:b 是聚合边外端,f:b/z.ts 是尚未加载子树里的节点:两者都不是 m:a 的子节点
+      nodes: [file('a/x.ts', 'm:a'), mod('m:b'), file('b/z.ts', 'm:b')],
+      edges: [e('f:a/x.ts', 'm:b', { aggregated: true, weight: 2 })],
+    });
+    expect(s.nodes.map((n) => n.id)).toEqual(['m:a', 'm:b', 'f:a/x.ts']);
+    s = graphReducer(s, { type: 'expand', id: 'm:a' });
+    const vis = makeVisibility(s.nodes, s.expanded);
+    expect(
+      aggregateEdges(s.edges, vis.visibleAncestor).map((x) => `${x.source}->${x.target}`),
+    ).toEqual(['f:a/x.ts->m:b']);
+    s = graphReducer(s, { type: 'collapse', id: 'm:a' });
+    expect(s.nodes.map((n) => n.id)).toContain('m:b');
+    expect(makeVisibility(s.nodes, s.expanded).isVisible('m:b')).toBe(true);
+  });
+
+  it('cycleEdgeKeys 按强连通分量判定(hono 的 jsx 分量有 4 个成员,不是有序路径)', () => {
+    const comp = [
+      'f:src/jsx/base.ts',
+      'f:src/jsx/context.ts',
+      'd:src/jsx/dom',
+      'd:src/jsx/intrinsic-element',
+    ];
+    const edges = [
+      e('f:src/jsx/base.ts', 'd:src/jsx/intrinsic-element'),
+      e('d:src/jsx/intrinsic-element', 'f:src/jsx/base.ts'),
+      e('d:src/jsx/dom', 'f:src/jsx/context.ts'),
+      e('f:src/jsx/base.ts', 'f:src/jsx/utils.ts'),
+    ];
+    const keys = cycleEdgeKeys(edges, [comp], (id) => id);
+    expect([...keys].sort()).toEqual(
+      [
+        'f:src/jsx/base.ts->d:src/jsx/intrinsic-element',
+        'd:src/jsx/intrinsic-element->f:src/jsx/base.ts',
+        'd:src/jsx/dom->f:src/jsx/context.ts',
+      ].sort(),
+    );
   });
 });

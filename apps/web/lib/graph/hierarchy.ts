@@ -190,20 +190,25 @@ export function countChildren(nodes: readonly GraphNode[]): Map<string, number> 
 }
 
 /**
- * 环上的边:原始边 (a→b) 若是某个 meta.cycles 环里相邻两项(含末项→首项),就是环边;
- * 上卷到当前可见层级后返回 `源->目标` 键集合,原始边与聚合边都按这个键判断。
+ * 环上的边。`meta.cycles` 的每一项是分析器 Tarjan 求出的**强连通分量**(成员集合,不是有序路径),
+ * 再由 API 投影到该层可见节点。两端落在同一个分量里的边一定在某个环上,所以判定为:
+ * 边 (a→b) 的 a、b 属于同一个分量 → 环边。结果上卷到当前可见层级,返回 `源->目标` 键集合。
  */
 export function cycleEdgeKeys(
   raw: readonly GraphEdge[],
   cycles: readonly (readonly string[])[],
   lift: (id: string) => string | null,
 ): Set<string> {
-  const pairs = new Set<string>();
-  for (const c of cycles)
-    c.forEach((id, i) => c.length > 1 && pairs.add(`${id}->${c[(i + 1) % c.length]}`));
+  const comp = new Map<string, number[]>();
+  cycles.forEach((c, i) => {
+    if (c.length < 2) return;
+    for (const id of c) comp.set(id, [...(comp.get(id) ?? []), i]);
+  });
   const keys = new Set<string>();
   for (const e of raw) {
-    if (!pairs.has(`${e.source}->${e.target}`)) continue;
+    const a = comp.get(e.source);
+    const b = comp.get(e.target);
+    if (!a || !b || !a.some((i) => b.includes(i))) continue;
     const s = lift(e.source);
     const t = lift(e.target);
     if (s && t && s !== t) keys.add(`${s}->${t}`);
