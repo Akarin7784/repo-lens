@@ -54,7 +54,7 @@ export function RepoUrlInput() {
         />
         <button
           type="submit"
-          className="rounded-control bg-accent px-4 py-2 text-[14px] font-medium text-white transition-colors duration-200 ease-out hover:bg-accent-hover"
+          className="rounded-control bg-accent-strong px-4 py-2 text-[14px] font-medium text-on-accent transition-colors duration-200 ease-out hover:bg-accent-strong-hover"
         >
           分析
         </button>

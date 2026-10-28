@@ -5,7 +5,7 @@ import type { RepoFlowNode } from '../../lib/graph/toFlow';
 import { useToggle } from './ToggleContext';
 
 const ring = (selected: boolean | undefined) =>
-  selected ? 'border-2 border-accent bg-cite' : 'border-[1.5px] border-node-stroke';
+  selected ? 'border-2 border-accent-strong bg-cite' : 'border-[1.5px] border-node-stroke';
 
 function Handles() {
   return (
@@ -23,7 +23,7 @@ function ToggleButton({ id, label, expanded }: { id: string; label: string; expa
       type="button"
       aria-label={`${expanded ? '收起' : '展开'} ${label}`}
       aria-expanded={expanded}
-      className="nodrag rounded-control px-1.5 text-xs text-node-muted hover:text-accent-hover"
+      className="nodrag rounded-control px-1.5 text-xs text-node-muted hover:text-accent-strong-hover"
       onClick={(e) => {
         e.stopPropagation();
         toggle(id);

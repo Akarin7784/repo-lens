@@ -11,7 +11,7 @@ export function DemoRepoList() {
           <Link
             href={`/a/${id}`}
             title={s.blurb}
-            className="inline-flex items-center gap-1.5 rounded-full border border-line bg-panel px-3 py-1 text-[13px] text-fg transition-colors duration-200 ease-out hover:border-accent hover:text-accent-hover"
+            className="inline-flex items-center gap-1.5 rounded-full border border-line bg-panel px-3 py-1 text-[13px] text-fg transition-colors duration-200 ease-out hover:border-accent hover:text-accent-strong-hover"
           >
             <span className="font-mono">
               {s.owner}/{s.repo}
