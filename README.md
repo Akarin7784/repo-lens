@@ -11,5 +11,35 @@
 - 开发进度:[docs/PROGRESS.md](docs/PROGRESS.md)
 - 协作规范:[CONTRIBUTING.md](CONTRIBUTING.md)
 
+## 支持范围
+
+**第 1 周仅支持 TypeScript 仓库**(`.ts`/`.tsx`);其他语言提交时 `POST /api/repos` 返回 422 `UNSUPPORTED_LANGUAGE`。多语言通过 `packages/analyzer` 的 `LanguageAnalyzer` registry 在后续扩展。
+
+## 本地开发
+
+需要 Node.js ≥ 20、pnpm 10、Docker(可选,起 MySQL/Redis/Qdrant)。
+
+```bash
+pnpm install
+cp .env.example .env
+docker compose up -d mysql redis qdrant   # 基础设施
+pnpm build && pnpm test && pnpm lint && pnpm typecheck
+pnpm --filter @repolens/api start          # http://localhost:4000/health
+pnpm --filter @repolens/web dev            # http://localhost:3000
+```
+
+## 目录
+
+| 路径                            | 职责                                                         |
+| ------------------------------- | ------------------------------------------------------------ |
+| `apps/web`                      | Next.js App Router:首页、图与问答界面                        |
+| `apps/api`                      | Fastify:REST + SSE(`/health` 已可用)                         |
+| `apps/worker`                   | BullMQ:clone → scan → parse → graph 流水线                   |
+| `apps/mcp`                      | MCP Server(W4)                                               |
+| `packages/shared`               | zod schema:GraphData、SSE 事件、进度阶段、API DTO,前后端共用 |
+| `packages/analyzer`             | LanguageAnalyzer、TypeScriptAnalyzer(T-002)                  |
+| `packages/rag` / `agent` / `db` | 检索、问答 agent、Drizzle schema(后续任务)                   |
+
 ## 许可证
+
 MIT
