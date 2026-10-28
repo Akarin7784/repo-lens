@@ -113,7 +113,7 @@ Query 示例（TS，字段名需要对照语法的 `node-types.json` 核实，**
   - **300 名额顺序**:`x:` 外部包(仅 includeExternal,≤50)→ P 的子节点按 `weight` 降序 → 剩余名额按 `weight` 降序给边界节点,被裁掉的边界节点连同其边一起丢弃。P 的子节点自身超过 300 时沿用原截断规则,响应头 `x-graph-truncated: true`(否则 `false`;缓存命中时同样返回)。
   - 例:从 `m:packages/core` 展开,`packages/core/src/index.ts` → `packages/utils/src/a.ts` 的 LCA 为根,外端取 `m:packages/utils`,返回 `d:packages/core/src → m:packages/utils`(`aggregated:true`,`weight`=合并的 import 数);反方向 `utils → core` 另成一条。
 - `includeExternal=true` 时由 `file.external_deps` 派生 `x:<包名>` 节点(按引用文件数取前 50,占用 300 名额)及 `x:<src>->x:<pkg>` 边。
-- `meta.cycles` 为分析器检测到的环投影到本层可见节点后的结果。结果 gzip 后缓存在 `graph:v{N}:{repoId}:{commit}:{parentId|root}[:ext]`,TTL 7d;图重新入库时 SCAN 删除该 commit 当前版本的缓存。`N` = `GRAPH_PROJECTION_VERSION`(packages/db `redis-keys.ts`,当前为 2):**改投影逻辑时递增版本**,旧版本 key 不再命中、随 TTL 过期,不依赖部署后手动清缓存。
+- **`meta.cycles` 语义**:分析器用 Tarjan 求 file 层**强连通分量(SCC)**,每一项是一个 SCC 的**成员集合**(按 id 排序,**无序、不是环路径**,首尾不重复;单文件自引用也算一项)。API 投影时把每个成员映射到本次返回的节点(可见子节点,或子树外成员对应的边界节点),去重后按 id 排序;**至少一个成员位于本层子树内**(只落在边界节点上的环与本层无关,不返回)且映射后不同节点 ≥2 才返回(全部落进同一节点表示环在该节点内部);本层没有环时省略 `cycles` 字段;相同集合只返回一次。前端应把它当作"这些节点互相在同一个环里"高亮,不能按顺序连线。结果 gzip 后缓存在 `graph:v{N}:{repoId}:{commit}:{parentId|root}[:ext]`,TTL 7d;图重新入库时 SCAN 删除该 commit 当前版本的缓存。`N` = `GRAPH_PROJECTION_VERSION`(packages/db `redis-keys.ts`,当前为 3):**改投影逻辑时递增版本**,旧版本 key 不再命中、随 TTL 过期,不依赖部署后手动清缓存。
 
 **增量解析**
 - 文件级增量：`file.content_hash = sha256(内容)`。重新分析时先 `git diff --name-only old..new`，只重新解析变化的文件；相关的边按 `src_file_id` 删掉再重建。
