@@ -108,6 +108,8 @@ Query 示例（TS，字段名需要对照语法的 `node-types.json` 核实，**
 - 由 `file` 行(`module_id`、`dir_path`)重建 module→dir→file 树,规则与 analyzer `buildGraph` 一致;module/dir 的 `weight` = 下属文件数,file 的 `weight` = 入度。
 - 不带 `parentId` 返回全部 module;带 `parentId` 返回其直接子节点(file 不可展开,返回 404)。超过 300 时按 `weight` 降序截断。
 - 每条原始边的两端上卷到本层可见的最近祖先:两端都是可见文件时原样返回(`e:<src>-><tgt>:<kind>`);否则合并为 `a:<src>-><tgt>`,`aggregated:true`、`weight`=被合并的 import 数、`kind` 取最多的一种、`srcFileId` 取路径最小的源文件。同一可见节点内部的边不返回。
+- **跨子树聚合(#12)**:带 `parentId=P` 时,一端在 P 子树内、另一端 Y 在子树外的边也返回:外端取 Y 在 `LCA(P,Y)` 下的直接子节点(Y 的祖先),内端按上条上卷到可见节点,合并为 `a:<src>-><tgt>`(`type:'imports'`、`aggregated:true`、`weight`=合并的 import 数、`kind` 取最多的一种);同一对端点按方向分别合并,自环不返回,两端都在子树外的边不返回。外端节点(边界节点)一并放进 `nodes`,与可见子节点共用 300 名额,不足时按 `weight` 截断并丢弃对应的边;前端可用 `node.parentId !== P` 区分边界节点。
+  - 例:从 `m:packages/core` 展开,`packages/core/src/index.ts` → `packages/utils/src/a.ts` 的 LCA 为根,外端取 `m:packages/utils`,返回 `d:packages/core/src → m:packages/utils`(`aggregated:true`,`weight`=合并的 import 数);反方向 `utils → core` 另成一条。
 - `includeExternal=true` 时由 `file.external_deps` 派生 `x:<包名>` 节点(按引用文件数取前 50,占用 300 名额)及 `x:<src>->x:<pkg>` 边。
 - `meta.cycles` 为分析器检测到的环投影到本层可见节点后的结果。结果 gzip 后缓存在 `graph:{repoId}:{commit}:{parentId|root}[:ext]`,TTL 7d;图重新入库时 SCAN 删除该 commit 的缓存。
 

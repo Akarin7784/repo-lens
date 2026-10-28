@@ -117,7 +117,11 @@ function topKind(kinds: Map<ImportKind, number>): ImportKind {
  * - parentId 为空返回所有 module,否则返回其直接子节点;按 weight 截断到 ≤300(x: 节点占用名额);
  * - 每条原始 file→file 边的两端上卷到本层可见的最近祖先;两端都是可见原文件时原样返回,
  *   否则聚合为 a:<src>-><tgt>(aggregated=true,weight=次数,kind 取最多的一种,srcFileId 取路径最小的源文件);
- * - 端点不在本次子树内的边(跨出 parentId 子树)不返回;自环(同一可见节点内部)不返回;
+ * - 跨出 parentId 子树的边:子树内一端上卷到可见子节点,子树外一端写成它在同一展开层级上的祖先
+ *   (父节点在 parentId 祖先链上的那个节点,如展开 m:packages/core 时 f:packages/utils/src/a.ts → m:packages/utils),
+ *   方向保持原边方向(出边/入边都返回),按 (source,target) 去重聚合为 a:<s>-><t>,aggregated=true;
+ *   两端都在子树外的边不返回;子树内但因 300 截断不可见的端点也不返回;
+ * - 自环(上卷后两端相同)不返回;
  * - includeExternal=true 时按 file.externalDeps 派生 x: 节点与边。
  */
 export function projectGraph(ix: GraphIndex, o: ProjectOptions): GraphData | null {
@@ -144,6 +148,18 @@ export function projectGraph(ix: GraphIndex, o: ProjectOptions): GraphData | nul
   const shown = kids.sort(byWeight).slice(0, max - pkgs.length);
   const visible = new Set(shown.map((n) => n.id));
   const visOf = (id: string) => ix.ancestors(id).find((a) => visible.has(a)) ?? null;
+  // parentId 的祖先链(含 null 根),用于给子树外端点找"同一展开层级上的祖先"
+  const parentChain = new Set<string | null>([
+    null,
+    ...(o.parentId ? ix.ancestors(o.parentId) : []),
+  ]);
+  /** 子树外的端点:取它的祖先中、父节点落在 parentId 祖先链上的那一个(即前端画布上已存在的兄弟层节点) */
+  const outsideOf = (id: string): string | null => {
+    if (!o.parentId) return null;
+    const chain = ix.ancestors(id);
+    if (chain.includes(o.parentId)) return null; // 在子树内(可能被 300 截断),不算范围外
+    return chain.find((a) => parentChain.has(ix.nodes.get(a)!.parentId ?? null)) ?? null;
+  };
 
   const edges: GraphEdge[] = [];
   const agg = new Map<
@@ -159,11 +175,14 @@ export function projectGraph(ix: GraphIndex, o: ProjectOptions): GraphData | nul
     agg.set(k, a);
   };
   for (const e of ix.g.edges) {
-    const s = visOf(e.srcId);
-    const t = visOf(e.dstId);
+    const vs = visOf(e.srcId);
+    const vt = visOf(e.dstId);
+    // 至多一端在范围外:范围外一端替换成同层祖先;两端都在范围外的边不属于本层
+    const s = vs ?? (vt ? outsideOf(e.srcId) : null);
+    const t = vt ?? (vs ? outsideOf(e.dstId) : null);
     if (!s || !t || s === t) continue;
     const srcPath = ix.pathById.get(e.srcFileId) ?? e.srcId.slice(2);
-    if (s === e.srcId && t === e.dstId)
+    if (vs && vt && s === e.srcId && t === e.dstId)
       edges.push({
         id: `e:${s}->${t}:${e.kind}`,
         source: s as never,
@@ -192,7 +211,19 @@ export function projectGraph(ix: GraphIndex, o: ProjectOptions): GraphData | nul
       if (s) pushAgg(s, xid, 'static', f.slice(2));
     }
   }
+  // 范围外端点(同层祖先节点)也放进 nodes:shared 的 GraphDataSchema 要求边两端都在本次返回中。
+  // 它们与前端画布上已有的节点 id/内容一致,按 id 合并即可;名额不够时按 weight 取前若干,其余边丢弃。
+  const boundaryIds = new Set<string>();
+  for (const a of agg.values())
+    for (const id of [a.s, a.t]) if (!visible.has(id) && !id.startsWith('x:')) boundaryIds.add(id);
+  const boundary = [...boundaryIds]
+    .map((id) => ix.nodes.get(id)!)
+    .sort(byWeight)
+    .slice(0, Math.max(0, max - shown.length - pkgs.length));
+  const kept = new Set(boundary.map((n) => n.id));
   for (const [k, a] of agg) {
+    if ((boundaryIds.has(a.s) && !kept.has(a.s)) || (boundaryIds.has(a.t) && !kept.has(a.t)))
+      continue;
     const raw = a.t.startsWith('x:') && a.s.startsWith('f:') && a.n === 1;
     edges.push({
       id: `${a.t.startsWith('x:') ? 'x' : 'a'}:${k}`,
@@ -225,7 +256,7 @@ export function projectGraph(ix: GraphIndex, o: ProjectOptions): GraphData | nul
   }
 
   return {
-    nodes: [...shown, ...extNodes],
+    nodes: [...shown, ...boundary, ...extNodes],
     edges,
     meta: {
       repoId: o.repoId,
