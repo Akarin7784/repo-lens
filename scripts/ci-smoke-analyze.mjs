@@ -103,10 +103,12 @@ function checkGraph(g, label) {
   console.log(`SMOKE graph[${label}] nodes=${g.nodes.length} edges=${g.edges.length}`);
   return g;
 }
+let lastHeaders = null;
 const getGraph = async (q) => {
   const r = await fetch(`${BASE}${graphReady.graphUrl}${q}`);
   const body = await r.json().catch(() => null);
   if (r.status !== 200) fail(`图接口 ${q || '(root)'} 返回 ${r.status}`, body);
+  lastHeaders = r.headers;
   return body;
 };
 const root = checkGraph(await getGraph(''), 'root');
@@ -122,4 +124,35 @@ const uniq = new Set(all.map((n) => n.id)).size;
 console.log(`SMOKE graph_total_nodes=${uniq} file_edges_with_srcFileId=${fileEdges}`);
 if (uniq < MIN_NODES) fail(`节点总数 ${uniq} < ${MIN_NODES}`);
 if (fileEdges < 1) fail('展开后没有任何带 srcFileId 的文件级边');
+
+// #16 聚合边断言(规则见 Issue #12 / BACKEND_AI_DESIGN.md 图投影一节)
+const P = 'm:src/middleware';
+const ag = checkGraph(await getGraph(`?parentId=${encodeURIComponent(P)}`), `agg:${P}`);
+const truncated = lastHeaders.get('x-graph-truncated');
+if (truncated !== 'true' && truncated !== 'false')
+  fail(`x-graph-truncated 缺失或非法:${truncated}`);
+const byId = new Map(ag.nodes.map((n) => [n.id, n]));
+const seen = new Set();
+for (const e of ag.edges) {
+  if (e.source === e.target) fail(`${P} 存在自环`, e);
+  const key = `${e.source}|${e.target}|${e.type}|${e.kind ?? ''}`;
+  if (seen.has(key)) fail(`${P} 边重复:${key}`, e);
+  seen.add(key);
+}
+const aggEdges = ag.edges.filter((e) => e.aggregated === true);
+let aggWeight = 0;
+for (const e of aggEdges) {
+  if (!Number.isInteger(e.weight) || e.weight < 1) fail(`${P} 聚合边 weight 非正整数`, e);
+  const s = byId.get(e.source),
+    t = byId.get(e.target);
+  if (!s || !t) fail(`${P} 聚合边端点不在 nodes 里`, e);
+  const inside = [s, t].filter((n) => n.parentId === P).length;
+  if (inside !== 1) fail(`${P} 聚合边应恰有一端 parentId===P、另一端为边界节点`, { e, s, t });
+  aggWeight += e.weight;
+}
+const boundary = ag.nodes.filter((n) => n.parentId !== P).length;
+console.log(
+  `SMOKE aggregated[${P}] nodes=${ag.nodes.length} boundary=${boundary} edges=${ag.edges.length} aggregated=${aggEdges.length} weight_sum=${aggWeight} truncated=${truncated}`,
+);
+if (aggEdges.length < 1) fail(`${P} 没有聚合边(#16 实测 13 条)`);
 console.log('SMOKE ANALYZE PASS');
