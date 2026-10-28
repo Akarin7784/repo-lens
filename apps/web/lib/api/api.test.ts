@@ -28,6 +28,20 @@ describe('createApiClient', () => {
     ]);
   });
 
+  it('读取 x-graph-truncated 响应头', async () => {
+    const f = vi.fn(async () => {
+      const r = json(200, graph('d:src/middleware'));
+      r.headers.set('x-graph-truncated', 'true');
+      return r;
+    });
+    const api = createApiClient('', f as unknown as typeof fetch);
+    expect((await api.getGraph(2, 'd:src/middleware')).truncated).toBe(true);
+    const g = vi.fn(async () => json(200, graph(null)));
+    expect(
+      (await createApiClient('', g as unknown as typeof fetch).getGraph(2, null)).truncated,
+    ).toBe(false);
+  });
+
   it('POST /api/repos:请求体与响应都按 shared schema', async () => {
     const res = {
       repoId: 1,

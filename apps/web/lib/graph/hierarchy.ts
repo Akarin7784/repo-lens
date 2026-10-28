@@ -2,7 +2,27 @@ import type { GraphData, GraphEdge, GraphNode, ImportKind } from '@repolens/shar
 import { externalId, GraphDataSchema, MAX_NODES_PER_RESPONSE } from '@repolens/shared';
 
 /** 一次 parentId 切片的结果,形状与 GET /api/repos/:id/graph?parentId= 一致 */
-export type GraphSlice = GraphData;
+/** 一层切片;truncated 仅真实接口有(x-graph-truncated) */
+export type GraphSlice = GraphData & { truncated?: boolean };
+
+/**
+ * 真实接口模式下挑出当前应参与渲染的边(T-007,配合 #12 聚合边):
+ * - 边属于返回它的那一层(根层为 null);只有根层和「已展开且可见」的层生效,折叠后该层的边不再渲染(仍缓存在状态里,再次展开不重复请求);
+ * - 一端是已展开容器、另一端不是时丢弃:该关系已由容器那一层的「子节点 → 边界节点」聚合边细化表达,避免重复计数;
+ * - 两端都已展开时保留容器 ↔ 容器的边(两层各自的边一端都是已展开容器,已被上一条丢弃)。
+ */
+export function activeLayerEdges<E extends { id: string; source: string; target: string }>(
+  edges: readonly E[],
+  edgeLayer: ReadonlyMap<string, string | null>,
+  expanded: ReadonlySet<string>,
+  isVisible: (id: string) => boolean,
+): E[] {
+  return edges.filter((e) => {
+    const layer = edgeLayer.get(e.id) ?? null;
+    if (layer !== null && !(expanded.has(layer) && isVisible(layer))) return false;
+    return expanded.has(e.source) === expanded.has(e.target);
+  });
+}
 
 export class SliceTooLargeError extends Error {
   constructor(

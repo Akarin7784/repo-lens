@@ -20,7 +20,8 @@ type Schema<T> = {
 export type ApiClient = {
   createRepo(req: CreateRepoRequest): Promise<CreateRepoResponse>;
   getRepoStatus(repoId: number): Promise<RepoStatus>;
-  getGraph(repoId: number, parentId: string | null): Promise<GraphData>;
+  /** truncated 来自响应头 x-graph-truncated:只表示 P 的直接子节点被截断(边界节点不计) */
+  getGraph(repoId: number, parentId: string | null): Promise<GraphData & { truncated: boolean }>;
   /** SSE 地址(EventSource 需要完整 URL) */
   jobEventsUrl(jobId: string): string;
 };
@@ -34,6 +35,13 @@ export function createApiClient(
   fetchImpl: typeof fetch = (...a) => fetch(...a),
 ): ApiClient {
   async function request<T>(path: string, schema: Schema<T>, init?: RequestInit): Promise<T> {
+    return (await requestRes(path, schema, init)).data;
+  }
+  async function requestRes<T>(
+    path: string,
+    schema: Schema<T>,
+    init?: RequestInit,
+  ): Promise<{ data: T; res: Response }> {
     let res: Response;
     try {
       res = await fetchImpl(`${base}${path}`, {
@@ -57,7 +65,7 @@ export function createApiClient(
         parsed.error.issues[0]?.message ?? '响应校验失败',
         res.status,
       );
-    return parsed.data;
+    return { data: parsed.data, res };
   }
 
   return {
@@ -68,11 +76,14 @@ export function createApiClient(
         body: JSON.stringify(req),
       }),
     getRepoStatus: (repoId) => request(`/api/repos/${repoId}`, RepoStatusSchema),
-    getGraph: (repoId, parentId) =>
-      request(
+    getGraph: async (repoId, parentId) => {
+      // 只带 parentId:后端对其它参数(_t=、depth、level…)一律 400
+      const { data, res } = await requestRes(
         `/api/repos/${repoId}/graph${parentId ? `?parentId=${encodeURIComponent(parentId)}` : ''}`,
         GraphDataSchema,
-      ),
+      );
+      return { ...data, truncated: res.headers.get('x-graph-truncated') === 'true' };
+    },
     jobEventsUrl: (jobId) => `${base}/api/jobs/${encodeURIComponent(jobId)}/events`,
   };
 }

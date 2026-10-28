@@ -1,0 +1,91 @@
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
+import type { GraphEdge, GraphNode } from '@repolens/shared';
+import { GraphView } from './GraphView';
+import type { GraphSource } from '../../lib/graph/source';
+import type { GraphSlice } from '../../lib/graph/hierarchy';
+import { createInlineEngine } from '../../lib/layout/elk';
+
+const SHA = 'a'.repeat(40);
+const mod = (id: string): GraphNode =>
+  ({ id, type: 'module', parentId: null, label: id.slice(2), path: id.slice(2) }) as GraphNode;
+const file = (path: string, parentId: string): GraphNode =>
+  ({ id: `f:${path}`, type: 'file', parentId, label: path.split('/').pop()!, path }) as GraphNode;
+const agg = (s: string, t: string, weight: number): GraphEdge =>
+  ({
+    id: `${s}->${t}`,
+    source: s,
+    target: t,
+    type: 'imports',
+    kind: 'static',
+    srcFileId: 'f:a/x.ts',
+    weight,
+    aggregated: true,
+  }) as GraphEdge;
+const slice = (
+  parentId: string | null,
+  nodes: GraphNode[],
+  edges: GraphEdge[],
+  truncated = false,
+): GraphSlice => ({
+  nodes,
+  edges,
+  meta: { repoId: 1, commitSha: SHA, parentId, language: 'typescript' },
+  truncated,
+});
+
+/** 模拟真实接口:无 rawEdges,边与边界节点随切片返回 */
+function apiSource(): GraphSource & { calls: (string | null)[] } {
+  const calls: (string | null)[] = [];
+  return {
+    repoLabel: 't/t',
+    calls,
+    loadChildren: vi.fn(async (p: string | null) => {
+      calls.push(p);
+      if (p === null) return slice(null, [mod('m:a'), mod('m:b')], [agg('m:a', 'm:b', 3)]);
+      // m:b 是边界节点(parentId !== 'm:a')
+      return slice(
+        'm:a',
+        [file('a/x.ts', 'm:a'), file('a/y.ts', 'm:a'), mod('m:b')],
+        [agg('f:a/x.ts', 'm:b', 2), agg('f:a/y.ts', 'm:b', 1)],
+        true,
+      );
+    }),
+  };
+}
+
+describe('<GraphView> 真实接口:聚合边、边界节点、截断提示', () => {
+  it('展开后用子层聚合边替代容器边;边界节点不进容器;折叠后恢复;截断提示只在该层可见时显示', async () => {
+    const src = apiSource();
+    const engine = await createInlineEngine();
+    const { container } = render(
+      <div style={{ width: 1000, height: 700 }}>
+        <GraphView source={src} owner="t" repo="t" engine={engine} />
+      </div>,
+    );
+    const q = (sel: string) => container.querySelector(sel);
+    const status = () => screen.getByRole('status');
+    // jsdom 不渲染边的 DOM,边数从状态条读(真实浏览器里的 ×N 标签与 hover 见 PR 截图)
+    await waitFor(() => expect(status()).toHaveTextContent('2 个节点 · 1 条边'));
+    expect(screen.getByLabelText('图例')).toHaveTextContent('聚合次数');
+    expect(screen.queryByTestId('truncated-notice')).toBeNull();
+
+    fireEvent.click(await screen.findByRole('button', { name: '展开 a' }));
+    // 容器边 m:a→m:b 被子层的 x→b、y→b 两条聚合边替代;边界节点 m:b 不进 m:a
+    await waitFor(() => expect(status()).toHaveTextContent('4 个节点 · 2 条边'));
+    expect(container.querySelectorAll('[data-testid="node-m:b"]')).toHaveLength(1);
+    expect(q('[data-testid="node-m:a"] [data-testid="node-m:b"]')).toBeNull();
+    expect(screen.getByTestId('truncated-notice')).toHaveTextContent('「a」的子节点超过 300 个');
+    expect(src.calls).toEqual([null, 'm:a']);
+
+    fireEvent.click(await screen.findByRole('button', { name: '收起 a' }));
+    await waitFor(() => expect(status()).toHaveTextContent('2 个节点 · 1 条边'));
+    expect(q('[data-testid="node-m:b"]')).not.toBeNull();
+    expect(screen.queryByTestId('truncated-notice')).toBeNull();
+
+    // 再展开走缓存,不重复请求
+    fireEvent.click(await screen.findByRole('button', { name: '展开 a' }));
+    await waitFor(() => expect(status()).toHaveTextContent('4 个节点 · 2 条边'));
+    expect(src.calls).toEqual([null, 'm:a']);
+  });
+});

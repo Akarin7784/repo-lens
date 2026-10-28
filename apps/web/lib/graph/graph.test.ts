@@ -8,6 +8,7 @@ import {
 } from '@repolens/shared';
 import { SAMPLE_REPOS } from '../fixtures';
 import {
+  activeLayerEdges,
   aggregateEdges,
   cycleEdgeKeys,
   assertSliceSize,
@@ -377,5 +378,49 @@ describe('真实接口模式(T-007)', () => {
         'd:src/jsx/dom->f:src/jsx/context.ts',
       ].sort(),
     );
+  });
+});
+
+describe('activeLayerEdges(真实接口边的分层生效)', () => {
+  const E = (id: string, s: string, t: string) => ({ id, source: s, target: t });
+  const edges = [E('r', 'm:a', 'm:b'), E('ax', 'f:a/x', 'm:b'), E('by', 'm:a', 'f:b/y')];
+  const layer = new Map<string, string | null>([
+    ['r', null],
+    ['ax', 'm:a'],
+    ['by', 'm:b'],
+  ]);
+  const ids = (exp: string[]) =>
+    activeLayerEdges(edges, layer, new Set(exp), () => true).map((e) => e.id);
+  it('都收起:只有根层边', () => expect(ids([])).toEqual(['r']));
+  it('展开 a:a 的子层边替代容器边', () => expect(ids(['m:a'])).toEqual(['ax']));
+  it('a、b 都展开:保留容器 ↔ 容器边', () => expect(ids(['m:a', 'm:b'])).toEqual(['r']));
+  it('所属层不可见时不生效', () =>
+    expect(
+      activeLayerEdges(edges, layer, new Set(['m:a']), (id) => id !== 'm:a').map((e) => e.id),
+    ).toEqual([]));
+});
+
+describe('state:边所属层与截断标记', () => {
+  it('记录 edgeLayer 与 truncated', () => {
+    const m = (id: string) =>
+      ({ id, type: 'module', parentId: null, label: id, path: id }) as GraphNode;
+    let s = graphReducer(initialGraphState, {
+      type: 'init',
+      nodes: [m('m:a')],
+      edges: [{ id: 'e0', source: 'm:a', target: 'm:a' } as GraphEdge],
+      layered: true,
+    });
+    s = graphReducer(s, {
+      type: 'childrenLoaded',
+      parentId: 'm:a',
+      nodes: [],
+      edges: [{ id: 'e1', source: 'x', target: 'm:a' } as GraphEdge],
+      truncated: true,
+    });
+    expect([...s.edgeLayer]).toEqual([
+      ['e0', null],
+      ['e1', 'm:a'],
+    ]);
+    expect([...s.truncated]).toEqual(['m:a']);
   });
 });

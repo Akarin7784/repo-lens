@@ -8,6 +8,10 @@ export type GraphState = {
   edges: GraphEdge[];
   /** 各层切片 meta.cycles 的并集(强连通分量,成员为该层可见节点 id) */
   cycles: string[][];
+  /** 真实接口:边 id → 返回它的层(根层 null)。fixture 为空 */
+  edgeLayer: Map<string, string | null>;
+  /** 子节点被截断的层(x-graph-truncated: true),根层记为 '' */
+  truncated: Set<string>;
   /** 已经请求过子节点的 parentId */
   loaded: Set<string>;
   expanded: Set<string>;
@@ -15,13 +19,22 @@ export type GraphState = {
 };
 
 export type GraphAction =
-  | { type: 'init'; nodes: GraphNode[]; edges: GraphEdge[]; cycles?: string[][] }
+  | {
+      type: 'init';
+      nodes: GraphNode[];
+      edges: GraphEdge[];
+      cycles?: string[][];
+      /** 真实接口:记录边所属层 */
+      layered?: boolean;
+      truncated?: boolean;
+    }
   | {
       type: 'childrenLoaded';
       parentId: string;
       nodes: GraphNode[];
       edges?: GraphEdge[];
       cycles?: string[][];
+      truncated?: boolean;
     }
   | { type: 'expand'; id: string }
   | { type: 'collapse'; id: string }
@@ -32,6 +45,8 @@ export const initialGraphState: GraphState = {
   nodes: [],
   edges: [],
   cycles: [],
+  edgeLayer: new Map(),
+  truncated: new Set(),
   loaded: new Set(),
   expanded: new Set(),
   includeExternal: false,
@@ -45,6 +60,8 @@ export function graphReducer(state: GraphState, action: GraphAction): GraphState
         nodes: action.nodes,
         edges: action.edges,
         cycles: mergeCycles([], action.cycles),
+        edgeLayer: new Map(action.layered ? action.edges.map((e) => [e.id, null] as const) : []),
+        truncated: action.truncated ? new Set(['']) : new Set(),
         loaded: new Set(),
         expanded: new Set(),
       };
@@ -60,6 +77,12 @@ export function graphReducer(state: GraphState, action: GraphAction): GraphState
         nodes: [...state.nodes, ...add],
         edges: addEdges.length ? [...state.edges, ...addEdges] : state.edges,
         cycles: mergeCycles(state.cycles, action.cycles),
+        edgeLayer: addEdges.length
+          ? new Map([...state.edgeLayer, ...addEdges.map((e) => [e.id, action.parentId] as const)])
+          : state.edgeLayer,
+        truncated: action.truncated
+          ? new Set(state.truncated).add(action.parentId)
+          : state.truncated,
         loaded: new Set(state.loaded).add(action.parentId),
       };
     }

@@ -1,4 +1,5 @@
 'use client';
+import { MAX_NODES_PER_RESPONSE } from '@repolens/shared';
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import {
   Background,
@@ -10,6 +11,7 @@ import {
   useReactFlow,
 } from '@xyflow/react';
 import {
+  activeLayerEdges,
   aggregateEdges,
   countChildren,
   cycleEdgeKeys,
@@ -80,6 +82,8 @@ function Inner({ source, owner, repo, engine, onRootLoaded }: GraphViewProps) {
           // fixture 给全量原始边;真实接口用本层返回的边
           edges: source.rawEdges ? source.rawEdges() : slice.edges,
           cycles: slice.meta.cycles,
+          layered: !source.rawEdges,
+          truncated: slice.truncated,
         });
         if (slice.nodes.length === 0) setStatus('这个仓库没有可展示的模块');
       })
@@ -102,6 +106,7 @@ function Inner({ source, owner, repo, engine, onRootLoaded }: GraphViewProps) {
             nodes: slice.nodes,
             ...(source.rawEdges ? {} : { edges: slice.edges }),
             cycles: slice.meta.cycles,
+            truncated: slice.truncated,
           });
         } catch (e) {
           setError(
@@ -118,8 +123,15 @@ function Inner({ source, owner, repo, engine, onRootLoaded }: GraphViewProps) {
   const derived = useMemo(() => {
     const vis = makeVisibility(state.nodes, state.expanded, source.parentOf);
     const visible = state.nodes.filter((n) => vis.isVisible(n.id));
-    let edges = aggregateEdges(state.edges, vis.visibleAncestor);
-    const cycleKeys = cycleEdgeKeys(state.edges, state.cycles, vis.visibleAncestor);
+    const live = source.rawEdges
+      ? state.edges
+      : activeLayerEdges(state.edges, state.edgeLayer, state.expanded, vis.isVisible);
+    let edges = aggregateEdges(live, vis.visibleAncestor);
+    const cycleKeys = cycleEdgeKeys(live, state.cycles, vis.visibleAncestor);
+    // 截断提示:只看当前可见的层(根层 + 已展开且可见的容器)
+    const truncatedLayers = [...state.truncated].filter(
+      (p) => p === '' || (state.expanded.has(p) && vis.isVisible(p)),
+    );
     let nodes = visible;
     if (state.includeExternal) {
       const files = state.nodes.filter((n) => n.type === 'file');
@@ -127,8 +139,17 @@ function Inner({ source, owner, repo, engine, onRootLoaded }: GraphViewProps) {
       nodes = [...visible, ...ext.nodes];
       edges = [...edges, ...ext.edges];
     }
-    return { nodes, edges, cycleKeys };
-  }, [state.nodes, state.edges, state.cycles, state.expanded, state.includeExternal, source]);
+    return { nodes, edges, cycleKeys, truncatedLayers };
+  }, [
+    state.nodes,
+    state.edges,
+    state.edgeLayer,
+    state.truncated,
+    state.cycles,
+    state.expanded,
+    state.includeExternal,
+    source,
+  ]);
 
   useEffect(() => {
     if (derived.nodes.length === 0) return;
@@ -224,6 +245,18 @@ function Inner({ source, owner, repo, engine, onRootLoaded }: GraphViewProps) {
           <Controls showInteractive={false} position="bottom-right" />
         </ReactFlow>
         <Legend />
+        {derived.truncatedLayers.length > 0 && (
+          <div
+            role="note"
+            data-testid="truncated-notice"
+            className="absolute left-3 top-3 z-10 max-w-[420px] rounded-control border border-line bg-panel px-3 py-1.5 text-[12px] text-fg shadow-soft"
+          >
+            {derived.truncatedLayers
+              .map((p) => (p === '' ? '顶层' : `「${p.replace(/^[a-z]:/, '')}」`))
+              .join('、')}
+            的子节点超过 {MAX_NODES_PER_RESPONSE} 个,只显示了前 {MAX_NODES_PER_RESPONSE} 个。
+          </div>
+        )}
         <div
           role="status"
           className="absolute bottom-3 left-3 z-10 rounded-full border border-line bg-panel px-3 py-1 text-[12px] text-muted"
@@ -285,6 +318,26 @@ function Legend() {
           <span className="rounded-full bg-accent-strong px-1 text-[10px] leading-4 text-on-accent">
             ↻
           </span>
+        </span>
+      </div>
+      <div className={row}>
+        <svg width="36" height="8" aria-hidden>
+          <line
+            x1="0"
+            y1="4"
+            x2="36"
+            y2="4"
+            stroke="var(--edge)"
+            strokeWidth="5"
+            strokeOpacity="0.75"
+          />
+        </svg>
+        <span className="inline-flex items-center gap-1">
+          聚合边(越粗越多)
+          <span className="rounded-full border border-line bg-panel px-1.5 text-[10px] text-muted">
+            ×N
+          </span>
+          聚合次数
         </span>
       </div>
     </div>
