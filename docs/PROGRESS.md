@@ -17,6 +17,11 @@
 | T-002 | `LanguageAnalyzer` 接口、registry、`TypeScriptAnalyzer` | 后端与AI设计师 | 可开工 | - |
 | T-003 | API 与 Worker:`POST /api/repos`、任务 SSE、clone 与文件树 | 后端与AI设计师 | 可开工 | - |
 | T-004 | Web:设计令牌、首页、基于 fixture 的图渲染(React Flow + elkjs) | 前端可视化设计师 | 可开工 | - |
+| T-005 | CI 冒烟任务:真实构建镜像、起 compose、请求 `/health` | 架构师 | 可开工,第 1 周内完成 | - |
+
+## 第 1 周未验证项
+- 镜像构建和 `docker compose up` 尚未真实验证(PR #5 合并时就已知),由 T-005 补上。
+- 本机 Node 24 与 CI、Dockerfile 的 Node 20 不一致,CI 已固定 20,T-005 里一并写明。
 
 ## 日志
 - 2026-10-29 03:3x:仓库建立,三份设计文档和 Claude 风格规范提交到 `docs/`,拆分第 1 周任务。
