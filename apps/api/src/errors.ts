@@ -2,6 +2,7 @@ import type { ApiError } from '@repolens/shared';
 
 type Code = ApiError['error']['code'];
 const STATUS: Record<Code, number> = {
+  BAD_REQUEST: 400,
   INVALID_REPO_URL: 400,
   REPO_NOT_FOUND: 404,
   REPO_NOT_READY: 409,
