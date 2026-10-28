@@ -161,7 +161,7 @@ export function buildApp(deps?: AppDeps): FastifyInstance {
 
   const repoIdOf = (raw: string) => {
     const id = Number(raw);
-    if (!Number.isInteger(id) || id <= 0) throw new HttpError('REPO_NOT_FOUND', '仓库不存在');
+    if (!Number.isInteger(id) || id <= 0) throw new HttpError('BAD_REQUEST', '仓库 id 格式无效');
     return id;
   };
 
@@ -199,8 +199,9 @@ export function buildApp(deps?: AppDeps): FastifyInstance {
 
   app.get<{ Params: { id: string } }>('/api/repos/:id/graph', async (req, reply) => {
     const repoId = repoIdOf(req.params.id);
-    const q = GraphQuerySchema.safeParse(req.query);
-    if (!q.success) throw new HttpError('REPO_NOT_FOUND', `参数无效:${q.error.issues[0]?.message}`);
+    // shared 的 GraphQuerySchema 不拒绝未知参数;API 侧加 strict,depth/level 等未定义参数一律 400
+    const q = GraphQuerySchema.strict().safeParse(req.query);
+    if (!q.success) throw new HttpError('BAD_REQUEST', `参数无效:${q.error.issues[0]?.message}`);
     const parentId = q.data.parentId ?? null;
     const ext = q.data.includeExternal ?? false;
     const repo = await store.getRepo(repoId);
@@ -230,7 +231,7 @@ export function buildApp(deps?: AppDeps): FastifyInstance {
     const nodeId = decodeURIComponent(req.params['*']);
     const repoId = repoIdOf(req.params.id);
     if (!NodeIdSchema.safeParse(nodeId).success)
-      throw new HttpError('REPO_NOT_FOUND', '节点 id 无效');
+      throw new HttpError('BAD_REQUEST', '节点 id 格式无效');
     const { ix, task } = await loadIndex(repoId);
     const d = nodeDetail(ix, nodeId);
     if (!d) throw new HttpError('REPO_NOT_FOUND', '节点不存在');

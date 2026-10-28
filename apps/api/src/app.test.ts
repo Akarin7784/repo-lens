@@ -344,6 +344,50 @@ describe.skipIf(!hasRedis)('路由(真实 Redis + 内存 Store)', () => {
     await app.close();
   });
 
+  it('非法图查询 → 400 BAD_REQUEST;格式合法但不存在 → 404', async () => {
+    const app = make();
+    const { repoId } = await seedGraph();
+    const bad = [
+      `/api/repos/${repoId}/graph?parentId=nope`, // 无前缀
+      `/api/repos/${repoId}/graph?parentId=q:x`, // 未知前缀
+      `/api/repos/${repoId}/graph?parentId=`, // 空
+      `/api/repos/${repoId}/graph?includeExternal=yes`,
+      `/api/repos/${repoId}/graph?depth=abc`, // 未定义参数
+      `/api/repos/${repoId}/graph?level=-1`,
+      `/api/repos/abc/graph`, // repo id 格式非法
+      `/api/repos/0/graph`,
+      `/api/repos/1.5/graph`,
+      `/api/repos/${repoId}/nodes/bad`, // 节点 id 格式非法
+      `/api/repos/abc/nodes/f:a.ts`,
+    ];
+    for (const url of bad) {
+      const r = await app.inject(url);
+      expect({ url, status: r.statusCode, code: r.json().error.code }).toEqual({
+        url,
+        status: 400,
+        code: 'BAD_REQUEST',
+      });
+    }
+    for (const url of [
+      `/api/repos/${repoId}/graph?parentId=d:nope`,
+      `/api/repos/${repoId}/graph?parentId=m:nope`,
+      `/api/repos/${repoId}/nodes/f:nope.ts`,
+      `/api/repos/999999/graph`,
+    ]) {
+      const r = await app.inject(url);
+      expect({ url, status: r.statusCode, code: r.json().error.code }).toEqual({
+        url,
+        status: 404,
+        code: 'REPO_NOT_FOUND',
+      });
+    }
+    // 合法参数仍 200
+    expect((await app.inject(`/api/repos/${repoId}/graph?includeExternal=false`)).statusCode).toBe(
+      200,
+    );
+    await app.close();
+  });
+
   it('图:单层 >300 节点截断(按 weight),x: 占名额', async () => {
     const app = make();
     const repo = await store.upsertRepo({
