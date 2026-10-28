@@ -51,6 +51,8 @@ export interface ParsedFile {
   chunks: CodeChunk[];
   /** Tree-sitter 语法树里有 ERROR 节点(仍尽量抽取) */
   hasSyntaxError: boolean;
+  /** 单文件解析超时(Tree-sitter setTimeoutMicros),此时 imports/symbols 为空,文件仍作为节点保留 */
+  timedOut?: boolean;
 }
 
 export interface AnalyzerInitContext {
@@ -60,8 +62,12 @@ export interface AnalyzerInitContext {
 }
 
 /** import 解析结果:内部文件 / 外部包 / 无法解析 */
+/** asset:样式/图片/字体等资源说明符(如 './a.css'),只计数,不进图、不算 unresolved */
 export type ResolvedImport =
-  { type: 'internal'; path: string } | { type: 'external'; pkg: string } | { type: 'unresolved' };
+  | { type: 'internal'; path: string }
+  | { type: 'external'; pkg: string }
+  | { type: 'asset' }
+  | { type: 'unresolved' };
 
 export type ResolverMode = 'ts-morph' | 'fallback';
 

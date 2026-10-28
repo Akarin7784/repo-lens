@@ -1,10 +1,11 @@
-import { readFileSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { GraphData } from '@repolens/shared';
 import { buildGraph, type FileAnalysis, type FullGraph } from './graph/build.js';
 import { detectModuleLayout, type ModuleLayout } from './graph/modules.js';
 import { AnalyzerRegistry } from './registry.js';
-import { isSourceFile } from './typescript/lang.js';
+import pLimit from 'p-limit';
+import { isAssetSpec, isSourceFile } from './typescript/lang.js';
 import { TypeScriptAnalyzer, type TypeScriptAnalyzerOptions } from './typescript/analyzer.js';
 import type { ParsedFile, RepoSnapshot, ResolverMode } from './types.js';
 
@@ -20,6 +21,10 @@ export interface AnalyzeResult {
     externalPackages: number;
     unresolved: number;
     syntaxErrorFiles: number;
+    /** 资源类 import(.css/.svg 等)条数:只计数,不进图 */
+    assetImports: number;
+    /** 解析超时的文件(节点保留,无 import/符号) */
+    timedOutFiles: string[];
     resolver: TypeScriptAnalyzer['stats'];
     ms: { parse: number; resolve: number; build: number; total: number };
   };
@@ -27,6 +32,10 @@ export interface AnalyzeResult {
 
 export interface AnalyzeOptions extends TypeScriptAnalyzerOptions {
   tsconfigPath?: string;
+  /** 文件读取 + 解析的并发上限(p-limit),默认 8 */
+  concurrency?: number;
+  /** 每完成一个文件回调一次(Worker 用来上报 parsing 进度) */
+  onFileParsed?: (done: number, total: number) => void | Promise<void>;
 }
 
 /** 第 1 周只注册 TypeScript;非 TS 仓库 detect() 抛 UNSUPPORTED_LANGUAGE */
@@ -51,15 +60,31 @@ export async function analyzeRepo(
   const analyzer = await createRegistry(fileSet, opts).detect(repo);
   try {
     await analyzer.init({ repoRoot: repo.root, tsconfigPath: opts.tsconfigPath });
-    const parsed: ParsedFile[] = [];
-    for (const path of files)
-      parsed.push(
-        await analyzer.parseFile({ path, content: readFileSync(join(repo.root, path), 'utf8') }),
-      );
+    // 读文件是异步 I/O,用 p-limit 控并发;Tree-sitter 解析本身同步执行,单文件超时由 setTimeoutMicros 保证
+    const limit = pLimit(Math.max(1, opts.concurrency ?? 8));
+    let done = 0;
+    const parsed: ParsedFile[] = await Promise.all(
+      files.map((path) =>
+        limit(async () => {
+          const content = await readFile(join(repo.root, path), 'utf8');
+          const p = await analyzer.parseFile({ path, content });
+          done++;
+          await opts.onFileParsed?.(done, files.length);
+          return p;
+        }),
+      ),
+    );
     const t1 = performance.now();
+    let assetImports = 0;
     const analyses: FileAnalysis[] = parsed.map((p) => ({
       parsed: p,
-      resolved: p.imports.map((i) => analyzer.resolveImport(p.path, i.spec)),
+      resolved: p.imports.map((i) => {
+        if (isAssetSpec(i.spec)) {
+          assetImports++;
+          return { type: 'asset' as const };
+        }
+        return analyzer.resolveImport(p.path, i.spec);
+      }),
     }));
     const t2 = performance.now();
     const layout = detectModuleLayout(repo.root, files);
@@ -80,6 +105,8 @@ export async function analyzeRepo(
         externalPackages: ext.size,
         unresolved: graph.unresolved.length,
         syntaxErrorFiles: parsed.filter((p) => p.hasSyntaxError).length,
+        assetImports,
+        timedOutFiles: parsed.filter((p) => p.timedOut).map((p) => p.path),
         resolver: (analyzer as TypeScriptAnalyzer).stats,
         ms: { parse: t1 - t0, resolve: t2 - t1, build: t3 - t2, total: t3 - t0 },
       },
