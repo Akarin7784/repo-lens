@@ -72,7 +72,7 @@ flowchart LR
 │  ├─ <GraphPanel>
 │  │  ├─ <GraphCanvas />                 # dynamic(ssr:false) 包裹 ReactFlow
 │  │  ├─ <GraphToolbar /> <MiniMap /> <NodeTooltip /> <ContextMenu />
-│  │  ├─ nodeTypes: <ModuleCard /> <FileNode /> <ExternalNode />（均 React.memo）
+│  │  ├─ nodeTypes: <ModuleCard /> <DirNode /> <FileNode /> <ExternalNode />（均 React.memo）
 │  │  ├─ edgeTypes: <WeightedEdge />
 │  │  ├─ <CytoscapeFallback />           # 累计节点 >2000 或性能不足时切换
 │  │  └─ <LayoutWorkerBridge />
@@ -118,7 +118,7 @@ export const CytoscapeFallback = dynamic(() => import("./CytoscapeGraph"), { ssr
 // FlowGraph.tsx（"use client"）
 import { ReactFlow, ReactFlowProvider, MiniMap, Background } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-const nodeTypes = { module: ModuleCard, file: FileNode, external: ExternalNode }; // 模块级常量，避免每次渲染重建
+const nodeTypes = { module: ModuleCard, dir: DirNode, file: FileNode, external: ExternalNode }; // 模块级常量，避免每次渲染重建
 const edgeTypes = { weighted: WeightedEdge };
 export default function FlowGraph() {
   const nodes = useStore(s => s.flowNodes), edges = useStore(s => s.flowEdges);
@@ -146,8 +146,8 @@ export default function FlowGraph() {
 
 | 环节 | 规则 |
 |---|---|
-| 首次加载 | `GET /api/repos/:id/graph`（不传 parentId）返回顶层，节点数不超过 300；超过时后端按聚合层（dir → module）继续上卷。范围外的边聚合为 `kind:"aggregated"`、带 `weight` 的边 |
-| 展开 | 双击节点后请求 `?parentId=<nodeId>`，得到该节点的直接子节点（不超过 300 个）和相关边，合并进画布（见 4.3） |
+| 首次加载 | `GET /api/repos/:id/graph`（不传 parentId）返回顶层，节点数不超过 300；超过时后端按聚合层（dir → module）继续上卷。范围外的边聚合为 `type:"imports"`、`aggregated:true`、带 `weight` 的边 |
+| 展开 | 点击 module/dir 卡片上的 ▸（双击卡片为附加快捷方式；单击卡片主体只选中，不展开）后请求 `?parentId=<nodeId>`，得到该节点的直接子节点（不超过 300 个）和相关边，合并进画布（见 4.3） |
 | 画布累计上限 | 以**已展开的累计节点数**计：超过 800 时开启边抽样（4.6）并只显示重点标签；超过 1,500 时弹出提示「画布节点过多，建议收起部分模块」，并提供「一键收起到 module 层」按钮。前端不强制截断 |
 | 布局 | 所有层级（dir/module/file）都用 elkjs 计算，在 web worker 中运行（见 4.5）；示例仓库读取预计算的布局文件 |
 | 标签 | 累计 ≤300 时全部显示；超过 300 后按缩放比例和度数 top-N 显示 |
@@ -176,21 +176,21 @@ function aggregateEdges(raw: GraphEdge[], visibleAncestor: (id: string) => strin
 
 ### 4.3 按需展开（懒加载）
 
-- 双击聚合节点时，如果子节点还没加载，请求 `GET /api/repos/:id/graph?parentId=<nodeId>`（例如 `?parentId=m:core`）。返回该父节点的直接子节点和相关边，格式同样是 `{nodes, edges, meta}`；指向范围外的边由后端聚合为一条带 `weight` 的边。
+- 点击 module/dir 的 ▸（或双击卡片）展开时，如果子节点还没加载，请求 `GET /api/repos/:id/graph?parentId=<nodeId>`（例如 `?parentId=m:src/utils`、`?parentId=d:src/utils/jwt`）。返回该父节点的直接子节点和相关边，格式同样是 `{nodes, edges, meta}`；指向范围外的边由后端聚合为一条带 `weight` 的边。
 - 新子节点的目标坐标由 elkjs 计算（worker 中运行，已有节点作为固定约束，避免整张图跳动；示例仓库直接从布局文件读取）。从父节点位置移动到目标坐标的过程是约 300 ms 的坐标插值动画（rAF 更新 position，ease-out），不跑力导向布局。
 - 请求结果用 TanStack Query 缓存，key 为 `["graph", repoId, commitSha, parentId]`。图数据按 commitSha 缓存。
 
 ### 4.4 LOD 与渲染裁剪（React Flow）
 
 - **视口裁剪**：开启 `onlyRenderVisibleElements`，视口外的节点和边不进 DOM。
-- **memo 自定义节点**：`ModuleCard / FileNode / ExternalNode / WeightedEdge` 全部 `React.memo`，`nodeTypes`、`edgeTypes` 定义在模块顶层；拖拽与连线关闭（`nodesDraggable={false}`）。
+- **memo 自定义节点**：`ModuleCard / DirNode / FileNode / ExternalNode / WeightedEdge` 全部 `React.memo`，`nodeTypes`、`edgeTypes` 定义在模块顶层；拖拽与连线关闭（`nodesDraggable={false}`）。
 - **按缩放分级**（`useStore(s => s.transform[2])` 读 zoom）：zoom < 0.5 时 ModuleCard 只显示标题、隐藏摘要；zoom < 0.3 时隐藏 file 标签，边改为细线并降低透明度；zoom < 0.15 时自动收起到 dir 层，这一项**默认关闭**，只能在设置中手动开启。
 - **按累计节点数分级**：累计节点 >800 时开启边抽稀（4.6）和标签精简（只显示度数 top-N 的标签）；>1,500 时提示「画布节点过多，建议收起部分模块」，提供「一键收起到 module 层」；>2,000 或 FPS 持续 <30 时，额外提供「切换到高性能模式（Cytoscape）」。
 - 平移或缩放过程中（`onMoveStart`/`onMoveEnd`）临时隐藏边标签和 hover tooltip。
 
 ### 4.5 布局算法（统一 elkjs，全部在前端计算，坐标不进服务端数据）
 
-- **所有层级都用 elkjs**：dir、module、file 三层都使用 `elkjs` 的 `layered` 算法（方向 `RIGHT`，`elk.layered.considerModelOrder` 开启，保证确定性），通过 `elkjs/lib/elk-worker` 在 web worker 中运行，不阻塞主线程。同样的输入总是得到同样的坐标，所以可以缓存、预计算和对比。
+- **所有层级都用 elkjs**：dir、module、file 三层都使用 `elkjs` 的 `layered` 算法（方向 `RIGHT`，`elk.layered.considerModelOrder` 开启，保证确定性），通过 `apps/web/lib/layout/elk.worker.ts`（worker 内跑 `elkjs/lib/elk.bundled.js`，postMessage 收发）在 web worker 中运行，不阻塞主线程。同样的输入总是得到同样的坐标，所以可以缓存、预计算和对比。
 - 所有坐标都来自 elkjs；展开新节点时只做约 300 ms 的坐标插值过渡（见 4.3），不使用力导向布局。
 - 性能兜底：单次 elkjs 布局超过 2 秒时，退回 elk 的 `mrtree` 或简单网格布局并提示（总方案的降级是 dagre，二者择一，W1 实测后定）。
 - **示例仓库**（zustand、hono、zod、trpc）：commitSha 在部署脚本中固定。前端脚本 `scripts/gen-layout.ts` 离线用 elkjs 生成布局文件 `apps/web/public/layouts/{owner}-{repo}-{commitSha}.json`（命名以总方案 §5.2 为准），结构为 `{ commitSha, positions: { [nodeId]: [x, y] } }`。布局文件与图数据分开存放，不进服务端，也不依赖任何服务端布局字段。演示时直接读取，同时写入 IndexedDB 预热缓存（key 为 `commitSha + nodeId`）。
@@ -205,7 +205,7 @@ function aggregateEdges(raw: GraphEdge[], visibleAncestor: (id: string) => strin
 
 ### 4.7 布局缓存
 
-- 统一用 IndexedDB（idb-keyval），以 `commitSha + nodeId` 为 key，存 `[x, y]`。nodeId 由路径确定性生成（`m:src/core`、`f:src/a.ts`），同一 commit 内稳定，所以缓存可以复用，分享链接也可靠。
+- 统一用 IndexedDB（idb-keyval），以 `commitSha + nodeId` 为 key，存 `[x, y]`。nodeId 由路径确定性生成（`m:src/core`、`d:src/core/util`、`f:src/a.ts`），同一 commit 内稳定，所以缓存可以复用，分享链接也可靠。
 - 非示例仓库：二次打开时，有缓存的节点直接使用缓存坐标，只对新节点跑 elkjs。
 - 示例仓库：首次打开时把布局文件的坐标写入 IndexedDB 做预热，之后与非示例仓库走同一条读取路径。
 
@@ -215,10 +215,13 @@ function aggregateEdges(raw: GraphEdge[], visibleAncestor: (id: string) => strin
 |---|---|
 | hover（悬停 150 ms） | 显示 Tooltip：路径、类型、入度/出度、子文件数。file 节点额外显示前 8 行代码（来自缓存，不发请求） |
 | 单击 | 选中节点：节点本身和一跳邻居高亮，其余节点淡出到 15% 透明度；右栏切到「详情」；文件树同步滚动定位；URL 写入 `?node=` |
-| 双击 | 聚合节点展开或收起（4.3）；file 节点在右栏打开完整代码预览 |
+| ▸ / ▾ 箭头 | 聚合节点展开或收起（4.3）的主入口，也是键盘可达的按钮（`aria-expanded`） |
+| 双击 | 附加快捷方式：module/dir 展开或收起（同 ▸）；file 节点在右栏打开完整代码预览（后续） |
 | 右键 | 上下文菜单：展开/收起、只看此子图（focus mode）、查找依赖路径到…、复制路径、在 GitHub 打开、加入对话上下文 |
 | Shift + 单击 | 多选，用于多节点上下文或路径查询 |
 | Esc / 点击空白 | 取消选中，恢复全图 |
+
+> T-004 已实现：单击选中（选中节点 `--accent-strong` 2px 描边 + 引用高亮底色，一跳邻居保持不透明，相连边加粗并改用 `--accent-strong`，其余节点/边淡出到 15%，展开后的容器不淡出）、▸ 与双击展开、Esc/点击空白取消。右栏详情尚未实现，暂由左下状态条显示所选节点路径与依赖/被依赖条数；`?node=`、文件树联动、Shift 多选未实现。
 
 详情面板内容（`<NodeDetail>`）：
 - 头部：图标 + 路径面包屑（可点，用于跳转父节点）+ 类型标签。
@@ -374,47 +377,47 @@ type AppState = RepoSlice & JobSlice & GraphSlice & SelectSlice & FilterSlice & 
 | `GET /api/repos/:id` | 仓库和最近一次任务的状态 `{stage, progress, stats, error}`，SSE 降级轮询时使用 |
 | `GET /api/repos?repo=owner/name` | 查询已有分析（首页示例卡片命中缓存时使用） |
 | `GET /api/jobs/:id/events` (SSE) | `progress {jobId, stage, progress, message}` / `graph_ready {jobId, repoId, graphUrl}` / `stage_error {jobId, stage, message}` / `done {jobId, status, stats}`；支持 `Last-Event-ID` 续传 |
-| `GET /api/repos/:id/graph[?parentId=m:src/core]` | 返回 `{nodes, edges, meta}`，单次不超过 300 个节点；带 parentId 时返回直接子节点和相关边，范围外的边聚合为 `aggregated` 边 |
+| `GET /api/repos/:id/graph[?parentId=m:src/core][&includeExternal=true]` | 返回 `{nodes, edges, meta}`，单次不超过 300 个节点；带 parentId 时返回直接子节点和相关边，范围外的边聚合为 `aggregated:true` 边；`x:` 外部节点只在 `includeExternal=true` 时返回 |
 | `GET /api/repos/:id/nodes/:nodeId` | 节点详情（见第 5 章 `NodeDetail`） |
 | `GET /api/repos/:id/files?path=&start=&end=` | 读取文件片段，用于代码预览 |
 | `POST /api/repos/:id/chat` (SSE) | 请求体 `{sessionId, message, contextNodeIds?: string[]}`；事件 `tool?` / `token` / `citation` / `done`，出错时用 `error` 替代 `done` |
 
 ### 7.3 依赖图数据结构（GraphData）
 
+**唯一来源是 `packages/shared/src/graph.ts`（zod schema + 推导类型），前端直接 `import { GraphDataSchema, type GraphData } from '@repolens/shared'`，不在前端重复定义。** 下面只是摘要，有出入时以 shared 为准。
+
 ```ts
-// 与总方案 §5.2 一致（packages/shared 中的 zod schema 为唯一来源，前端直接 import）
-export type GraphData = {
-  nodes: Array<{
-    id: string;               // 确定性："m:<dir>" | "f:<path>"，同一 commit 内稳定
-    type: "module" | "file" | "external";
-    label: string;
-    parentId?: string;        // 父模块 id；顶层 module 没有这个字段
-    path?: string;
-    weight?: number;          // 可选：重要度（fanIn 等）
-    loc?: number;             // 可选：代码行数
-    summary?: string;
-  }>;
-  edges: Array<{
-    id: string; source: string; target: string;
-    kind: "import" | "type-import" | "dynamic-import" | "re-export" | "aggregated";
-    weight: number;           // 聚合边的值 = 被聚合的 import 次数
-  }>;
-  meta: { repoId: number; commitSha: string; parentId: string | null; language: "typescript"; cycles?: string[][] };
+// 节点字段平铺（不嵌套 data）
+type GraphNode =
+  | { id: `m:${string}`; type: 'module'; parentId: null; label; path; weight?; loc?; summary? }
+  | { id: `d:${string}`; type: 'dir'; parentId: `m:${string}` | `d:${string}`; label; path; ... }
+  | { id: `f:${string}`; type: 'file'; parentId: `m:${string}` | `d:${string}`; label; path; externalDeps?: string[]; ... }
+  | { id: `x:${string}`; type: 'external'; parentId: null; label; path };   // 派生，默认不返回
+type GraphEdge = {
+  id; source; target;
+  type: 'imports';
+  kind: 'static' | 'dynamic' | 'type-only' | 're-export' | 'require';
+  srcFileId: `f:${string}`;   // 聚合边保留一个代表源文件
+  weight: number;             // 正整数；聚合边 = 被合并的 import 次数之和
+  aggregated?: true;          // 派生：端点被上卷到祖先时由 API 层生成
 };
+type GraphData = { nodes: GraphNode[] /* ≤300，id 唯一 */; edges: GraphEdge[]; meta: { repoId; commitSha /* 7–40 位小写 hex */; parentId: string | null; language: 'typescript'; cycles? } };
 // 不含 x/y 和 meta.layout：布局由前端用 elkjs 计算
 ```
 
-- 前端说的「dir 层」对应顶层 module 节点（没有 parentId 的 `m:` 节点），「module 层」对应它的子模块，「file 层」对应 `f:` 节点。`external`（npm 包）节点默认隐藏，可在过滤栏开启。
-- 子节点数由前端在加载子级后统计，接口不提供 `childCount`。边的样式按 `kind` 区分（见第 8 章）。
+- 层级固定为 **module → dir → file**。id 为前缀 + POSIX 相对路径（`m:src/utils`、`d:src/utils/jwt`、`f:src/utils/url.ts`），非 external 节点要求 `id.slice(2) === path`。仓库根目录的散落文件归入 `m:.`。
+- module 划分：有 workspace 时每个 workspace 包根是一个 module；否则 `src/` 下每个一级目录是一个 module；其余归 `m:.`。
+- 聚合边、`x:` 外部节点都是 API 层的派生数据，存储层不保存；`x:` 节点和外部边只在 `?includeExternal=true` 时返回。
+- 子节点数由前端在加载子级后统计，接口不提供 `childCount`。边的样式按 `kind` 和 `aggregated` 区分（见第 8 章）。
 
-前端用 zod 实现相同的 schema，在运行时校验接口返回，校验失败时上报错误并显示错误卡片。
+前端在运行时用同一个 `GraphDataSchema` 校验接口返回，校验失败时上报错误并显示错误卡片。
 
 ### 7.4 与总方案的对齐点（已对齐 ✅，以 ARCHITECTURE.md 为准）
 
 1. 问答接口：`POST /api/repos/:id/chat`（SSE），请求体为 `{sessionId, message, contextNodeIds?}`。
 2. 创建任务：`POST /api/repos {repoUrl}`，返回 `{repoId, jobId, status, repo, commitSha}`；已分析过返回 200；非 TS 仓库返回 422 `UNSUPPORTED_LANGUAGE`。
-3. 图接口：`?parentId=` 返回直接子节点和相关边；范围外的边聚合为 `kind:"aggregated"`，`weight` 累加；单次不超过 300 个节点；zod 默认只展示 module 层。
-4. 图数据 schema 见 7.3：节点 `type` 为 module/file/external，`weight`、`loc`、`summary` 可选，不含 `x/y` 和 `meta.layout`。
+3. 图接口：`?parentId=` 返回直接子节点和相关边；范围外的边聚合为 `type:"imports"` + `aggregated:true`，`weight` 累加，`kind` 取多数；单次不超过 300 个节点；`x:` 节点需 `includeExternal=true`；zod 默认只展示 module 层。
+4. 图数据 schema 见 7.3（以 `packages/shared` 为准）：节点 `type` 为 module/dir/file/external，`weight`、`loc`、`summary` 可选，不含 `x/y` 和 `meta.layout`。
 5. nodeId 由路径确定性生成（`m:src/core`、`f:src/a.ts`），同一 commit 内稳定；图数据按 commitSha 缓存；前端布局缓存的 key 为 `commitSha + nodeId`。
 6. 布局：前端统一用 elkjs（worker 中运行）；展开时只做坐标插值动画，不用力导向布局。示例仓库固定 commitSha，布局文件为 `apps/web/public/layouts/{owner}-{repo}-{commitSha}.json`；加载时校验 commitSha，不一致就退回 elkjs，并在控制台告警。
 7. 引用：只下发校验通过的 citation（`id, path, startLine, endLine, nodeId, moduleId?`）；`done` 带 `messageId`、`droppedCitations`、`fallback?: "retrieval"` 和 `usage {in, out}`。
@@ -431,62 +434,67 @@ export type GraphData = {
 
 ### 8.1 风格定位
 
-整体气质参考 Claude 公开网页和产品的观感：温暖的米白纸感、深炭灰文字、陶土色强调、衬线标题、大留白、克制的动效，读起来像一份排版良好的文档，而不是一块霓虹仪表盘。**只借鉴气质：不使用 Claude/Anthropic 的名称、logo、星芒图形或其任何商标素材，产品使用自己的名称（RepoLens）和自己的图标。**
+> **视觉以 `docs/DESIGN_STYLE.md` 为唯一基准**；本章与它冲突时以 DESIGN_STYLE.md 为准。本章只补充依赖图相关的扩展令牌和实测对比度（T-004 实现：`apps/web/app/globals.css`）。
 
-- **字体**：标题用衬线 `"Source Serif 4", Georgia, "Times New Roman", serif`（中文回退 `"Noto Serif SC"`）；正文与 UI 用 `Inter, system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif`；代码用 `"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace`。字号：正文 15px/1.65，UI 13–14px，标题 20/24/30px。
-- **留白与形状**：基础间距 4px 网格，面板内边距 24px；卡片圆角 12px，小元素（胶囊、按钮）圆角 8px 或全圆；边框 1px `--border`；阴影极轻 `0 1px 2px rgba(31,30,29,.06)`，hover 时 `0 2px 8px rgba(31,30,29,.08)`。
-- **动效**：只用淡入（150–200 ms）和 4px 以内的轻微位移；展开子节点 300 ms ease-out；没有持续性动画（「正在思考…」的呼吸圆点除外，开启 `prefers-reduced-motion` 时也改为静态）。
+温暖的米白纸感、深炭灰文字、陶土色强调、衬线标题、大留白、克制的动效。**不使用 Claude/Anthropic 的名称、logo、星芒图形或其任何商标素材，产品使用自己的名称（RepoLens）。**
 
-### 8.2 颜色 token（CSS 变量 / Tailwind）
+- **字体**（next/font 加载）：标题 Source Serif 4（中文回退 Noto Serif SC / Songti SC）；正文与 UI 用 Inter（回退 system-ui、PingFang SC）；代码用 JetBrains Mono。
+- **圆角**：卡片 12px，按钮/输入框 10px，标签全圆 999px，首页大输入框 16px。阴影 `0 1px 2px rgba(31,30,29,.06)`，浮层 `0 8px 24px rgba(31,30,29,.08)`。
+- **动效**：200–300 ms ease-out；展开子节点时节点位置 300 ms 过渡；「正在思考…」用三点呼吸动画；`prefers-reduced-motion` 时关闭过渡。
 
-对比度均按 WCAG 2.x 公式计算：正文 ≥4.5:1，大字和图形 ≥3:1。
+### 8.2 颜色 token（CSS 变量 / Tailwind v4 `@theme inline`）
 
-| token | 浅色（默认） | 深色（可选，暗暖灰） | 用途 / 对比度（浅色） |
+基础 8 色直接取自 DESIGN_STYLE.md：
+
+| token | 浅色（默认） | 深色 |
+|---|---|---|
+| `--bg` 页面 | `#FAF9F5` | `#262624` |
+| `--panel` 面板 | `#FFFFFF` | `#30302E` |
+| `--text` 正文 | `#1F1E1D` | `#F5F4EE` |
+| `--text-2` 次要 | `#6B6A68` | `#A8A7A2` |
+| `--border` 边框 | `#E8E6DC` | `#42413E` |
+| `--accent` 强调 | `#D97757` | `#E08A6A` |
+| `--accent-hover` | `#C6613F` | `#EBA085` |
+| `--cite-bg` 引用高亮 | `#F5E4DC` | `#4A3830` |
+
+图区扩展令牌（T-004 新增，DESIGN_STYLE 未定义，待群里确认）：
+
+| token | 浅色 | 深色 | 用途 |
 |---|---|---|---|
-| `--bg` | `#F5F4EE` | `#1F1E1C` | 页面纸色底 |
-| `--surface` | `#FFFFFF` | `#2A2926` | 卡片、节点、输入框 |
-| `--surface-2` | `#EEECE2` | `#33312D` | 用户消息块、悬浮态 |
-| `--canvas` | `#EAE7DD` | `#262522` | 依赖图区底色（比页面稍深，衬托白色节点） |
-| `--border` | `#E3E0D5` | `#3A3834` | 细分割线 |
-| `--border-strong` | `#3D3A35` | `#B5B2A8` | 节点 1.5px 描边（对 `--canvas` 9.15:1） |
-| `--text` | `#1F1E1D` | `#ECEAE3` | 正文（对 bg 15.1:1，对 canvas 13.45:1） |
-| `--text-2` | `#5E5D59` | `#B5B2A8` | 次要文字（对 bg 5.98:1，对 canvas 5.33:1） |
-| `--text-3` | `#6B6963` | `#9C998F` | 说明小字（对 bg 4.98:1，对 canvas 4.44:1，图区内只用于 ≥14px 粗体或改用 `--text-2`） |
-| `--accent` | `#C15F3C` | `#D97757` | 陶土色：按钮底、图形、柔光（对 bg 3.83:1，对白 4.23:1，只用于图形或白字按钮的大字） |
-| `--accent-strong` | `#A8502F` | `#E08A6A` | 强调文字、链接、高亮描边（对 bg 4.95:1，对 canvas 4.4:1，对白节点 5.45:1） |
-| `--danger` | `#B23B2E` | `#E5806F` | 错误、循环依赖边（对 bg 5.36:1） |
+| `--canvas` | `#F0EEE6` | `#1E1E1C` | 图区底色，比页面稍深 |
+| `--node-module` | `#E6E2D6` | `#3D3C38` | module 卡片（最深填充） |
+| `--node-container` | `#F7F5EF` | `#2A2A28` | 展开后的 module/dir 容器 |
+| `--node-dir` | `#F4F2EB` | `#34332F` | dir 节点 |
+| `--node-file` | `#FFFFFF` | `#30302E` | file 胶囊 |
+| `--node-stroke` | `#7A756A` | `#8A877F` | 节点 1.5px 描边 |
+| `--node-muted` | `#5C5B59` | `#A8A7A2` | 节点内次要文字 |
+| `--edge` | `#8A8579` | `#77746C` | 依赖边 |
 
-Tailwind 中在 `theme.extend.colors` 里映射为 `bg`、`surface`、`canvas`、`line`、`ink`、`ink-2`、`ink-3`、`clay`、`clay-strong`、`danger`，值为 `rgb(var(--x) / <alpha-value>)`；深色通过 `[data-theme="dark"]` 覆盖变量，默认浅色，跟随系统时读 `prefers-color-scheme`。
+Tailwind 映射为 `bg-bg / bg-panel / text-fg / text-muted / border-line / bg-accent / bg-cite / bg-canvas / bg-node-* / border-node-stroke`；深色通过 `<html data-theme="dark">` 覆盖变量（`@custom-variant dark`），默认浅色，可用 `?theme=dark` 或右上角切换（存 localStorage）。实测对比度见 T-004 的 PR 描述。
 
-**目录配色（柔和色板，与米白底协调）**：按顶层目录名哈希取色，同一目录在不同会话中颜色稳定。以下 8 色对 `--bg` 都 ≥3:1（图形对比度达标），用作色条和圆点，文字一律用 `--text`，不用这些颜色写字。
+> 注：§6.5、§8.4、§8.5 中仍出现的旧 token 名（`--surface`、`--surface-2`、`--text-3`、`--danger`；`--accent-strong` 现已是 DESIGN_STYLE.md 中的正式令牌，含义见该文件）属于对话面板，不在 T-004 范围；实现对话面板时按 DESIGN_STYLE.md 统一替换。
 
-| sage `#5F7A5B` (4.31) | slate `#4F6D8A` (4.90) | ochre `#9A7B2F` (3.63) | plum `#8A5A7A` (4.98) | teal `#3F7C77` (4.37) | clay-brown `#8C6A52` (4.43) | olive `#6E7340` (4.55) | rose `#A15C63` (4.51) |
-|---|---|---|---|---|---|---|---|
-
-陶土色 `--accent` 留给交互强调和高亮，不进目录色板，避免与引用高亮混淆。多语言阶段改为按语言取色，目录色作为色条。
+**不按目录上色**（DESIGN_STYLE：暖中性色阶，不用彩虹色）。陶土色只用于交互强调、选中描边和引用高亮。
 
 ### 8.3 依赖图（React Flow 节点、边、高亮）
 
-图区使用 `--canvas`（`#EAE7DD`）底加极淡点阵（`#D9D5C8`，24px 间距）。白色节点（`--surface`）对 canvas 只有 1.24:1，因此**所有节点都加 1.5px `--border-strong` 描边**（9.15:1），不靠底色区分。
+图区使用 `--canvas` 底加极淡点阵（`--border`，20px 间距）；所有节点 1.5px `--node-stroke` 描边。三层靠**形状 + 尺寸 + 填充深浅**区分：
 
-三层靠**形状 + 尺寸 + 填充深浅**区分，颜色只是辅助：
-
-| 层 | 组件 | 形状 | 尺寸 | 填充 / 描边 |
+| 层 | 组件 | 形状 | 尺寸 | 填充 |
 |---|---|---|---|---|
-| dir（顶层 module） | `<ModuleCard variant="dir">` | 圆角 12px 大卡片，标题用衬线字体 | 宽 240–300px，高 ≥96px | 填充 `--surface-2`（较深），1.5px 实线描边，左侧 6px 目录色条，右上角文件夹图标 |
-| module | `<ModuleCard>` | 圆角 12px 卡片 | 宽 200–260px（按 sqrt(文件数)），高 72–88px | 填充 `--surface`（白），1.5px 实线描边，左侧 4px 目录色条；内容为模块名（14px 半粗）、摘要首句（12px `--text-2`，`summary` 为空时显示骨架条）、指标行「N 文件 · 入 12 / 出 5」；可展开时显示 ▸ |
-| file | `<FileNode>` | 全圆角胶囊 | 高 24px，宽随文件名、上限 160px | 填充 `--surface`，1.5px 描边，左侧圆点（目录色，直径 `6 + 2·sqrt(inDegree)`，上限 14px），文件名 12px 等宽字体；`.d.ts` 用虚线描边 |
-| external | `<ExternalNode>` | 小胶囊 | 高 20px | 填充 `--canvas`，1px 虚线 `--text-3` 描边（对 canvas 4.44:1），文字 `--text-2`，默认隐藏 |
+| module | `<ModuleCard>` | 圆角 12px 卡片，衬线标题 + 等宽路径 | 232×76 | `--node-module`（最深）；展开后变为 `--node-container` 容器，子节点嵌在内部 |
+| dir | `<DirNode>` | 圆角 10px | 196×46 | `--node-dir` |
+| file | `<FileNode>` | 全圆角胶囊，等宽文件名 + 圆点 | 172×30 | `--node-file`（白） |
+| external | `<ExternalNode>` | 虚线胶囊 | 150×28 | `--canvas`；默认隐藏，工具栏「外部依赖」开启 |
 
-边：
-- `import`：1.25px 实线，颜色 `--text-2` 不透明度 55%，smoothstep 路径，小箭头。`type-import` 点线，`dynamic-import` 短虚线，`re-export` 空心箭头。
-- `aggregated`（`<WeightedEdge>`）：线宽 `1 + 1.5·log2(weight)`，上限 8px，颜色 `--text-2` 不透明度 40%；hover 时中点显示 weight 小胶囊（白底细边框）。
-- 循环依赖（加分项）：`--danger` 虚线。
+边（`<WeightedEdge>`，smoothstep + 闭合小箭头，颜色 `--edge`）：
+- 原始边：1.25px 实线；`kind: type-only` 更淡的圆点线（`1 5`，透明度 0.55），`dynamic` 短虚线（`6 4`）。
+- `aggregated:true`：线宽 `1 + 1.5·log2(weight)`，上限 8px，不透明度 75%；weight>1 时中点显示 `×weight` 小胶囊。
+- 循环依赖：`--accent-strong` 长虚线（`8 4`，比普通边粗 0.75px，对画布 ≥3:1：浅色 4.35、深色 6.37）+ 边中点 `↻` 小标记；优先级高于 kind 线型。数据来自 `meta.cycles`（环上 file id 按依赖方向排列），原始边上卷到可见层级后判断。图区左下图例列出「依赖 / 仅类型引用 / 循环依赖」，状态条显示可见环边数。T-004 只用 hono 示例 fixture 里人为加的一个环验证，真实环数据随 T-003 接入。
 
-高亮（陶土色描边 + 柔光，而不是霓虹；详见 6.5）：
-- 选中：3px `--accent-strong` 描边（对 canvas 4.4:1、对白节点 5.45:1）+ 轻微放大；邻居保持原样，其余淡出到 25%。
-- 引用命中（citation 脉冲）：**3px** `--accent-strong` 描边 + 8px `--accent` 柔光（`box-shadow: 0 0 0 3px var(--accent-strong), 0 0 12px 4px rgb(193 95 60 / .30)`），柔光淡入淡出 2 次；脉冲结束后保留 3px 描边直到下一次提问。投屏模式（设置项，或 `?present=1`）把描边加到 **4px**、柔光不透明度提到 45%。
-- 深色模式：描边改为 `#E08A6A`（对 `#262522` 约 5.5:1），柔光用 `#D97757`（对深色 canvas 4.91:1）。
+高亮：
+- 选中：2px `--accent` 描边 + `--cite-bg` 填充。
+- 引用命中：`--accent` 描边 + `--cite-bg` 底的柔和脉冲（细节在 T-00x 对话联动时与 DESIGN_STYLE 对齐）。
 
 ### 8.4 对话面板：阅读式排版
 

@@ -1,12 +1,24 @@
-import { SUPPORTED_LANGUAGES } from '@repolens/shared';
+import { DemoRepoList } from '../components/home/DemoRepoList';
+import { RepoUrlInput } from '../components/home/RepoUrlInput';
+import { ThemeToggle } from '../components/theme/ThemeToggle';
 
-// 占位首页:设计令牌与真实首页在 T-004 实现(见 docs/DESIGN_STYLE.md)
 export default function HomePage() {
   return (
-    <main style={{ maxWidth: 720, margin: '96px auto', padding: '0 24px' }}>
-      <h1>RepoLens</h1>
-      <p>输入 GitHub 仓库地址,生成可交互的架构图并用自然语言提问。</p>
-      <p>当前支持的语言:{SUPPORTED_LANGUAGES.join(', ')}</p>
+    <main className="flex min-h-screen flex-col">
+      <header className="flex items-center justify-between px-6 py-4">
+        <span className="font-serif text-[18px] font-semibold text-fg">RepoLens</span>
+        <ThemeToggle />
+      </header>
+      <section className="mx-auto flex w-full max-w-[640px] flex-1 flex-col items-center justify-center gap-6 px-6 pb-24">
+        <h1 className="text-center font-serif text-[40px] font-semibold leading-tight text-fg">
+          读懂一个仓库,从一张图开始
+        </h1>
+        <p className="text-center text-[15px] leading-relaxed text-muted">
+          贴上 GitHub 地址,按 模块 → 目录 → 文件 逐层展开它的依赖结构。
+        </p>
+        <RepoUrlInput />
+        <DemoRepoList />
+      </section>
     </main>
   );
 }

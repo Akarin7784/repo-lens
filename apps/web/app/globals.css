@@ -1,0 +1,121 @@
+@import 'tailwindcss';
+@import '@xyflow/react/dist/base.css';
+
+/* 深色主题由 <html data-theme="dark"> 切换 */
+@custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
+
+/*
+ * 设计令牌:docs/DESIGN_STYLE.md 是唯一视觉基准(与 FRONTEND_DESIGN.md 冲突时以它为准)。
+ * 全部令牌(含 --accent-strong / --on-accent 与图区 --canvas / --node-* / --edge)
+ * 都登记在 DESIGN_STYLE.md「颜色」与「图区配色令牌」两节。
+ */
+:root {
+  --bg: #faf9f5;
+  --panel: #ffffff;
+  --text: #1f1e1d;
+  --text-2: #6b6a68;
+  --border: #e8e6dc;
+  --accent: #d97757;
+  --accent-hover: #c6613f;
+  --cite-bg: #f5e4dc;
+  /* 可读性强调色:按钮底(配 --on-accent)与选中描边;--accent 只做装饰填充 */
+  --accent-strong: #b5502f;
+  --accent-strong-hover: #9c4428;
+  --on-accent: #ffffff;
+
+  --canvas: #f0eee6;
+  --node-module: #e6e2d6;
+  --node-container: #f7f5ef;
+  --node-dir: #f4f2eb;
+  --node-file: #ffffff;
+  --node-external: #f0eee6;
+  --node-stroke: #7a756a;
+  --node-muted: #5c5b59;
+  --edge: #8a8579;
+
+  --font-serif:
+    var(--font-source-serif), 'Source Serif 4', var(--font-noto-serif-sc), 'Noto Serif SC',
+    'Songti SC', Georgia, serif;
+  --font-sans: var(--font-inter), 'Inter', system-ui, 'PingFang SC', 'Noto Sans SC', sans-serif;
+  --font-mono: var(--font-jetbrains), 'JetBrains Mono', ui-monospace, monospace;
+
+  --shadow-sm: 0 1px 2px rgba(31, 30, 29, 0.06);
+  --shadow-pop: 0 8px 24px rgba(31, 30, 29, 0.08);
+  color-scheme: light;
+}
+
+[data-theme='dark'] {
+  --bg: #262624;
+  --panel: #30302e;
+  --text: #f5f4ee;
+  --text-2: #a8a7a2;
+  --border: #42413e;
+  --accent: #e08a6a;
+  --accent-hover: #eba085;
+  --cite-bg: #4a3830;
+  --accent-strong: #e08a6a;
+  --accent-strong-hover: #eba085;
+  --on-accent: #1f1e1d;
+
+  --canvas: #1e1e1c;
+  --node-module: #3d3c38;
+  --node-container: #2a2a28;
+  --node-dir: #34332f;
+  --node-file: #30302e;
+  --node-external: #262624;
+  --node-stroke: #8a877f;
+  --node-muted: #a8a7a2;
+  --edge: #77746c;
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-panel: var(--panel);
+  --color-fg: var(--text);
+  --color-muted: var(--text-2);
+  --color-line: var(--border);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-strong: var(--accent-strong);
+  --color-accent-strong-hover: var(--accent-strong-hover);
+  --color-on-accent: var(--on-accent);
+  --color-cite: var(--cite-bg);
+  --color-canvas: var(--canvas);
+  --color-node-module: var(--node-module);
+  --color-node-container: var(--node-container);
+  --color-node-dir: var(--node-dir);
+  --color-node-file: var(--node-file);
+  --color-node-external: var(--node-external);
+  --color-node-stroke: var(--node-stroke);
+  --color-node-muted: var(--node-muted);
+  --font-serif: var(--font-serif);
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+  --radius-card: 12px;
+  --radius-control: 10px;
+  --radius-hero: 16px;
+  --shadow-soft: var(--shadow-sm);
+  --shadow-pop: var(--shadow-pop);
+}
+
+html,
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+}
+
+/* 展开时节点从旧位置过渡到新位置:约 300ms ease-out 的位置插值(DESIGN_STYLE.md 动效) */
+.react-flow__node {
+  transition: transform 300ms ease-out;
+}
+.react-flow__handle {
+  opacity: 0;
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .react-flow__node {
+    transition: none;
+  }
+}
