@@ -10,4 +10,13 @@ export { FallbackResolver } from './typescript/resolve-fallback.js';
 export { readPathsConfig, type PathsConfig } from './typescript/tsconfig-reader.js';
 export { buildGraph, findCycles, type FullGraph, type FileAnalysis } from './graph/build.js';
 export { detectModuleLayout, moduleRootOf, type ModuleLayout } from './graph/modules.js';
-export { scanSourceFiles } from './scan.js';
+export {
+  scanRepo,
+  scanSourceFiles,
+  EXCLUDED_DIRS,
+  EXCLUDED_FILE_RE,
+  MAX_FILE_BYTES,
+  type ScanResult,
+  type ScanOptions,
+} from './scan.js';
+export { isAssetSpec, ASSET_EXTS, isSourceFile } from './typescript/lang.js';

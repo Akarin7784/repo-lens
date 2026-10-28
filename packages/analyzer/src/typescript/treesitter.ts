@@ -109,11 +109,30 @@ function collectExports(root: SyntaxNode): string[] {
   return [...new Set(out)];
 }
 
+function timedOutResult(file: SourceFile): ParsedFile {
+  const loc = file.content.length ? file.content.split('\n').length : 0;
+  return {
+    path: file.path,
+    loc,
+    imports: [],
+    symbols: [],
+    exports: [],
+    chunks: [{ symbol: null, startLine: 1, endLine: Math.max(1, loc) }],
+    hasSyntaxError: false,
+    timedOut: true,
+  };
+}
+
 /**
  * Tree-sitter 层:只做语法级抽取(import 说明符与 kind、符号与行号、导出名、切块)。
  * 不解析路径 —— 路径解析交给 ts-morph(或降级的前缀替换)。
  */
-export function parseWithTreeSitter(file: SourceFile): ParsedFile {
+export interface ParseOptions {
+  /** 单文件解析超时(毫秒),0 表示不限;超时返回 timedOut=true 的空结果 */
+  timeoutMs?: number;
+}
+
+export function parseWithTreeSitter(file: SourceFile, opts: ParseOptions = {}): ParsedFile {
   const g = load();
   const ext = extOf(file.path);
   const grammar =
@@ -122,10 +141,13 @@ export function parseWithTreeSitter(file: SourceFile): ParsedFile {
       : g.ts;
   const parser = new g.Parser();
   parser.setLanguage(grammar.lang as ParserT.Language);
+  if (opts.timeoutMs) parser.setTimeoutMicros(Math.round(opts.timeoutMs * 1000));
   // 原生绑定默认缓冲区较小,大文件需显式放大 bufferSize,否则会抛 Invalid argument
   const tree = parser.parse(file.content, undefined, {
     bufferSize: Math.max(32 * 1024, file.content.length * 2 + 1024),
-  });
+  }) as ParserT.Tree | null | undefined;
+  // 超时时原生绑定返回空树(rootNode 缺失)或 null
+  if (!tree || !tree.rootNode) return timedOutResult(file);
   const root = tree.rootNode;
 
   const imports: RawImport[] = [];

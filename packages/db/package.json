@@ -14,6 +14,20 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run --passWithNoTests"
-  }
+    "test": "vitest run --passWithNoTests",
+    "db:generate": "drizzle-kit generate"
+  },
+  "dependencies": {
+    "@repolens/shared": "workspace:*",
+    "drizzle-orm": "0.45.4",
+    "ioredis": "5.11.1",
+    "mysql2": "3.24.6"
+  },
+  "devDependencies": {
+    "drizzle-kit": "0.31.11"
+  },
+  "files": [
+    "dist",
+    "migrations"
+  ]
 }

@@ -134,7 +134,7 @@ export function buildGraph(files: FileAnalysis[], layout: ModuleLayout): FullGra
     const src = fileId(parsed.path);
     parsed.imports.forEach((imp, i) => {
       const r = resolved[i];
-      if (!r || r.type === 'external') return;
+      if (!r || r.type === 'external' || r.type === 'asset') return;
       if (r.type === 'unresolved') {
         unresolved.push({ from: parsed.path, spec: imp.spec, line: imp.line });
         return;

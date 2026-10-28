@@ -42,6 +42,7 @@ flowchart LR
 
 **选型结论**
 - 用 Node 原生绑定 `tree-sitter` + `tree-sitter-typescript`（`typescript` / `tsx` 两种语法）+ `tree-sitter-javascript`；第 3 周加 `tree-sitter-python`。不用 web-tree-sitter（WASM）的原因是 Worker 跑在服务端，原生绑定更快。Node ≥ 20 下的预编译包已在本机 Node 24 试装；`tree-sitter-typescript` 与 `tree-sitter@0.25` 有 peer 依赖冲突（spike 已记录，锁定兼容版本或 `--legacy-peer-deps`），装不上就退回 web-tree-sitter。
+- **版本锁定(T-002/T-003 实测)**:`tree-sitter` 锁 **0.22.4**。0.25.1 在 Node 20 下 segfault,0.25.0 没有预编译包;0.22.4 在 Node 20/24 均可用,且支持 `setTimeoutMicros`(超时返回无 rootNode 的树,据此判定单文件超时)。
 - 只提取语法级信息（符号、import、调用），**不做类型推断**。import 路径解析时读取 `tsconfig.json` 的 `baseUrl/paths`，按架构师定稿：import 路径由 ts-morph 解析（含 tsconfig paths）；ts-morph 失败时降级为我们自己写的 `baseUrl/paths` 前缀替换（纯 Tree-sitter 结果）。Tree-sitter 负责切块和符号提取。
 - 提取规则用 Tree-sitter Query（`.scm`）声明，每种语言一份，方便扩展到 Python。
 
@@ -67,8 +68,10 @@ Query 示例（TS，字段名需要对照语法的 `node-types.json` 核实，**
 **解析器接口与初始化钩子**
 `LanguageAnalyzer` 增加初始化钩子：`init(ctx: {repoRoot, tsconfigPath?}): Promise<void>` 先建 ts-morph `Project`（有状态，读 tsconfig `baseUrl/paths`），之后 `resolveImport(fromFile, spec)` 才复用该 Project 同步解析；`init` 失败则标记降级，`resolveImport` 走纯 Tree-sitter + 自写 paths 前缀替换；`dispose()` 释放 Project。
 
+**实现定稿(T-002/T-003)**:`new TypeScriptAnalyzer({ root, files, parseTimeoutMs })` 在构造时接收本次扫描得到的文件集合(resolver 只在该集合内命中),对外暴露 `resolverMode`(`ts-morph` | `fallback`)与 `stats`(files/nodes/edges/unresolved/syntaxErrorFiles/assetImports/timedOutFiles 等)。分析器返回**全量图**(全部 module/dir/file 节点 + 原始 file→file 边 + cycles);≤300 节点截断与聚合边全部在 API 层现算(见 §1「图投影」)。
+
 **依赖解析流程**
-1. `import.source` 是相对路径时，按 `.ts .tsx .js .jsx /index.ts …` 顺序尝试补全，得到 file→file 边：`type:"imports"`，并按语法标 `kind`：`import`/`export … from` 为 `static`（`export … from` 为 `re-export`）、`import type` 为 `type-only`、`import()` 为 `dynamic`、`require()` 为 `require`；每条边带 `srcFileId`（= 源文件 `file.id`，库表 `src_file_id`）。
+1. `import.source` 是相对路径时，按 `.ts .tsx .js .jsx /index.ts …` 顺序尝试补全，得到 file→file 边：`type:"imports"`，并按语法标 `kind`：`import`/`export … from` 为 `static`（`export … from` 为 `re-export`）、`import type` 为 `type-only`、`import()` 为 `dynamic`、`require()` 为 `require`；每条边带 `srcFileId`。**对外(GraphData)统一为 `f:<path>`**;入库时由 T-003 的 store 映射为 `file.id` 写入 `src_file_id`,读出时再映射回 `f:<path>`。
 2. 命中 tsconfig `paths` 别名时，先替换前缀再按第 1 步补全。
 3. 裸模块（如 `react`）记为外部依赖节点 `ext:react`，只计数，**默认不画进图里**。
 4. 调用边：同文件内按名字匹配到 symbol；跨文件时，只有被调用名来自某个 named import，才连到目标文件的同名导出。匹配不上的调用丢弃（是否展示由 confidence 控制：同文件 1.0、经 import 0.8）。
@@ -94,12 +97,19 @@ Query 示例（TS，字段名需要对照语法的 `node-types.json` 核实，**
   ],
   "edges": [
     {"id":"e:1","source":"f:src/server/routes/user.ts","target":"f:src/db/index.ts",
-     "type":"imports","kind":"static","srcFileId":301,"weight":1}
+     "type":"imports","kind":"static","srcFileId":"f:src/server/routes/user.ts","weight":1}
   ],
   "meta": {"repoId":12,"commitSha":"a1b2c3d","parentId":"d:src/server/routes","language":"typescript"}
 }
 ```
 请求 `GET /api/repos/:id/graph` 不带 `parentId` 时返回 module 层（`meta.parentId: null`）。
+
+**图投影(T-003,API 层现算,不入库)**
+- 由 `file` 行(`module_id`、`dir_path`)重建 module→dir→file 树,规则与 analyzer `buildGraph` 一致;module/dir 的 `weight` = 下属文件数,file 的 `weight` = 入度。
+- 不带 `parentId` 返回全部 module;带 `parentId` 返回其直接子节点(file 不可展开,返回 404)。超过 300 时按 `weight` 降序截断。
+- 每条原始边的两端上卷到本层可见的最近祖先:两端都是可见文件时原样返回(`e:<src>-><tgt>:<kind>`);否则合并为 `a:<src>-><tgt>`,`aggregated:true`、`weight`=被合并的 import 数、`kind` 取最多的一种、`srcFileId` 取路径最小的源文件。同一可见节点内部的边不返回。
+- `includeExternal=true` 时由 `file.external_deps` 派生 `x:<包名>` 节点(按引用文件数取前 50,占用 300 名额)及 `x:<src>->x:<pkg>` 边。
+- `meta.cycles` 为分析器检测到的环投影到本层可见节点后的结果。结果 gzip 后缓存在 `graph:{repoId}:{commit}:{parentId|root}[:ext]`,TTL 7d;图重新入库时 SCAN 删除该 commit 的缓存。
 
 **增量解析**
 - 文件级增量：`file.content_hash = sha256(内容)`。重新分析时先 `git diff --name-only old..new`，只重新解析变化的文件；相关的边按 `src_file_id` 删掉再重建。
@@ -109,10 +119,11 @@ Query 示例（TS，字段名需要对照语法的 `node-types.json` 核实，**
 
 | 规则 | 默认值 |
 |---|---|
-| 克隆方式 | `git clone --depth 1 --filter=blob:limit=1m --single-branch`（filter 是否被 GitHub 支持：待验证，失败则去掉） |
+| 克隆方式 | 实现(T-003):`git init` + `fetch --depth 1 --no-tags --no-recurse-submodules origin <sha>` + `checkout --detach FETCH_HEAD`,固定到 ls-remote 得到的 commit;`core.hooksPath=/dev/null`、只允许 https 协议、`GIT_CONFIG_GLOBAL=/dev/null`、禁止交互,超时(默认 120s)SIGKILL。不执行仓库内任何代码 |
 | 仓库上限 | 磁盘占用 ≤ 300MB，源码文件数 ≤ 5000，单文件 ≤ 500KB，超过的直接跳过 |
-| 忽略 | `.gitignore` 规则 + 内置：`node_modules dist build .next coverage vendor *.min.js *.map *.lock` 和生成文件（首行含 `@generated`） |
-| 并发 | 每个 Worker 用 `p-limit(8)` 控制解析并发；单文件解析超时 2s |
+| 忽略 | 内置目录:`node_modules bower_components jspm_packages dist build out coverage vendor`,测试/文档/示例/基准目录 `test tests __tests__ __mocks__ __fixtures__ fixtures e2e docs doc examples example bench benchmark benchmarks`,以及所有 `.` 开头的隐藏目录;文件:`*.test.* *.spec.* *.bench.* *.test-d.ts *.min.js`;前 1KB 含 `@generated` 的生成文件;符号链接一律跳过。资源 import(css/图片/json/md/html 等)只计数(`stats.assetImports`),不进图 |
+| 并发 | 每个 Worker 用 `p-limit(8)` 控制文件读取并发(Tree-sitter 解析本身是同步的);单文件解析超时默认 5s(`PARSE_TIMEOUT_MS`),超时文件计入 `stats.timedOutFiles` 后跳过 |
+| 路径安全 | 所有相对路径先规范化,拒绝 `..`、绝对路径、盘符、反斜杠与 NUL |
 | 二进制 | 前 8KB 里出现 NUL 字节就视为二进制，跳过 |
 
 ---
@@ -259,12 +270,12 @@ sequenceDiagram
 | embedding | 切块 + embedding + 写 Qdrant | 85–100 | 是 |
 | done | 全部完成 | 100 | - |
 
-失败时发 `stage_error`，带 `stage` 和 `message`。
+失败时发 `stage_error`，带 `stage` 和 `message`。可重试错误(网络、写库)在非最后一次尝试时只发 `stage_error`;不可重试错误(超限、非 TS 仓库)或最后一次失败时再发 `done{status:'failed'}`,`analysis_task.stage='failed'`,`stats.failedStage` 记录失败阶段。T-003 中 summarizing/embedding 是桩:只推 50/85 的 progress(message 注明未实现)后直接 done。
 
 **关键点：graph 阶段完成就推 `graph_ready`，前端立刻画图**，摘要和向量在后台继续跑，演示时不用等。
 
 **幂等**
-- 用 BullMQ 自定义 `jobId = ${repoId}:${commit}`，同一个 commit 重复提交直接返回已有 jobId；`analysis_task.uk_repo_commit` 再兜一层。
+- 对外 `jobId = ${repoId}:${commit}`，同一个 commit 重复提交直接返回已有 jobId(HTTP 200);`analysis_task.uk_repo_commit` 再兜一层。**BullMQ 5 不允许自定义 id 含单个 `:`**,队列内部 id 用 `${repoId}-${commit}`(`queueJobId()`,在 `packages/db/redis-keys.ts`)。失败的任务再次 POST 会重置并重新入队(202)。
 - 每个阶段开始前检查产物是否已经存在（比如 `file` 表里这个 commit 已有数据就跳过 parse），所以 Job 重试时从断点继续。
 - 写库前先 `DELETE … WHERE repo_id=? AND commit_sha=?` 再批量插入，同一事务内完成。
 - `attempts: 3, backoff: {type:'exponential', delay: 5000}`（BullMQ 标准选项）。

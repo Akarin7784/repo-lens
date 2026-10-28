@@ -18,6 +18,8 @@ import { readPathsConfig } from './tsconfig-reader.js';
 export interface TypeScriptAnalyzerOptions {
   /** 测试注入点:模拟 ts-morph 初始化失败 */
   projectFactory?: ProjectFactory;
+  /** 单文件 Tree-sitter 解析超时(毫秒),默认 5000 */
+  parseTimeoutMs?: number;
 }
 
 export interface ResolverStats {
@@ -85,7 +87,7 @@ export class TypeScriptAnalyzer implements LanguageAnalyzer {
   }
 
   async parseFile(file: SourceFile): Promise<ParsedFile> {
-    return parseWithTreeSitter(file);
+    return parseWithTreeSitter(file, { timeoutMs: this.opts.parseTimeoutMs ?? 5000 });
   }
 
   resolveImport(fromFile: string, spec: string): ResolvedImport {

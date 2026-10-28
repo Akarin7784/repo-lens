@@ -43,6 +43,8 @@ console.log(
       unresolved: r.stats.unresolved,
       unresolvedSample: r.graph.unresolved.slice(0, 5),
       syntaxErrorFiles: r.stats.syntaxErrorFiles,
+      assetImports: r.stats.assetImports,
+      timedOutFiles: r.stats.timedOutFiles.length,
       resolver: r.stats.resolver,
       ms: {
         scan: Math.round(scanMs),
