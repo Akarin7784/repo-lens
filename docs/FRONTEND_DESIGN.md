@@ -433,6 +433,8 @@ type GraphData = { nodes: GraphNode[] /* ≤300，id 唯一 */; edges: GraphEdge
 ### 7.5 真实接口接入（T-007）
 
 - **API 地址**：`NEXT_PUBLIC_API_BASE_URL`（构建期注入浏览器）；为空时同源请求 `/api/*`。后端未开 CORS，同源部署时设 `API_PROXY_TARGET`，由 Next rewrites 把 `/api/:path*` 转发到 api；`next.config.mjs` 设 `compress:false`，避免 gzip 缓冲 SSE。
+- **部署（compose）**：`apps/web/Dockerfile` 以 `ARG API_PROXY_TARGET=http://api:4000` 在构建期注入，`docker-compose.yml` 的 web 构建通过 `args` 传入；`turbo.json` 的 build 任务声明了 `API_PROXY_TARGET` / `NEXT_PUBLIC_API_BASE_URL`（turbo 2 严格 env 模式否则会过滤掉，rewrites 为空）。运行时变量对 rewrites 无效。
+- **直连另一个域名**：若改用 `NEXT_PUBLIC_API_BASE_URL` 指向别的域名，api 必须开 CORS，并通过 `Access-Control-Expose-Headers: x-graph-truncated` 暴露该头，否则浏览器读不到截断标记、截断提示会丢失。
 - **调用**：`lib/api/client.ts` 的 `createRepo`（`POST /api/repos`）、`getRepoStatus`（`GET /api/repos/:id`）、`getGraph`（`GET /api/repos/:id/graph`）、`jobEventsUrl`。所有响应都先过 `@repolens/shared` schema（`CreateRepoResponseSchema` / `RepoStatusSchema` / `GraphDataSchema` / `ApiErrorSchema` / `JobEventSchema`），不合规按 `INVALID_RESPONSE` 处理。
 - **图接口参数**：只带 `parentId`（根层不带任何参数）。后端对其它参数（缓存破坏 `_t=`、depth、level 等）一律返回 400，前端不得追加。
 - **流程**：首页提交 → `/a/:repoId?job=…&repo=…` → 订阅 SSE `/api/jobs/:id/events`，进度面板按阶段（排队 / 克隆 / 扫描 / 解析 / 依赖图已生成）显示进度条与后端 message，进度只前进；`stage_error` 在对应阶段标 ✕ 并以 `role=alert` 显示；`graph_ready` 后取根层（module 层），双击 / ▸ 按 `parentId` 懒加载下一层；`done` 后关闭连接。直接打开链接（无 `job`）时先 `GET /api/repos/:id` 判断已完成、进行中或失败。
