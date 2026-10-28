@@ -32,6 +32,7 @@
 - [#12](https://github.com/Akarin7784/repo-lens/issues/12):请求 `parentId` 时返回跨子树聚合边(`aggregated:true`、`weight`,外端为 LCA(P,Y) 的直接子节点,外端节点要放进 nodes)。验证例子用 zustand 的 `m:src/middleware`(hono 根层没有跨模块边,需换一个展开例子)。负责:后端与AI设计师。
 - 非法图查询改返回 400(`BAD_REQUEST` 已在 [#13](https://github.com/Akarin7784/repo-lens/pull/13) 加入 shared),后端另开 PR。
 - ~~smoke 业务步骤~~:PR [#14](https://github.com/Akarin7784/repo-lens/pull/14) 已合并(提交 1ada2f0)。聚合边断言已补(PR [#20](https://github.com/Akarin7784/repo-lens/pull/20),注意其「恰好一端在 P 内」只适用于子节点是文件的展开,扩到目录展开时放宽为至少一端在 P 内);400 断言待 #17 合并后补;仍未覆盖 Qdrant、LLM、`/chat`。
+- 经 web 代理访问 api 已加入 smoke(分支 ci/smoke-via-web,`scripts/ci-smoke-web-proxy.mjs`):经 `http://localhost:3000/api/repos/999999` 必须得到 api 的 404 `REPO_NOT_FOUND` JSON。当前 main 上预期红(web 镜像构建时未传 `API_PROXY_TARGET`),待 #18 修复 Dockerfile/compose 并合并后验证为绿。
 - 仓库体积限制:`MAX_REPO_MB` 统一为 300(#11 与本次);worker 扫描后另设 `MAX_SOURCE_MB`(默认 50),并给克隆目录加体积上限(目前只有超时保护)。
 - 限流:重复提交已分析完成的同一仓库、同一 commit(复用结果、没有新任务入队)不计入每小时 5 次限额,只有真正入队的新任务才计数,PR 要带测试。负责:后端与AI设计师(与 `meta.cycles` 同一个小 PR)。
 - `meta.cycles` 按强连通分量的成员集合处理,不是有序路径;同时修 `projection.ts` 并在文档写明,用 hono 的 5 个环验证;前端把分量内部的边都标成环边。负责:后端与AI设计师、前端可视化设计师。
