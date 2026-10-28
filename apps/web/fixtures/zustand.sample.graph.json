@@ -1,0 +1,332 @@
+{
+  "nodes": [
+    {
+      "id": "m:.",
+      "type": "module",
+      "parentId": null,
+      "label": "(root)",
+      "path": "."
+    },
+    {
+      "id": "m:src/middleware",
+      "type": "module",
+      "parentId": null,
+      "label": "middleware",
+      "path": "src/middleware"
+    },
+    {
+      "id": "m:src/react",
+      "type": "module",
+      "parentId": null,
+      "label": "react",
+      "path": "src/react"
+    },
+    {
+      "id": "m:src/vanilla",
+      "type": "module",
+      "parentId": null,
+      "label": "vanilla",
+      "path": "src/vanilla"
+    },
+    {
+      "id": "d:src",
+      "type": "dir",
+      "parentId": "m:.",
+      "label": "src",
+      "path": "src"
+    },
+    {
+      "id": "f:package.json",
+      "type": "file",
+      "parentId": "m:.",
+      "label": "package.json",
+      "path": "package.json",
+      "loc": 0
+    },
+    {
+      "id": "f:rollup.config.mjs",
+      "type": "file",
+      "parentId": "m:.",
+      "label": "rollup.config.mjs",
+      "path": "rollup.config.mjs",
+      "loc": 80
+    },
+    {
+      "id": "f:src/index.ts",
+      "type": "file",
+      "parentId": "d:src",
+      "label": "index.ts",
+      "path": "src/index.ts",
+      "loc": 5
+    },
+    {
+      "id": "f:src/middleware.ts",
+      "type": "file",
+      "parentId": "d:src",
+      "label": "middleware.ts",
+      "path": "src/middleware.ts",
+      "loc": 10
+    },
+    {
+      "id": "f:src/middleware/combine.ts",
+      "type": "file",
+      "parentId": "m:src/middleware",
+      "label": "combine.ts",
+      "path": "src/middleware/combine.ts",
+      "loc": 20
+    },
+    {
+      "id": "f:src/middleware/devtools.ts",
+      "type": "file",
+      "parentId": "m:src/middleware",
+      "label": "devtools.ts",
+      "path": "src/middleware/devtools.ts",
+      "loc": 260
+    },
+    {
+      "id": "f:src/middleware/immer.ts",
+      "type": "file",
+      "parentId": "m:src/middleware",
+      "label": "immer.ts",
+      "path": "src/middleware/immer.ts",
+      "loc": 50,
+      "externalDeps": ["immer"]
+    },
+    {
+      "id": "f:src/middleware/persist.ts",
+      "type": "file",
+      "parentId": "m:src/middleware",
+      "label": "persist.ts",
+      "path": "src/middleware/persist.ts",
+      "loc": 420
+    },
+    {
+      "id": "f:src/middleware/redux.ts",
+      "type": "file",
+      "parentId": "m:src/middleware",
+      "label": "redux.ts",
+      "path": "src/middleware/redux.ts",
+      "loc": 50
+    },
+    {
+      "id": "f:src/middleware/subscribeWithSelector.ts",
+      "type": "file",
+      "parentId": "m:src/middleware",
+      "label": "subscribeWithSelector.ts",
+      "path": "src/middleware/subscribeWithSelector.ts",
+      "loc": 70
+    },
+    {
+      "id": "f:src/react.ts",
+      "type": "file",
+      "parentId": "d:src",
+      "label": "react.ts",
+      "path": "src/react.ts",
+      "loc": 70,
+      "externalDeps": ["react"]
+    },
+    {
+      "id": "f:src/react/shallow.ts",
+      "type": "file",
+      "parentId": "m:src/react",
+      "label": "shallow.ts",
+      "path": "src/react/shallow.ts",
+      "loc": 25,
+      "externalDeps": ["react"]
+    },
+    {
+      "id": "f:src/shallow.ts",
+      "type": "file",
+      "parentId": "d:src",
+      "label": "shallow.ts",
+      "path": "src/shallow.ts",
+      "loc": 5
+    },
+    {
+      "id": "f:src/traditional.ts",
+      "type": "file",
+      "parentId": "d:src",
+      "label": "traditional.ts",
+      "path": "src/traditional.ts",
+      "loc": 60,
+      "externalDeps": ["use-sync-external-store"]
+    },
+    {
+      "id": "f:src/vanilla.ts",
+      "type": "file",
+      "parentId": "d:src",
+      "label": "vanilla.ts",
+      "path": "src/vanilla.ts",
+      "loc": 110
+    },
+    {
+      "id": "f:src/vanilla/shallow.ts",
+      "type": "file",
+      "parentId": "m:src/vanilla",
+      "label": "shallow.ts",
+      "path": "src/vanilla/shallow.ts",
+      "loc": 70
+    }
+  ],
+  "edges": [
+    {
+      "id": "e:src/index.ts->src/vanilla.ts:re-export",
+      "source": "f:src/index.ts",
+      "target": "f:src/vanilla.ts",
+      "type": "imports",
+      "kind": "re-export",
+      "srcFileId": "f:src/index.ts",
+      "weight": 1
+    },
+    {
+      "id": "e:src/index.ts->src/react.ts:re-export",
+      "source": "f:src/index.ts",
+      "target": "f:src/react.ts",
+      "type": "imports",
+      "kind": "re-export",
+      "srcFileId": "f:src/index.ts",
+      "weight": 1
+    },
+    {
+      "id": "e:src/react.ts->src/vanilla.ts:static",
+      "source": "f:src/react.ts",
+      "target": "f:src/vanilla.ts",
+      "type": "imports",
+      "kind": "static",
+      "srcFileId": "f:src/react.ts",
+      "weight": 1
+    },
+    {
+      "id": "e:src/traditional.ts->src/vanilla.ts:static",
+      "source": "f:src/traditional.ts",
+      "target": "f:src/vanilla.ts",
+      "type": "imports",
+      "kind": "static",
+      "srcFileId": "f:src/traditional.ts",
+      "weight": 1
+    },
+    {
+      "id": "e:src/middleware.ts->src/middleware/devtools.ts:re-export",
+      "source": "f:src/middleware.ts",
+      "target": "f:src/middleware/devtools.ts",
+      "type": "imports",
+      "kind": "re-export",
+      "srcFileId": "f:src/middleware.ts",
+      "weight": 1
+    },
+    {
+      "id": "e:src/middleware.ts->src/middleware/persist.ts:re-export",
+      "source": "f:src/middleware.ts",
+      "target": "f:src/middleware/persist.ts",
+      "type": "imports",
+      "kind": "re-export",
+      "srcFileId": "f:src/middleware.ts",
+      "weight": 1
+    },
+    {
+      "id": "e:src/middleware.ts->src/middleware/immer.ts:re-export",
+      "source": "f:src/middleware.ts",
+      "target": "f:src/middleware/immer.ts",
+      "type": "imports",
+      "kind": "re-export",
+      "srcFileId": "f:src/middleware.ts",
+      "weight": 1
+    },
+    {
+      "id": "e:src/middleware.ts->src/middleware/redux.ts:re-export",
+      "source": "f:src/middleware.ts",
+      "target": "f:src/middleware/redux.ts",
+      "type": "imports",
+      "kind": "re-export",
+      "srcFileId": "f:src/middleware.ts",
+      "weight": 1
+    },
+    {
+      "id": "e:src/middleware.ts->src/middleware/subscribeWithSelector.ts:re-export",
+      "source": "f:src/middleware.ts",
+      "target": "f:src/middleware/subscribeWithSelector.ts",
+      "type": "imports",
+      "kind": "re-export",
+      "srcFileId": "f:src/middleware.ts",
+      "weight": 1
+    },
+    {
+      "id": "e:src/middleware.ts->src/middleware/combine.ts:re-export",
+      "source": "f:src/middleware.ts",
+      "target": "f:src/middleware/combine.ts",
+      "type": "imports",
+      "kind": "re-export",
+      "srcFileId": "f:src/middleware.ts",
+      "weight": 1
+    },
+    {
+      "id": "e:src/middleware/persist.ts->src/vanilla.ts:type-only",
+      "source": "f:src/middleware/persist.ts",
+      "target": "f:src/vanilla.ts",
+      "type": "imports",
+      "kind": "type-only",
+      "srcFileId": "f:src/middleware/persist.ts",
+      "weight": 1
+    },
+    {
+      "id": "e:src/middleware/devtools.ts->src/vanilla.ts:type-only",
+      "source": "f:src/middleware/devtools.ts",
+      "target": "f:src/vanilla.ts",
+      "type": "imports",
+      "kind": "type-only",
+      "srcFileId": "f:src/middleware/devtools.ts",
+      "weight": 1
+    },
+    {
+      "id": "e:src/middleware/redux.ts->src/middleware/devtools.ts:type-only",
+      "source": "f:src/middleware/redux.ts",
+      "target": "f:src/middleware/devtools.ts",
+      "type": "imports",
+      "kind": "type-only",
+      "srcFileId": "f:src/middleware/redux.ts",
+      "weight": 1
+    },
+    {
+      "id": "e:src/middleware/immer.ts->src/vanilla.ts:type-only",
+      "source": "f:src/middleware/immer.ts",
+      "target": "f:src/vanilla.ts",
+      "type": "imports",
+      "kind": "type-only",
+      "srcFileId": "f:src/middleware/immer.ts",
+      "weight": 1
+    },
+    {
+      "id": "e:src/shallow.ts->src/vanilla/shallow.ts:re-export",
+      "source": "f:src/shallow.ts",
+      "target": "f:src/vanilla/shallow.ts",
+      "type": "imports",
+      "kind": "re-export",
+      "srcFileId": "f:src/shallow.ts",
+      "weight": 1
+    },
+    {
+      "id": "e:src/shallow.ts->src/react/shallow.ts:re-export",
+      "source": "f:src/shallow.ts",
+      "target": "f:src/react/shallow.ts",
+      "type": "imports",
+      "kind": "re-export",
+      "srcFileId": "f:src/shallow.ts",
+      "weight": 1
+    },
+    {
+      "id": "e:src/react/shallow.ts->src/vanilla/shallow.ts:static",
+      "source": "f:src/react/shallow.ts",
+      "target": "f:src/vanilla/shallow.ts",
+      "type": "imports",
+      "kind": "static",
+      "srcFileId": "f:src/react/shallow.ts",
+      "weight": 1
+    }
+  ],
+  "meta": {
+    "repoId": 2,
+    "commitSha": "0000000000000000000000000000000000000000",
+    "parentId": null,
+    "language": "typescript"
+  }
+}
