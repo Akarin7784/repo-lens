@@ -3,7 +3,13 @@ import mysql from 'mysql2/promise';
 import { MemoryStore } from './memory-store.js';
 import { MysqlStore } from './mysql-store.js';
 import { runMigrations } from './migrate.js';
-import { parseJobId, publicJobId, queueJobId, redisKeys } from './redis-keys.js';
+import {
+  GRAPH_PROJECTION_VERSION,
+  parseJobId,
+  publicJobId,
+  queueJobId,
+  redisKeys,
+} from './redis-keys.js';
 import type { GraphInput, Store } from './store.js';
 
 const MYSQL_URL = process.env.TEST_MYSQL_URL ?? 'mysql://root:dev@127.0.0.1:3306/repolens_test';
@@ -113,8 +119,11 @@ suite(
 describe('redis keys', () => {
   it('与文档一致', () => {
     expect(redisKeys.jobEvents('1:abc')).toBe('job:1:abc:events');
-    expect(redisKeys.graph(1, C, null)).toBe(`graph:1:${C}:root`);
-    expect(redisKeys.graph(1, C, 'm:src', true)).toBe(`graph:1:${C}:m:src:ext`);
+    expect(GRAPH_PROJECTION_VERSION).toBe(2);
+    expect(redisKeys.graph(1, C, null)).toBe(`graph:v2:1:${C}:root`);
+    expect(redisKeys.graph(1, C, 'm:src', true)).toBe(`graph:v2:1:${C}:m:src:ext`);
+    expect(redisKeys.graph(1, C, null, false, 3)).toBe(`graph:v3:1:${C}:root`);
+    expect(redisKeys.graphPattern(1, C)).toBe(`graph:v2:1:${C}:*`);
     expect(redisKeys.rateLimitIp('1.2.3.4', new Date('2026-10-29T03:05:00Z'))).toBe(
       'rl:ip:1.2.3.4:2026102903',
     );

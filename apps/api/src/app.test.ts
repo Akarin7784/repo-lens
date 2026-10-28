@@ -12,7 +12,13 @@ import {
   RepoStatusSchema,
   CreateRepoResponseSchema,
 } from '@repolens/shared';
-import { MemoryStore, publicJobId, redisKeys, type GraphInput } from '@repolens/db';
+import {
+  GRAPH_PROJECTION_VERSION,
+  MemoryStore,
+  publicJobId,
+  redisKeys,
+  type GraphInput,
+} from '@repolens/db';
 import { buildApp, type AnalyzeJobData, type JobQueue } from './app.js';
 import { createGitHost, parseLsRemote, type GitHost } from './githost.js';
 
@@ -305,20 +311,34 @@ describe.skipIf(!hasRedis)('路由(真实 Redis + 内存 Store)', () => {
     expect(g.edges.every((e) => e.type === 'imports' && e.aggregated)).toBe(true);
     expect(g.nodes.some((n) => n.type === 'external')).toBe(false);
     expect(g.meta.cycles).toEqual([['m:src/a', 'm:src/b']]);
-    expect((await app.inject(`/api/repos/${repoId}/graph`)).headers['x-cache']).toBe('hit');
+    const hit = await app.inject(`/api/repos/${repoId}/graph`);
+    expect([hit.headers['x-cache'], hit.headers['x-graph-truncated']]).toEqual(['hit', 'false']);
+    expect(hit.json()).toEqual(r1.json());
 
     const sub = GraphDataSchema.parse(
       (await app.inject(`/api/repos/${repoId}/graph?parentId=m:src/a`)).json(),
     );
-    expect(sub.nodes.map((n) => n.id).sort()).toEqual(['d:src/a/x', 'f:src/a/index.ts']);
-    expect(sub.edges).toEqual([
-      expect.objectContaining({
-        source: 'f:src/a/index.ts',
-        target: 'd:src/a/x',
-        aggregated: true,
-        weight: 1,
-      }),
+    // 范围外的同层祖先(m:., m:src/b)作为边界节点一并返回,保证边两端都在 nodes 里
+    expect(sub.nodes.map((n) => n.id).sort()).toEqual([
+      'd:src/a/x',
+      'f:src/a/index.ts',
+      'm:.',
+      'm:src/b',
     ]);
+    // 子树内边 + 跨子树边:范围外一端写成同层祖先(m:src/b、m:.),方向保留,按 (s,t) 去重
+    const pick = (es: typeof sub.edges) =>
+      es.map((e) => [e.source, e.target, e.weight, e.kind, e.aggregated ?? false]).sort();
+    expect(pick(sub.edges)).toEqual(
+      [
+        ['f:src/a/index.ts', 'd:src/a/x', 1, 'static', true],
+        ['f:src/a/index.ts', 'm:src/b', 1, 'static', true],
+        ['d:src/a/x', 'm:src/b', 2, 'static', true], // static 与 type-only 各 1,并列按字母取 static
+        ['m:src/b', 'f:src/a/index.ts', 1, 'static', true],
+        ['m:.', 'f:src/a/index.ts', 1, 'static', true],
+      ].sort(),
+    );
+    expect(sub.edges.every((e) => e.source !== e.target && e.type === 'imports')).toBe(true);
+    expect(new Set(sub.edges.map((e) => e.id)).size).toBe(sub.edges.length);
     const leaf = GraphDataSchema.parse(
       (await app.inject(`/api/repos/${repoId}/graph?parentId=m:src/b`)).json(),
     );
@@ -327,6 +347,23 @@ describe.skipIf(!hasRedis)('路由(真实 Redis + 内存 Store)', () => {
       weight: 1,
     });
     expect(leaf.edges[0]!.aggregated).toBeUndefined();
+    expect(pick(leaf.edges.slice(1))).toEqual(
+      [
+        ['m:src/a', 'f:src/b/util.ts', 2, 'static', true],
+        ['m:src/a', 'f:src/b/index.ts', 1, 'static', true],
+        ['f:src/b/util.ts', 'm:src/a', 1, 'static', true],
+      ].sort(),
+    );
+    // 多层:展开 d:src/a/x 时,范围外一端写成 d:src/a/x 祖先链上的兄弟层节点
+    const deep = GraphDataSchema.parse(
+      (await app.inject(`/api/repos/${repoId}/graph?parentId=d:src/a/x`)).json(),
+    );
+    expect(pick(deep.edges)).toEqual(
+      [
+        ['f:src/a/x/deep.ts', 'm:src/b', 2, 'static', true],
+        ['f:src/a/index.ts', 'f:src/a/x/deep.ts', 1, 'static', true],
+      ].sort(),
+    );
 
     const ext = GraphDataSchema.parse(
       (await app.inject(`/api/repos/${repoId}/graph?includeExternal=true`)).json(),
@@ -341,6 +378,25 @@ describe.skipIf(!hasRedis)('路由(真实 Redis + 内存 Store)', () => {
     expect((await app.inject(`/api/repos/${repoId}/graph?parentId=f:main.ts`)).statusCode).toBe(
       404,
     );
+    await app.close();
+  });
+
+  it('图缓存 key 带投影版本号:旧版本/无版本的缓存不会被命中', async () => {
+    const app = make();
+    const { repoId } = await seedGraph();
+    const stale = Buffer.from('stale-not-gzip');
+    // #10 的无版本 key 与上一版本 key 都写入脏数据
+    await redis.set(`graph:${repoId}:${SHA}:root`, stale);
+    await redis.set(redisKeys.graph(repoId, SHA, null, false, GRAPH_PROJECTION_VERSION - 1), stale);
+    await redis.del(redisKeys.graph(repoId, SHA, null));
+    const r = await app.inject(`/api/repos/${repoId}/graph`);
+    expect(r.statusCode).toBe(200);
+    expect(r.headers['x-cache']).toBe('miss');
+    expect(GraphDataSchema.parse(r.json()).nodes.length).toBe(3);
+    const key = redisKeys.graph(repoId, SHA, null);
+    expect(key.startsWith(`graph:v${GRAPH_PROJECTION_VERSION}:`)).toBe(true);
+    expect(await redis.exists(key)).toBe(1);
+    expect((await app.inject(`/api/repos/${repoId}/graph`)).headers['x-cache']).toBe('hit');
     await app.close();
   });
 
@@ -376,6 +432,11 @@ describe.skipIf(!hasRedis)('路由(真实 Redis + 内存 Store)', () => {
     );
     expect(g.nodes).toHaveLength(300);
     expect(g.nodes[0]!.id).toBe('f:f000.ts');
+    // 子节点自身超 300:照旧截断,并用响应头标记(缓存命中时同样带上)
+    const t1 = await app.inject(`/api/repos/${repo.id}/graph?parentId=m:.`);
+    expect([t1.headers['x-cache'], t1.headers['x-graph-truncated']]).toEqual(['hit', 'true']);
+    const root = await app.inject(`/api/repos/${repo.id}/graph`);
+    expect(root.headers['x-graph-truncated']).toBe('false');
     const e = GraphDataSchema.parse(
       (await app.inject(`/api/repos/${repo.id}/graph?parentId=m:.&includeExternal=true`)).json(),
     );

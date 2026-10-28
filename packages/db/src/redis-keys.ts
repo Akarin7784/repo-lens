@@ -4,6 +4,13 @@ export const JOB_EVENTS_TTL_S = 24 * 3600;
 export const GRAPH_CACHE_TTL_S = 7 * 24 * 3600;
 export const RATE_LIMIT_TTL_S = 3600;
 export const LOCK_TTL_S = 30 * 60;
+/**
+ * 图投影版本号,写进图缓存 key(graph:v{N}:...)。
+ * **改投影逻辑(apps/api/src/projection.ts 的节点/边/截断规则)时必须递增**,
+ * 旧版本 key 不再命中、随 TTL 自然过期,不依赖部署后手动清缓存。
+ * v1 = #10(无版本前缀);v2 = #12 跨子树聚合边 + 边界节点。
+ */
+export const GRAPH_PROJECTION_VERSION = 2;
 
 const pad = (n: number) => String(n).padStart(2, '0');
 /** UTC 的 yyyyMMddHH(限流按自然小时分桶) */
@@ -13,10 +20,18 @@ export const hourBucket = (d = new Date()): string =>
 export const redisKeys = {
   jobEvents: (jobId: string) => `job:${jobId}:events`,
   repoLock: (repoId: number, commit: string) => `lock:repo:${repoId}:${commit}`,
-  /** 文档为 graph:{repoId}:{commitSha}:{parentId|root};includeExternal=true 时追加 :ext */
-  graph: (repoId: number, commit: string, parentId: string | null, includeExternal = false) =>
-    `graph:${repoId}:${commit}:${parentId ?? 'root'}${includeExternal ? ':ext' : ''}`,
-  graphPattern: (repoId: number, commit: string) => `graph:${repoId}:${commit}:*`,
+  /** graph:v{N}:{repoId}:{commitSha}:{parentId|root};includeExternal=true 时追加 :ext */
+  graph: (
+    repoId: number,
+    commit: string,
+    parentId: string | null,
+    includeExternal = false,
+    version = GRAPH_PROJECTION_VERSION,
+  ) =>
+    `graph:v${version}:${repoId}:${commit}:${parentId ?? 'root'}${includeExternal ? ':ext' : ''}`,
+  /** 当前版本该 commit 的全部图缓存(重新入库时删除);旧版本 key 靠 TTL 过期 */
+  graphPattern: (repoId: number, commit: string, version = GRAPH_PROJECTION_VERSION) =>
+    `graph:v${version}:${repoId}:${commit}:*`,
   rateLimitIp: (ip: string, d = new Date()) => `rl:ip:${ip}:${hourBucket(d)}`,
 } as const;
 
