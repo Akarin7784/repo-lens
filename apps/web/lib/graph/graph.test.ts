@@ -14,6 +14,8 @@ import {
   SliceTooLargeError,
 } from './hierarchy';
 import { graphReducer, initialGraphState } from './state';
+import { DIM_OPACITY, highlightSelection } from './selection';
+import type { RepoFlowEdge, RepoFlowNode } from './toFlow';
 import { edgeWidth, toFlow } from './toFlow';
 import { readLayout, toElkGraph, createInlineEngine } from '../layout/elk';
 import { parseLayoutFile } from '../layout/layoutFile';
@@ -228,5 +230,32 @@ describe('布局文件', () => {
     expect(
       parseLayoutFile({ commitSha: 'b'.repeat(40), positions: {} }, 'a'.repeat(40)),
     ).toBeNull();
+  });
+});
+
+describe('highlightSelection', () => {
+  const mk = (id: string, isContainer = false) =>
+    ({ id, position: { x: 0, y: 0 }, data: { isContainer } }) as unknown as RepoFlowNode;
+  const ed = (source: string, target: string) =>
+    ({
+      id: `${source}->${target}`,
+      source,
+      target,
+      data: { weight: 1, aggregated: false, kind: 'static' },
+    }) as RepoFlowEdge;
+  const flow = {
+    nodes: [mk('a'), mk('b'), mk('c'), mk('d'), mk('box', true)],
+    edges: [ed('a', 'b'), ed('c', 'a'), ed('c', 'd')],
+  };
+  it('无选中时原样返回', () => {
+    expect(highlightSelection(flow, null).nodes).toBe(flow.nodes);
+  });
+  it('选中节点与一跳邻居不透明,其余淡出,容器不淡出;相连边 on,其他 dim', () => {
+    const v = highlightSelection(flow, 'a');
+    const op = Object.fromEntries(v.nodes.map((n) => [n.id, n.style?.opacity]));
+    expect(op).toEqual({ a: 1, b: 1, c: 1, d: DIM_OPACITY, box: 1 });
+    expect(v.nodes.find((n) => n.id === 'a')!.selected).toBe(true);
+    expect(v.edges.map((e) => e.data!.highlight)).toEqual(['on', 'on', 'dim']);
+    expect([v.out, v.in]).toEqual([1, 1]);
   });
 });

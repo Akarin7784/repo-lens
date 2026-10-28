@@ -147,7 +147,7 @@ export default function FlowGraph() {
 | 环节 | 规则 |
 |---|---|
 | 首次加载 | `GET /api/repos/:id/graph`（不传 parentId）返回顶层，节点数不超过 300；超过时后端按聚合层（dir → module）继续上卷。范围外的边聚合为 `type:"imports"`、`aggregated:true`、带 `weight` 的边 |
-| 展开 | 单击 module/dir 节点（或卡片上的 ▸）后请求 `?parentId=<nodeId>`，得到该节点的直接子节点（不超过 300 个）和相关边，合并进画布（见 4.3） |
+| 展开 | 点击 module/dir 卡片上的 ▸（双击卡片为附加快捷方式；单击卡片主体只选中，不展开）后请求 `?parentId=<nodeId>`，得到该节点的直接子节点（不超过 300 个）和相关边，合并进画布（见 4.3） |
 | 画布累计上限 | 以**已展开的累计节点数**计：超过 800 时开启边抽样（4.6）并只显示重点标签；超过 1,500 时弹出提示「画布节点过多，建议收起部分模块」，并提供「一键收起到 module 层」按钮。前端不强制截断 |
 | 布局 | 所有层级（dir/module/file）都用 elkjs 计算，在 web worker 中运行（见 4.5）；示例仓库读取预计算的布局文件 |
 | 标签 | 累计 ≤300 时全部显示；超过 300 后按缩放比例和度数 top-N 显示 |
@@ -176,7 +176,7 @@ function aggregateEdges(raw: GraphEdge[], visibleAncestor: (id: string) => strin
 
 ### 4.3 按需展开（懒加载）
 
-- 单击 module/dir 节点时，如果子节点还没加载，请求 `GET /api/repos/:id/graph?parentId=<nodeId>`（例如 `?parentId=m:src/utils`、`?parentId=d:src/utils/jwt`）。返回该父节点的直接子节点和相关边，格式同样是 `{nodes, edges, meta}`；指向范围外的边由后端聚合为一条带 `weight` 的边。
+- 点击 module/dir 的 ▸（或双击卡片）展开时，如果子节点还没加载，请求 `GET /api/repos/:id/graph?parentId=<nodeId>`（例如 `?parentId=m:src/utils`、`?parentId=d:src/utils/jwt`）。返回该父节点的直接子节点和相关边，格式同样是 `{nodes, edges, meta}`；指向范围外的边由后端聚合为一条带 `weight` 的边。
 - 新子节点的目标坐标由 elkjs 计算（worker 中运行，已有节点作为固定约束，避免整张图跳动；示例仓库直接从布局文件读取）。从父节点位置移动到目标坐标的过程是约 300 ms 的坐标插值动画（rAF 更新 position，ease-out），不跑力导向布局。
 - 请求结果用 TanStack Query 缓存，key 为 `["graph", repoId, commitSha, parentId]`。图数据按 commitSha 缓存。
 
@@ -215,10 +215,13 @@ function aggregateEdges(raw: GraphEdge[], visibleAncestor: (id: string) => strin
 |---|---|
 | hover（悬停 150 ms） | 显示 Tooltip：路径、类型、入度/出度、子文件数。file 节点额外显示前 8 行代码（来自缓存，不发请求） |
 | 单击 | 选中节点：节点本身和一跳邻居高亮，其余节点淡出到 15% 透明度；右栏切到「详情」；文件树同步滚动定位；URL 写入 `?node=` |
-| 双击 | 聚合节点展开或收起（4.3）；file 节点在右栏打开完整代码预览 |
+| ▸ / ▾ 箭头 | 聚合节点展开或收起（4.3）的主入口，也是键盘可达的按钮（`aria-expanded`） |
+| 双击 | 附加快捷方式：module/dir 展开或收起（同 ▸）；file 节点在右栏打开完整代码预览（后续） |
 | 右键 | 上下文菜单：展开/收起、只看此子图（focus mode）、查找依赖路径到…、复制路径、在 GitHub 打开、加入对话上下文 |
 | Shift + 单击 | 多选，用于多节点上下文或路径查询 |
 | Esc / 点击空白 | 取消选中，恢复全图 |
+
+> T-004 已实现：单击选中（选中节点 `--accent-strong` 2px 描边 + 引用高亮底色，一跳邻居保持不透明，相连边加粗并改用 `--accent-strong`，其余节点/边淡出到 15%，展开后的容器不淡出）、▸ 与双击展开、Esc/点击空白取消。右栏详情尚未实现，暂由左下状态条显示所选节点路径与依赖/被依赖条数；`?node=`、文件树联动、Shift 多选未实现。
 
 详情面板内容（`<NodeDetail>`）：
 - 头部：图标 + 路径面包屑（可点，用于跳转父节点）+ 类型标签。

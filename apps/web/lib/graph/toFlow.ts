@@ -8,9 +8,17 @@ export type RepoNodeData = {
   /** 已知的直接子节点数;未加载时为 undefined */
   childCount: number | undefined;
   isContainer: boolean;
+  /** 选中节点或其一跳邻居 */
+  highlighted?: boolean;
 };
 export type RepoFlowNode = Node<RepoNodeData, GraphNode['type']>;
-export type RepoEdgeData = { weight: number; aggregated: boolean; kind: GraphEdge['kind'] };
+export type RepoEdgeData = {
+  weight: number;
+  aggregated: boolean;
+  kind: GraphEdge['kind'];
+  /** 有选中节点时:与之相连为 on,否则 dim;无选中为 undefined */
+  highlight?: 'on' | 'dim';
+};
 export type RepoFlowEdge = Edge<RepoEdgeData, 'weighted'>;
 
 /** 聚合边线宽:1 + 1.5·log2(weight),上限 8px(FRONTEND_DESIGN.md §8);原始边固定 1.25px */

@@ -20,19 +20,20 @@ export const WeightedEdge = memo(function WeightedEdge(props: EdgeProps<RepoFlow
   });
   const weight = data?.weight ?? 1;
   const aggregated = data?.aggregated ?? false;
+  const hl = data?.highlight;
   return (
     <>
       <BaseEdge
         path={path}
         markerEnd={markerEnd}
         style={{
-          stroke: 'var(--edge)',
-          strokeWidth: edgeWidth(weight, aggregated),
-          strokeOpacity: aggregated ? 0.75 : 0.9,
+          stroke: hl === 'on' ? 'var(--accent-strong)' : 'var(--edge)',
+          strokeWidth: edgeWidth(weight, aggregated) + (hl === 'on' ? 0.75 : 0),
+          strokeOpacity: hl === 'dim' ? 0.15 : aggregated ? 0.75 : 0.9,
           strokeDasharray: DASH[data?.kind ?? ''],
         }}
       />
-      {aggregated && weight > 1 && (
+      {aggregated && weight > 1 && hl !== 'dim' && (
         <EdgeLabelRenderer>
           <div
             className="pointer-events-none absolute rounded-full border border-line bg-panel px-1.5 text-[10px] text-muted"

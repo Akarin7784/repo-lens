@@ -19,6 +19,7 @@ import {
 import { graphReducer, initialGraphState } from '../../lib/graph/state';
 import type { GraphSource } from '../../lib/graph/source';
 import { toFlow, type RepoFlowEdge, type RepoFlowNode } from '../../lib/graph/toFlow';
+import { highlightSelection } from '../../lib/graph/selection';
 import {
   createDefaultEngine,
   readLayout,
@@ -50,6 +51,7 @@ function Inner({ source, owner, repo, engine }: GraphViewProps) {
   });
   const [status, setStatus] = useState<string>('加载中…');
   const [error, setError] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const engineRef = useRef<Promise<LayoutEngine> | null>(null);
   const layoutFile = useRef<LayoutFile | null>(null);
   const { fitView } = useReactFlow();
@@ -129,13 +131,22 @@ function Inner({ source, owner, repo, engine }: GraphViewProps) {
     };
   }, [derived, state.expanded, state.nodes, engine, fitView]);
 
+  const view = useMemo(() => highlightSelection(flow, selectedId), [flow, selectedId]);
+  const selectedNode = view.nodes.find((n) => n.id === selectedId);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setSelectedId(null);
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   return (
     <ToggleContext.Provider value={toggle}>
       <div className="relative h-full w-full bg-canvas">
         <div className="absolute right-3 top-3 z-10 flex gap-2">
           <button
             type="button"
-            className="rounded-control border border-line bg-panel px-3 py-1.5 text-[13px] text-fg shadow-soft hover:border-accent"
+            className="rounded-control border border-line bg-panel px-3 py-1.5 text-[13px] text-fg shadow-soft hover:border-accent-strong"
             onClick={() => dispatch({ type: 'collapseAll' })}
           >
             全部收起
@@ -151,12 +162,19 @@ function Inner({ source, owner, repo, engine }: GraphViewProps) {
           </label>
         </div>
         <ReactFlow
-          nodes={flow.nodes}
-          edges={flow.edges}
+          nodes={view.nodes}
+          edges={view.edges}
           nodeTypes={nodeTypes}
           edgeTypes={edgeTypes}
           defaultEdgeOptions={defaultEdgeOptions}
-          onNodeClick={(_, n) => (n.type === 'module' || n.type === 'dir') && void toggle(n.id)}
+          // 单击 = 选中并高亮一跳邻居;展开只走卡片上的 ▸,双击 module/dir 作为附加快捷方式
+          onNodeClick={(_, n) => setSelectedId(n.id)}
+          onNodeDoubleClick={(_, n) =>
+            (n.type === 'module' || n.type === 'dir') && void toggle(n.id)
+          }
+          onPaneClick={() => setSelectedId(null)}
+          zoomOnDoubleClick={false}
+          elementsSelectable={false}
           nodesDraggable={false}
           nodesConnectable={false}
           onlyRenderVisibleElements
@@ -171,14 +189,17 @@ function Inner({ source, owner, repo, engine }: GraphViewProps) {
           role="status"
           className="absolute bottom-3 left-3 z-10 rounded-full border border-line bg-panel px-3 py-1 text-[12px] text-muted"
         >
-          {error ?? status}
+          {error ??
+            (selectedNode
+              ? `已选中 ${selectedNode.data.node.path} · 依赖 ${view.out} · 被依赖 ${view.in} · Esc 取消`
+              : status)}
         </div>
       </div>
     </ToggleContext.Provider>
   );
 }
 
-/** 依赖图主视图:module→dir→file 逐层点击展开 */
+/** 依赖图主视图:单击选中高亮邻居,▸(或双击)逐层展开 module→dir→file */
 export function GraphView(props: GraphViewProps) {
   return (
     <ReactFlowProvider>
