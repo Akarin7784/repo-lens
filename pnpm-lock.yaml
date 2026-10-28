@@ -68,6 +68,9 @@ importers:
 
   apps/worker:
     dependencies:
+      '@repolens/analyzer':
+        specifier: workspace:*
+        version: link:../../packages/analyzer
       '@repolens/shared':
         specifier: workspace:*
         version: link:../../packages/shared
