@@ -20,12 +20,14 @@ export const CreateRepoResponseSchema = z.object({
 export const API_ERROR_CODES = [
   'UNSUPPORTED_LANGUAGE',
   'INVALID_REPO_URL',
+  'BAD_REQUEST',
   'REPO_TOO_LARGE',
   'REPO_NOT_FOUND',
   'REPO_NOT_READY',
   'RATE_LIMITED',
   'INTERNAL',
 ] as const;
+/** BAD_REQUEST(HTTP 400):查询参数格式非法(如 parentId 不合法、start>end);格式合法但资源不存在用 404。*/
 /** 例:422 { error: { code: 'UNSUPPORTED_LANGUAGE', message: '第 1 周仅支持 TypeScript 仓库' } } */
 export const ApiErrorSchema = z.object({
   error: z.object({ code: z.enum(API_ERROR_CODES), message: z.string() }),

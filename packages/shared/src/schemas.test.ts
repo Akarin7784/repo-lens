@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  API_ERROR_CODES,
+  ApiErrorSchema,
   ChatEventSchema,
   ChatRequestSchema,
   CreateRepoRequestSchema,
@@ -334,5 +336,14 @@ describe('API DTO', () => {
     };
     expect(NodeDetailSchema.safeParse(d).success).toBe(true);
     expect(NodeDetailSchema.safeParse({ ...d, summary: undefined }).success).toBe(false);
+  });
+});
+
+describe('API_ERROR_CODES', () => {
+  it('包含 BAD_REQUEST,且 ApiErrorSchema 接受它', () => {
+    expect(API_ERROR_CODES).toContain('BAD_REQUEST');
+    expect(ApiErrorSchema.safeParse({ error: { code: 'BAD_REQUEST', message: 'x' } }).success).toBe(
+      true,
+    );
   });
 });
