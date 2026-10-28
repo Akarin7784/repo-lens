@@ -354,6 +354,9 @@ describe.skipIf(!hasRedis)('路由(真实 Redis + 内存 Store)', () => {
       `/api/repos/${repoId}/graph?includeExternal=yes`,
       `/api/repos/${repoId}/graph?depth=abc`, // 未定义参数
       `/api/repos/${repoId}/graph?level=-1`,
+      `/api/repos/${repoId}/graph?_t=123`, // 缓存破坏参数同样 400(strict)
+      `/api/repos/${repoId}/graph?parentId=m:src/a&depth=1`, // 合法参数 + 未知参数
+      `/api/repos/abc`, // 所有带 :id 的路由
       `/api/repos/abc/graph`, // repo id 格式非法
       `/api/repos/0/graph`,
       `/api/repos/1.5/graph`,

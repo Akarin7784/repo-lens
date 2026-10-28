@@ -128,6 +128,13 @@ Query 示例（TS，字段名需要对照语法的 `node-types.json` 核实，**
 
 ---
 
+**错误码(API 层,T-003c)**
+错误体统一为 `{error:{code,message}}`(shared `ApiErrorSchema`)。原则:**格式非法 → 400 `BAD_REQUEST`;格式合法但资源不存在 → 404 `REPO_NOT_FOUND`**。
+- 非正整数 repo id(`abc`、`0`、`1.5` 等)在**所有**带 `:id` 的路由都返回 400;格式合法但不存在的 id(如 `999999`)返回 404。
+- `GET /api/repos/:id/nodes/*`:nodeId 不符合 `NodeIdSchema`(如 `bad`)返回 400;格式合法但不存在(如 `f:nope.ts`)返回 404。
+- `GET /api/repos/:id/graph` 使用 **strict** 校验(`GraphQuerySchema.strict()`,`.strict()` 放在 api 侧,shared 的 schema 不变):**只接受 `parentId` 与 `includeExternal`**,其它任何参数(`depth`、`level`,以及 `_t=` 这类缓存破坏参数)一律返回 400;`parentId` 格式非法(无前缀、未知前缀、空串)或 `includeExternal` 不是 `true`/`false` 时也返回 400。格式合法但节点不存在(`m:nope`),或者节点不可展开(file),返回 404。
+- 其余:图未生成 409 `REPO_NOT_READY`,限流 429 `RATE_LIMITED`(见各接口)。
+
 ## 2. 数据库设计
 
 ### 2.1 MySQL（结论：主存放结构化数据，代码原文不入库，只存路径+hash，原文放对象/本地磁盘快照）
