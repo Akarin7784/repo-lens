@@ -348,7 +348,7 @@ Qdrant collection `code_chunks`:向量维度随 `EMBEDDING_MODEL`(text-embedding
 | `rl:ip:{ip}:repos` | string 计数 | 1h | 每 IP 每小时 ≤ 5 次分析(本文档) |
 | `rl:ip:{ip}:chat` | string 计数 | 1m | 每 IP 每分钟 ≤ 10 次问答(本文档) |
 | `job:{jobId}:events` | Stream `MAXLEN ~500` | 24h | Worker → API 进度事件,SSE 用 `Last-Event-ID` 续传(以后端为准) |
-| `graph:{repoId}:{commitSha}:{parentId\|root}` | string(JSON gzip) | 7d | 图数据缓存(本文档) |
+| `graph:v{N}:{repoId}:{commitSha}:{parentId\|root}`(N=投影版本) | string(JSON gzip) | 7d | 图数据缓存(本文档) |
 | `lock:repo:{repoId}:{commit}` | string NX | 30m | 去重锁,同 commit 不重复分析(以后端为准) |
 | `budget:day:{yyyyMMdd}`、`budget:repo:{repoId}` | INCRBY(微美元) | 2d | LLM 预算熔断(以后端为准) |
 | `emb:{model}:{contentHash}` | string(base64 float32) | 30d | embedding 缓存,避免重复计费(向量本体以 Qdrant 为准) |
