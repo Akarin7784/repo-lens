@@ -5,10 +5,12 @@ import {
   ChatEventSchema,
   ChatRequestSchema,
   CreateRepoRequestSchema,
+  CreateRepoResponseSchema,
   GraphDataSchema,
   GraphQuerySchema,
   JobEventSchema,
   NodeDetailSchema,
+  RepoStatusSchema,
   PROGRESS_STAGES,
   NodeIdSchema,
   ROOT_MODULE_ID,
@@ -345,5 +347,36 @@ describe('API_ERROR_CODES', () => {
     expect(ApiErrorSchema.safeParse({ error: { code: 'BAD_REQUEST', message: 'x' } }).success).toBe(
       true,
     );
+  });
+});
+
+describe('RepoStatusSchema', () => {
+  const ok = {
+    repoId: 1,
+    jobId: `1:${'a'.repeat(40)}`,
+    repo: 'honojs/hono',
+    commitSha: 'a'.repeat(40),
+    status: 'done',
+    stage: 'done',
+    progress: 100,
+    stats: { files: 1 },
+    error: null,
+  };
+  it('含 repo(owner/name)与 commitSha,与 CreateRepoResponse 同名', () => {
+    expect(RepoStatusSchema.parse(ok)).toEqual(ok);
+    expect(
+      Object.keys(CreateRepoResponseSchema.shape).filter((k) => !(k in RepoStatusSchema.shape)),
+    ).toEqual([]);
+  });
+  it('repo/commitSha 必填且格式校验', () => {
+    const noRepo: Record<string, unknown> = { ...ok };
+    delete noRepo.repo;
+    const noSha: Record<string, unknown> = { ...ok };
+    delete noSha.commitSha;
+    expect(RepoStatusSchema.safeParse(noRepo).success).toBe(false);
+    expect(RepoStatusSchema.safeParse(noSha).success).toBe(false);
+    for (const repo of ['hono', 'a/b/c', 'a/', '/b', 'a b/c'])
+      expect(RepoStatusSchema.safeParse({ ...ok, repo }).success).toBe(false);
+    expect(RepoStatusSchema.safeParse({ ...ok, commitSha: 'abc' }).success).toBe(false);
   });
 });
