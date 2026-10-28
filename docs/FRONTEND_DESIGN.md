@@ -9,7 +9,7 @@
 
 | 范围 | 内容 |
 |---|---|
-| MVP（W1–W3） | TS 仓库导入（W1 只做 TS，非 TS 仓库在提交时就拦截）；SSE 解析进度；dir/module/file 三层依赖图，支持折叠和展开；文件树与过滤；节点详情与代码预览；流式问答，引用与图高亮联动；深色主题；预解析示例仓库：zustand、hono、zod，备选 trpc |
+| MVP（W1–W3） | TS 仓库导入（W1 只做 TS，非 TS 仓库在提交时就拦截）；SSE 解析进度；dir/module/file 三层依赖图，支持折叠和展开；文件树与过滤；节点详情与代码预览；流式问答，引用与图高亮联动；暖色纸感浅色主题（默认，深色可选，见第 8 章）；预解析示例仓库：zustand、hono、zod，备选 trpc |
 | 加分项（W4 及以后） | 循环依赖检测与标红；两个 commit 的图 diff；路径查询（A 如何依赖 B）；导出 PNG/SVG；多语言（tree-sitter）；分享链接（URL 记录视图状态）；小地图 |
 | 不做 | 在线编辑代码、私有仓库 OAuth（W4 之后再考虑）、移动端完整工作台（只提供只读视图） |
 
@@ -57,6 +57,8 @@ flowchart LR
 │ 状态栏: 1,284 节点 / 3,902 边 · 已折叠到 module 层 · FPS 60           │
 └──────────────────────────────────────────────────────────────────────┘
 ```
+
+线框说明：页面为米白纸色底（`--bg`），三栏之间只用 1px 细线（`--border`）分隔，不加厚重面板色；中间图区用稍深的暖灰底（`--canvas`）以衬托白色节点卡片；右栏对话为阅读式排版（见第 8 章）。顶栏左侧是 RepoLens 自己的名称和图标。
 
 组件树：
 
@@ -223,7 +225,7 @@ function aggregateEdges(raw: GraphEdge[], visibleAncestor: (id: string) => strin
 - 摘要：LLM 生成的 `summary`。为 `null`（摘要还没生成，后台仍在 summarizing）时显示 3 行骨架屏，收到 `done` 进度事件后重新请求。
 - 指标：LOC、导出符号、入度/出度、`topDependents`（被依赖最多的节点，可点击跳转）、是否处于循环依赖中（加分项，来自 `meta.cycles`）。
 - 邻居列表：「依赖于」和「被依赖」两个 tab，各自可点击跳转。
-- 代码预览：Shiki（主题 `github-dark`），懒加载，`GET /api/repos/:id/files?path=&start=&end=`；支持行区间高亮（与引用共用）；超过 2,000 行时用虚拟滚动。
+- 代码预览：Shiki（浅色用 `github-light` 叠加纸色底，深色用 `vitesse-dark`，见第 8 章），懒加载，`GET /api/repos/:id/files?path=&start=&end=`；支持行区间高亮（与引用共用）；超过 2,000 行时用虚拟滚动。
 - 操作：「问问这个模块」，点击后把节点加入对话上下文并切换到对话 tab。
 
 ```ts
@@ -258,7 +260,7 @@ const CLIENT_TIMEOUT_MS = 20_000;   // 前端兜底：20 秒内既没有 token�
 
 async function chat(repoId: number, sessionId: number, message: string, contextNodeIds: string[], signal: AbortSignal) {
   const s = useStore.getState();
-  s.startAnswer({ locating: isLocatingQuestion(message) });      // 定位类问题先显示「正在定位…」
+  s.startAnswer();                     // 统一进入 thinking：显示「正在思考…」，第一个 token 到达即切为正文
   let timer = setTimeout(() => s.timeoutAnswer(), CLIENT_TIMEOUT_MS);
   await fetchEventSource(`/api/repos/${repoId}/chat`, {
     method: "POST", body: JSON.stringify({ sessionId, message, contextNodeIds }), signal,
@@ -275,10 +277,10 @@ async function chat(repoId: number, sessionId: number, message: string, contextN
 }
 ```
 
-**定位类问题（不流式）**：问「在哪里」「哪个文件」「哪几行」这类问题时，后端第一遍不流式输出，而是先缓冲整段答案并完成引用校验，校验通过后一次性下发 `token` 和 `citation`。前端不会收到需要撤回的内容，也就没有任何撤回或替换逻辑。
-- 前端在等待期间显示「正在定位…」：消息气泡骨架屏（3 行 shimmer）加一个小定位图标的脉冲动画。收到 `tool` 事件时，在下方小字显示「正在读取 src/compose.ts」。
-- 后端缓冲加重试的总耗时上限约 15 秒，超时直接走 `fallback:"retrieval"`。前端另设 20 秒兜底：超过 20 秒还没有任何 token，也没有 `done`/`error`，就主动 abort，并显示「定位超时，请重试」和重试按钮。
-- `isLocatingQuestion` 只决定前端先显示哪种占位：骨架屏还是流式光标。是否缓冲以后端为准；如果前端判断错了，收到第一个 token 时自动切换为正常展示。
+**「正在思考…」状态（所有问题统一）**：发出问题后，前端一律显示「正在思考…」：一块纸面骨架（3 行浅色 shimmer）加一个缓慢呼吸的小圆点动画；收到第一个 `token` 立即切换为正文。前端不判断问题类型，也不新增任何事件。
+- 定位类问题（「在哪个文件/哪几行」）由后端缓冲整段答案、校验引用后再一次性下发 `token` 和 `citation`，对前端来说只是「思考」时间更长；非定位类问题照常流式，「思考」状态很短。
+- 收到 `tool` 事件时，在骨架下方用小字显示「正在读取 src/compose.ts」。
+- 后端缓冲加重试的总耗时上限约 15 秒，超时直接走 `fallback:"retrieval"`。前端另设 20 秒兜底：超过 20 秒还没有任何 token，也没有 `done`/`error`，就主动 abort，并显示「回答超时，请重试」和重试按钮。
 
 **error 事件按 code 区分提示**：
 
@@ -293,7 +295,7 @@ async function chat(repoId: number, sessionId: number, message: string, contextN
 
 ### 6.2 流式展示
 
-- 非定位类问题照常逐 token 流式。token 每 16 ms 合并一次再写入 store（rAF 节流），Markdown 增量渲染（react-markdown + 未闭合代码块容错）。
+- token 每 16 ms 合并一次再写入 store（rAF 节流），Markdown 增量渲染（react-markdown + 未闭合代码块容错）。
 - citation 到达时，在当前答案末尾追加编号角标 `[n]`。卡片区实时新增 `<CitationChip>`，同时对应节点做一次「脉冲」提示（不移动相机，避免流式过程中画面乱跳）。
 - `done` 后启用「聚焦全部引用」按钮，相机 fit 到所有引用节点的包围盒。
 
@@ -305,7 +307,7 @@ async function chat(repoId: number, sessionId: number, message: string, contextN
 4. 前端只处理已校验的引用。后端会直接丢弃没通过校验的引用，前端不需要为这类引用做任何特殊展示。
 
 ### 6.3.1 done 事件的附加提示
-- `droppedCitations > 0`：在该条消息底部用小字（12px，`#9CA3AF`）显示「已过滤 N 条无法校验的引用」。
+- `droppedCitations > 0`：在该条消息底部用小字（12px，`--text-3`）显示「已过滤 N 条无法校验的引用」。
 - `fallback === "retrieval"`：模型给出的引用全部没通过校验，后端改用检索得到的 top-3 片段作为 citation 下发。这些引用的交互与普通引用一样，但要在该回答下方加一个小标签「引用来自检索结果」（灰底胶囊样式，悬浮时解释来源）。
 - 回答结束后如果一条引用都没有（没有 citation 事件，也没有 fallback），图上不做任何高亮，也不显示「聚焦全部引用」按钮。
 
@@ -318,10 +320,10 @@ async function chat(repoId: number, sessionId: number, message: string, contextN
 
 | 状态 | 节点 | 边 | 动画 |
 |---|---|---|---|
-| 选中 | 边框 3px `#FACC15`（amber-400）+ 放大 1.3 倍 | 一跳边不透明度 100% | 120 ms 缩放 |
+| 选中 | 3px `--accent-strong` 描边 + 放大 1.06 倍 | 一跳边不透明度 100%，颜色 `--text-2` | 150 ms 缩放 |
 | 邻居 | 原色，不透明度 100% | 同上 | — |
-| 引用命中 | 外圈光晕 `#22D3EE`（cyan-400） | — | 到达时脉冲 2 次，每次 600 ms |
-| 淡出 | 不透明度 15%，标签隐藏 | 不透明度 5% | 200 ms 渐变 |
+| 引用命中 | 3px `--accent-strong` 描边 + 8px `--accent` 柔光（30% 不透明度） | — | 到达时柔光淡入淡出 2 次，每次 700 ms |
+| 淡出 | 不透明度 25%，标签隐藏 | 不透明度 10% | 200 ms 渐变 |
 
 开启 `prefers-reduced-motion` 时，所有脉冲和相机动画改为瞬时完成。
 
@@ -346,10 +348,10 @@ interface GraphSlice  { level: "dir" | "module" | "file"; expanded: Set<string>;
 interface SelectSlice { selected: string[]; hovered?: string; focusMode?: string;
                         select(id: string, additive?: boolean): void; clear(): void }
 interface FilterSlice { search: string; excludeGlobs: string[]; edgeKinds: EdgeKind[]; hideTests: boolean }
-// ChatMessage: { id; messageId?: number; role; content; citations: Citation[]; status: "locating" | "streaming" | "done" | "error";
+// ChatMessage: { id; messageId?: number; role; content; citations: Citation[]; status: "thinking" | "streaming" | "done" | "error";
 //               toolHint?: string; droppedCitations: number; fallback?: "retrieval"; error?: ChatError }
 interface ChatSlice   { sessionId?: number; messages: ChatMessage[]; contextNodeIds: string[];
-                        startAnswer(o: { locating: boolean }): void; setToolHint(name: string, args: unknown): void;
+                        startAnswer(): void; setToolHint(name: string, args: unknown): void;
                         appendToken(t: string): void; addCitation(c: Citation): void;
                         finish(d: { messageId: number; droppedCitations: number; fallback?: "retrieval" }): void;
                         failAnswer(e: ChatError): void; timeoutAnswer(): void; retry(localId: string): void }
@@ -418,28 +420,95 @@ export type GraphData = {
 7. 引用：只下发校验通过的 citation（`id, path, startLine, endLine, nodeId, moduleId?`）；`done` 带 `messageId`、`droppedCitations`、`fallback?: "retrieval"` 和 `usage {in, out}`。
 8. 问答 `error {code, message, retryable}`，code 取 LLM_UNAVAILABLE、BUDGET_EXCEEDED、REPO_NOT_READY、RATE_LIMITED 之一；`error` 后流直接结束，不再发 `done`。另有可选的 `tool` 事件。
 9. 进度：阶段固定为 queued → cloning → scanning → parsing → graph_ready → summarizing → embedding → done；事件为 `progress`、`graph_ready`（收到即可出图）、`stage_error {stage, message}`、`done`。节点详情接口为 `GET /api/repos/:id/nodes/:nodeId`。
-10. 定位类问题不流式：后端缓冲并校验后一次性下发，前端没有撤回或替换逻辑；后端总耗时上限 15 秒，超时走 fallback；前端显示「正在定位…」，并设 20 秒兜底超时。
+10. 定位类问题不流式：后端缓冲并校验后一次性下发，前端没有撤回或替换逻辑；后端总耗时上限 15 秒，超时走 fallback；前端统一显示「正在思考…」，并设 20 秒兜底超时。
 
 11. 渲染库：React Flow（@xyflow/react）+ elkjs，Cytoscape 为累计节点 >2000 或性能不足时的回退；Sigma.js + graphology 只作为文件级超大图的可选方案出现在第 3 章对比表中。
 12. 演示：总长约 3 分钟，hono 主线，结尾 20 秒演示 MCP `ask_repo`。
 
-前端新增、总方案未提及但不影响接口的行为：前端 20 秒兜底超时、`isLocatingQuestion` 预判。
+前端新增、总方案未提及但不影响接口的行为：只有前端 20 秒兜底超时一项。
 
 ## 8. 视觉规范
 
-- **深色主题**（默认，并提供浅色主题）：背景 `#0B1020`，面板 `#111827`，分割线 `#1F2937`，正文 `#E5E7EB`，次要文字 `#9CA3AF`。画布背景加淡网格点 `#1E293B`。
-- **着色**：W1 只有 TS，因此颜色按**顶层目录**分配（Okabe-Ito / Tableau10 色盲友好调色板，按目录名哈希取色，同一目录在不同会话中颜色稳定）。文件节点在所属目录色的基础上按扩展名调整明度（`.ts` 原色，`.tsx` 稍亮，`.d.ts` 灰化）。多语言阶段改为按语言着色，目录颜色作为描边。
-- **节点形态**（React Flow 自定义节点）：
-  - **module 卡片 `<ModuleCard>`**：圆角 8px 卡片，宽 200–260px（按 sqrt(文件数) 映射），左侧 4px 色条为目录色；内容依次为模块名（14px 粗体）、摘要首句（12px 次要色，`summary` 为空时显示骨架条）、底部指标行「N 文件 · 入 12 / 出 5」；可展开时右上角显示 ▸ 图标。顶层 module（UI 中的 dir 层）用更深的面板色加虚线边框区分。
-  - **file 小节点 `<FileNode>`**：高 24px 的胶囊，圆点（目录色，`.tsx` 稍亮、`.d.ts` 灰化）加文件名（12px），宽度随文件名自适应、上限 160px；圆点直径 `6 + 2·sqrt(inDegree)`，上限 16px。
-  - **external 节点 `<ExternalNode>`**：灰色（`#4B5563` 边框、`#9CA3AF` 文字）的小胶囊，显示包名，默认隐藏，可在过滤栏开启。
-- **聚合边 `<WeightedEdge>`**：`aggregated` 边的线宽 `1 + 1.5·log2(weight)`，上限 8px；hover 时在中点显示 weight 徽标。
-- **边样式**：import 边为带箭头的实线（smoothstep 路径），宽度 `1 + log2(weight)`，颜色为源节点色、不透明度 35%。循环依赖边为红色 `#F87171` 虚线（加分项）。`type-import` 用点线，`dynamic-import` 用短虚线，`re-export` 用空心箭头，`aggregated` 边用加粗的半透明线并在 hover 时显示 weight。
-- **动效**：展开时子节点从父位置以 300 ms 的 ease-out 散开；面板切换 150 ms；不使用持续性动画。
+### 8.1 风格定位
+
+整体气质参考 Claude 公开网页和产品的观感：温暖的米白纸感、深炭灰文字、陶土色强调、衬线标题、大留白、克制的动效，读起来像一份排版良好的文档，而不是一块霓虹仪表盘。**只借鉴气质：不使用 Claude/Anthropic 的名称、logo、星芒图形或其任何商标素材，产品使用自己的名称（RepoLens）和自己的图标。**
+
+- **字体**：标题用衬线 `"Source Serif 4", Georgia, "Times New Roman", serif`（中文回退 `"Noto Serif SC"`）；正文与 UI 用 `Inter, system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif`；代码用 `"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace`。字号：正文 15px/1.65，UI 13–14px，标题 20/24/30px。
+- **留白与形状**：基础间距 4px 网格，面板内边距 24px；卡片圆角 12px，小元素（胶囊、按钮）圆角 8px 或全圆；边框 1px `--border`；阴影极轻 `0 1px 2px rgba(31,30,29,.06)`，hover 时 `0 2px 8px rgba(31,30,29,.08)`。
+- **动效**：只用淡入（150–200 ms）和 4px 以内的轻微位移；展开子节点 300 ms ease-out；没有持续性动画（「正在思考…」的呼吸圆点除外，开启 `prefers-reduced-motion` 时也改为静态）。
+
+### 8.2 颜色 token（CSS 变量 / Tailwind）
+
+对比度均按 WCAG 2.x 公式计算：正文 ≥4.5:1，大字和图形 ≥3:1。
+
+| token | 浅色（默认） | 深色（可选，暗暖灰） | 用途 / 对比度（浅色） |
+|---|---|---|---|
+| `--bg` | `#F5F4EE` | `#1F1E1C` | 页面纸色底 |
+| `--surface` | `#FFFFFF` | `#2A2926` | 卡片、节点、输入框 |
+| `--surface-2` | `#EEECE2` | `#33312D` | 用户消息块、悬浮态 |
+| `--canvas` | `#EAE7DD` | `#262522` | 依赖图区底色（比页面稍深，衬托白色节点） |
+| `--border` | `#E3E0D5` | `#3A3834` | 细分割线 |
+| `--border-strong` | `#3D3A35` | `#B5B2A8` | 节点 1.5px 描边（对 `--canvas` 9.15:1） |
+| `--text` | `#1F1E1D` | `#ECEAE3` | 正文（对 bg 15.1:1，对 canvas 13.45:1） |
+| `--text-2` | `#5E5D59` | `#B5B2A8` | 次要文字（对 bg 5.98:1，对 canvas 5.33:1） |
+| `--text-3` | `#6B6963` | `#9C998F` | 说明小字（对 bg 4.98:1，对 canvas 4.44:1，图区内只用于 ≥14px 粗体或改用 `--text-2`） |
+| `--accent` | `#C15F3C` | `#D97757` | 陶土色：按钮底、图形、柔光（对 bg 3.83:1，对白 4.23:1，只用于图形或白字按钮的大字） |
+| `--accent-strong` | `#A8502F` | `#E08A6A` | 强调文字、链接、高亮描边（对 bg 4.95:1，对 canvas 4.4:1，对白节点 5.45:1） |
+| `--danger` | `#B23B2E` | `#E5806F` | 错误、循环依赖边（对 bg 5.36:1） |
+
+Tailwind 中在 `theme.extend.colors` 里映射为 `bg`、`surface`、`canvas`、`line`、`ink`、`ink-2`、`ink-3`、`clay`、`clay-strong`、`danger`，值为 `rgb(var(--x) / <alpha-value>)`；深色通过 `[data-theme="dark"]` 覆盖变量，默认浅色，跟随系统时读 `prefers-color-scheme`。
+
+**目录配色（柔和色板，与米白底协调）**：按顶层目录名哈希取色，同一目录在不同会话中颜色稳定。以下 8 色对 `--bg` 都 ≥3:1（图形对比度达标），用作色条和圆点，文字一律用 `--text`，不用这些颜色写字。
+
+| sage `#5F7A5B` (4.31) | slate `#4F6D8A` (4.90) | ochre `#9A7B2F` (3.63) | plum `#8A5A7A` (4.98) | teal `#3F7C77` (4.37) | clay-brown `#8C6A52` (4.43) | olive `#6E7340` (4.55) | rose `#A15C63` (4.51) |
+|---|---|---|---|---|---|---|---|
+
+陶土色 `--accent` 留给交互强调和高亮，不进目录色板，避免与引用高亮混淆。多语言阶段改为按语言取色，目录色作为色条。
+
+### 8.3 依赖图（React Flow 节点、边、高亮）
+
+图区使用 `--canvas`（`#EAE7DD`）底加极淡点阵（`#D9D5C8`，24px 间距）。白色节点（`--surface`）对 canvas 只有 1.24:1，因此**所有节点都加 1.5px `--border-strong` 描边**（9.15:1），不靠底色区分。
+
+三层靠**形状 + 尺寸 + 填充深浅**区分，颜色只是辅助：
+
+| 层 | 组件 | 形状 | 尺寸 | 填充 / 描边 |
+|---|---|---|---|---|
+| dir（顶层 module） | `<ModuleCard variant="dir">` | 圆角 12px 大卡片，标题用衬线字体 | 宽 240–300px，高 ≥96px | 填充 `--surface-2`（较深），1.5px 实线描边，左侧 6px 目录色条，右上角文件夹图标 |
+| module | `<ModuleCard>` | 圆角 12px 卡片 | 宽 200–260px（按 sqrt(文件数)），高 72–88px | 填充 `--surface`（白），1.5px 实线描边，左侧 4px 目录色条；内容为模块名（14px 半粗）、摘要首句（12px `--text-2`，`summary` 为空时显示骨架条）、指标行「N 文件 · 入 12 / 出 5」；可展开时显示 ▸ |
+| file | `<FileNode>` | 全圆角胶囊 | 高 24px，宽随文件名、上限 160px | 填充 `--surface`，1.5px 描边，左侧圆点（目录色，直径 `6 + 2·sqrt(inDegree)`，上限 14px），文件名 12px 等宽字体；`.d.ts` 用虚线描边 |
+| external | `<ExternalNode>` | 小胶囊 | 高 20px | 填充 `--canvas`，1px 虚线 `--text-3` 描边（对 canvas 4.44:1），文字 `--text-2`，默认隐藏 |
+
+边：
+- `import`：1.25px 实线，颜色 `--text-2` 不透明度 55%，smoothstep 路径，小箭头。`type-import` 点线，`dynamic-import` 短虚线，`re-export` 空心箭头。
+- `aggregated`（`<WeightedEdge>`）：线宽 `1 + 1.5·log2(weight)`，上限 8px，颜色 `--text-2` 不透明度 40%；hover 时中点显示 weight 小胶囊（白底细边框）。
+- 循环依赖（加分项）：`--danger` 虚线。
+
+高亮（陶土色描边 + 柔光，而不是霓虹；详见 6.5）：
+- 选中：3px `--accent-strong` 描边（对 canvas 4.4:1、对白节点 5.45:1）+ 轻微放大；邻居保持原样，其余淡出到 25%。
+- 引用命中（citation 脉冲）：**3px** `--accent-strong` 描边 + 8px `--accent` 柔光（`box-shadow: 0 0 0 3px var(--accent-strong), 0 0 12px 4px rgb(193 95 60 / .30)`），柔光淡入淡出 2 次；脉冲结束后保留 3px 描边直到下一次提问。投屏模式（设置项，或 `?present=1`）把描边加到 **4px**、柔光不透明度提到 45%。
+- 深色模式：描边改为 `#E08A6A`（对 `#262522` 约 5.5:1），柔光用 `#D97757`（对深色 canvas 4.91:1）。
+
+### 8.4 对话面板：阅读式排版
+
+- 不用左右气泡堆叠。助手回答直接排在纸面上：最大宽度 68ch，正文 15px/1.7，段落间距 12px，标题用衬线字体，代码块用 `--surface-2` 底、12px 圆角、等宽字体。
+- 用户消息是一块浅色圆角块（`--surface-2`，圆角 12px，内边距 12px 16px），右对齐、宽度随内容（最大 80%）。
+- 引用角标 `[n]` 用 `--accent-strong` 小号上标；引用卡片 `<CitationChip>` 是白底细边框胶囊，显示 `path:startLine–endLine`。「已过滤 N 条无法校验的引用」用 12px `--text-3`；「引用来自检索结果」用 `--surface-2` 底胶囊加文字标签。
+- 「正在思考…」：与正文同宽的 3 行骨架条（`--surface-2` → `--border` 的 shimmer，1.6 s 一轮）加一个 6px 陶土色呼吸圆点，旁边是 13px `--text-2` 文字「正在思考…」。
+
+### 8.5 响应式与无障碍
+
 - **响应式**：≥1280px 三栏布局；1024–1279px 右栏变成抽屉；<1024px 只显示图加底部抽屉（详情/对话），隐藏文件树，改为 ⌘K 搜索。
-- **无障碍**：所有交互可用键盘完成（Tab 在三栏间切换，方向键在邻居间移动选中，Enter 展开，`/` 聚焦搜索）。图提供等价的「列表视图」（选中节点的邻居表）供屏幕阅读器使用，通过 aria-live 播报选中变化。文字对比度 ≥ 4.5:1。颜色之外还用形状或图标区分状态（例如「引用来自检索结果」用文字标签，不只靠颜色）。
+- **无障碍**：所有交互可用键盘完成（Tab 在三栏间切换，方向键在邻居间移动选中，Enter 展开，`/` 聚焦搜索）。图提供等价的「列表视图」供屏幕阅读器使用，通过 aria-live 播报选中变化。文字对比度 ≥4.5:1，图形 ≥3:1（见 8.2）。层级和状态靠形状、尺寸、描边样式和文字标签区分，不只靠颜色。焦点环为 2px `--accent-strong` 外加 2px 偏移。
+
+### 8.6 投屏验收
+
+- 在投影仪和低亮度显示器（亮度调到 30%）上各实测一遍：hono 模块图、下钻后的文件层、一次带引用的问答。
+- 检查项：三层节点在不看颜色时能分辨；节点描边在 canvas 上清晰可见；引用高亮的 3px 描边（投屏模式 4px）和柔光在 3 米外可辨认；正文和次要文字可读；深色模式下同样过一遍。
+- 不达标时依次调整：开启投屏模式 → 加深 `--canvas` 到 `#E2DED2` → 把边的不透明度提到 70%。
 
 ## 9. 演示视觉效果与演示脚本
+
+**演示视觉**：默认浅色纸感主题；图区暖灰底衬托白色模块卡片，引用高亮为陶土色描边加柔光；对话为阅读式排版。演示时开启投屏模式（描边 4px）。
 
 **演示仓库**（架构师已定，全部是开源 TS 仓库，全部预解析，并配有前端预计算布局 fixture 和缓存答案）：
 1. 主演示：`honojs/hono`。问答联动全部在这里演示，兜底录屏也用它录。
@@ -454,7 +523,7 @@ export type GraphData = {
 | 0:00–0:20 | 首页粘贴 `https://github.com/honojs/hono`，点击分析（命中预解析缓存） | 输入简单；接手陌生仓库的痛点 |
 | 0:20–0:50 | 进度条走完各阶段（SSE 实时，回放模式），graph_ready 后立即出图，摘要在后台继续 | 异步队列、流式进度；解析分工：Tree-sitter 负责切分代码块和提取符号，ts-morph 负责解析 TS 的 import 路径（含 tsconfig paths），解析失败时降级为纯 Tree-sitter |
 | 0:50–1:40 | 模块图自动布局（elkjs，预计算坐标）；点击模块卡片看 LLM 摘要和邻居高亮；双击下钻到文件依赖（`?parentId=` 懒加载，展开动画） | 可视化 + 聚类；模块卡片即「交互式架构图」 |
-| 1:40–2:40 | 提问「中间件是怎么串联执行的？」，流式回答，引用依次脉冲；点击 [2]，画布飞到对应文件节点，代码高亮到行；底部小字「已过滤 N 条无法校验的引用」。时间允许时追问定位类问题「路由匹配在哪个文件？」，展示「正在定位…」后一次性出答案 | RAG + Agent + 引用联动；只展示经后端校验的引用 |
+| 1:40–2:40 | 提问「中间件是怎么串联执行的？」，流式回答，引用依次脉冲；点击 [2]，画布飞到对应文件节点，代码高亮到行；底部小字「已过滤 N 条无法校验的引用」。时间允许时追问定位类问题「路由匹配在哪个文件？」，展示「正在思考…」后答案一次性出现 | RAG + Agent + 引用联动；只展示经后端校验的引用 |
 | 2:40–3:00 | 切到 Cursor，通过 MCP 调用 `ask_repo`（同一 repoId、同一问题），展示返回的带引用答案 | 同一能力以 MCP tools 暴露给 Cursor/Claude（总方案 §5.5：analyze_repo、get_architecture、get_dependencies、search_code、ask_repo） |
 
 zustand（秒出图）和 zod（默认 module 层、按需下钻）不在 3 分钟主线中，作为问答环节的备用镜头或答疑时展示。
@@ -465,6 +534,8 @@ zustand（秒出图）和 zod（默认 module 层、按需下钻）不在 3 分�
 - [ ] 跑一遍 hono 的固定问题，确认 citation 能高亮、droppedCitations 提示正常显示。
 - [ ] 设置中的「缩放自动收起」保持关闭；确认渲染器为 React Flow（没有误切到 Cytoscape）。
 - [ ] Cursor 中已配置 MCP server（stdio），`ask_repo` 用 hono 的 repoId 跑通一次。
+- [ ] 演示前一天在演示机上完整实跑一遍（含 Cursor 的 MCP 调用），并确认主流程录屏和 MCP 录屏都在本地可播放。
+- [ ] 投屏验收：在投影仪/低亮度显示器上实测一遍，按第 8 章「投屏验收」逐项检查。
 
 **兜底方案**：演示只使用预解析仓库（进度页可用回放模式，重放录制好的 SSE 事件）；问答准备缓存答案；兜底录屏用 hono 录制完整主流程（示例仓库全部用预计算布局），本地和网盘各放一份；任何一个仓库出问题时换成 trpc；演示前清空浏览器扩展、预热 IndexedDB 布局缓存（key 为 commitSha + nodeId）。详见下文「风险与降级方案」R.2。
 
@@ -472,10 +543,10 @@ zustand（秒出图）和 zod（默认 module 层、按需下钻）不在 3 分�
 
 | 周 | 任务 | 交付物与验收标准 |
 |---|---|---|
-| W1 | Next.js 脚手架、主题 tokens、路由 `/`、`/a/[id]`、`/a/[id]/progress`；RepoInput（TS 预检，处理 422）；进度页接入 SSE（8 个阶段、graph_ready 即出图、stage_error）；elkjs worker 布局；React Flow 渲染 `{nodes, edges, meta}`（dynamic ssr:false，ModuleCard/FileNode/ExternalNode 初版）；三层折叠与边聚合；文件树基础版；zod schema；mock server（MSW） | 能导入 TS 仓库并看到 module 层的图；示例仓库 1 个 |
+| W1 | Next.js 脚手架、主题 tokens（8.2 的 CSS 变量 + Tailwind 映射，浅色默认、深色可选，字体加载）、路由 `/`、`/a/[id]`、`/a/[id]/progress`；RepoInput（TS 预检，处理 422）；进度页接入 SSE（8 个阶段、graph_ready 即出图、stage_error）；elkjs worker 布局；React Flow 渲染 `{nodes, edges, meta}`（dynamic ssr:false，ModuleCard/FileNode/ExternalNode 初版）；三层折叠与边聚合；文件树基础版；zod schema；mock server（MSW） | 能导入 TS 仓库并看到 module 层的图；示例仓库 1 个 |
 | W2 | 节点交互（hover、选中、双击、右键）；NodeDetail（`/nodes/:nodeId`，summary 骨架屏）+ Shiki 代码预览（`/files`）；`?parentId=` 懒加载 + elkjs 增量布局（已有节点固定）+ 展开插值动画；布局文件生成脚本 `scripts/gen-layout.ts`，commitSha 校验；IndexedDB 布局缓存；过滤栏；Zustand 切片完成 | 画布累计 1,500 节点（开启抽稀）时 FPS ≥ 45；交互项全部可用 |
-| W3 | ChatPanel 流式问答（`/chat`，tool 提示，按 code 处理 error，定位类问题的「正在定位…」状态和 20 秒兜底超时）；citation 联动（展开链路、相机聚焦、行高亮）；上下文 chip；droppedCitations 小字提示与「引用来自检索结果」标签；LOD（onlyRenderVisibleElements、memo 节点、按缩放分级）、>800 边抽稀与标签精简、>1,500 收起提示；`GraphRenderer` 接口 + Cytoscape 回退（>2,000）；错误和离线降级 | 引用点击到聚焦 <300 ms；断网、LLM 失败时 UI 符合 R.4 |
-| W4 | 视觉打磨、响应式、无障碍（键盘、列表视图）；zustand、hono、zod、trpc 固定 commitSha 预解析，生成布局文件并预热缓存，准备缓存答案；SSE 回放模式；MCP 演示联调（Cursor 调 `ask_repo`）；3 分钟演示录屏；Playwright E2E 冒烟测试 + Lighthouse；README 与 GIF。加分项按剩余时间取：循环依赖、导出 PNG、分享链接 | 演示脚本彩排 3 次无故障 |
+| W3 | ChatPanel 流式问答（`/chat`，tool 提示，按 code 处理 error，「正在思考…」状态和 20 秒兜底超时）；citation 联动（展开链路、相机聚焦、行高亮）；上下文 chip；droppedCitations 小字提示与「引用来自检索结果」标签；LOD（onlyRenderVisibleElements、memo 节点、按缩放分级）、>800 边抽稀与标签精简、>1,500 收起提示；`GraphRenderer` 接口 + Cytoscape 回退（>2,000）；错误和离线降级 | 引用点击到聚焦 <300 ms；断网、LLM 失败时 UI 符合 R.4 |
+| W4 | 视觉打磨（阅读式对话排版、节点三层形态、投屏模式）、深色模式检查、响应式、无障碍（键盘、列表视图）；zustand、hono、zod、trpc 固定 commitSha 预解析，生成布局文件并预热缓存，准备缓存答案；SSE 回放模式；MCP 演示联调（Cursor 调 `ask_repo`）；3 分钟演示录屏；Playwright E2E 冒烟测试 + Lighthouse；README 与 GIF。加分项按剩余时间取：循环依赖、导出 PNG、分享链接 | 演示脚本彩排 3 次无故障；8.2 所有 token 对比度达标（axe 检查通过）；8.6 投屏验收通过；演示前一天完成整机实跑（含 MCP） |
 
 ## 附录 A：接口约定
 
@@ -498,6 +569,7 @@ zustand（秒出图）和 zod（默认 module 层、按需下钻）不在 3 分�
 - 预解析示例仓库（架构师已定）：小规模 `pmndrs/zustand`（快速出图）、中等规模 `honojs/hono`（主演示）、较大规模 `colinhacks/zod`（演示大图默认折叠），备选 `trpc/trpc`；commitSha 在部署脚本中固定，图数据和索引提前落库，布局文件按 commitSha 命名并离线生成，首页一键打开，不依赖现场 clone 和解析。降级顺序：线上实时 → 打开预解析缓存 → 播放 hono 兜底视频。
 - 为示例仓库准备若干固定问题及缓存答案（含已校验的 citation），LLM 不可用时可回放。
 - 兜底录屏：完整演示流程（导入 → 进度 → 图谱折叠/展开 → 问答流式输出 → 引用高亮）用 hono 录一份 2–3 分钟视频，现场任一环节失败直接切录屏。
+- MCP 兜底录屏：结尾约 20 秒的「Cursor 通过 MCP 调用 `ask_repo`」单独提前录好（同一 hono repoId、同一问题），MCP 连接或 Cursor 出问题时直接播放这段。
 
 ### R.3 引用校验失败时的前端展示
 - 校验在后端完成，没通过的引用不会下发，前端不需要做任何特殊展示。
@@ -508,7 +580,7 @@ zustand（秒出图）和 zod（默认 module 层、按需下钻）不在 3 分�
 ### R.4 LLM / 网络故障时的 UI 降级
 - 问答 SSE 中断（网络）：保留已输出的 token，显示「回答中断」和「重试」按钮；已下发的 citation 保持可点。
 - 问答 `error` 事件：按 code 显示不同提示（见 6.1 的表），`retryable` 为 true 时显示重试按钮；`error` 之后不会再收到 `done`，消息状态直接置为 error。`LLM_UNAVAILABLE` 时，示例仓库回退到缓存答案并标注「缓存结果」。
-- 定位类问题：等待时显示「正在定位…」；后端 15 秒内会走 `fallback:"retrieval"`；前端 20 秒仍无结果则 abort，显示「定位超时，请重试」。
+- 回答等待：统一显示「正在思考…」；定位类问题后端 15 秒内会走 `fallback:"retrieval"`；前端 20 秒仍无结果则 abort，显示「回答超时，请重试」。
 - 进度 `stage_error`：summarizing 或 embedding 失败时图照常可用，顶栏提示「摘要已降级为规则摘要」之类的后端 message；cloning、scanning 或 parsing 失败时，在进度页显示错误卡片并引导回首页。
 - 解析进度 SSE 断开：自动重连并拉取最新快照；多次失败后改为轮询 `GET /api/repos/:id`（读取 stage 和 progress）。
 - 图谱接口失败：展示纯文件树（目录列表）作为降级视图，问答仍可用。
