@@ -20,9 +20,9 @@
 | T-005 | CI 冒烟任务:真实构建镜像、起 compose、请求 `/health` | 架构师 | 可开工,第 1 周内完成 | - |
 
 ## 第 1 周未验证项
-- 镜像构建和 `docker compose up` 尚未真实验证(PR #5 合并时就已知),由 T-005 补上。
+- ✅ 已验证(T-005,PR #9,[CI run](https://github.com/Akarin7784/repo-lens/actions/runs/40759576746)):镜像构建和 `docker compose up`,api `/health` 返回 `status:ok`,web 返回 200。
 - 本机 Node 24 与 CI、Dockerfile 的 Node 20 不一致,CI 已固定 20,T-005 里一并写明。
-- Docker 镜像内 `tree-sitter`(0.22.4,原生绑定)能否安装并运行尚未验证,由 T-005 的 CI 冒烟任务在镜像里真实加载并解析一小段 TS 代码来验证。
+- ✅ 已验证(T-005,PR #9,[CI run](https://github.com/Akarin7784/repo-lens/actions/runs/40759576746)):Docker 镜像内 `tree-sitter`(0.22.4,原生绑定)能安装并运行,worker 镜像内用 TypeScriptAnalyzer 解析示例 TS(2 文件、3 节点、1 条边、0 语法错误)。
 - 语法错误文件数(tree-sitter-typescript 不支持部分语法):zustand 5 个、hono 8 个(共 450 个文件)、zod 4 个(共 522 个文件)。import 仍能提取,只影响这些文件的符号和切块。
 
 ## 日志
