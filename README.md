@@ -46,4 +46,4 @@ MIT
 
 ### 关于本机 Node 24
 
-开发机目前是 Node 24,而 CI 与镜像是 Node 20。纯 JS 代码两者无差异,但原生绑定(如 tree-sitter)按 Node ABI 编译,24 上能装不代表 20 上能跑。以 CI 的 `smoke` 任务(镜像内真实运行)为准;本地建议 `nvm use` 切到 20 再验证。`engines` 写成 `>=20 <21`,pnpm 在 Node 24 上只会警告不会报错(未开启 engine-strict)。
+开发机目前是 Node 24,而 CI 与镜像是 Node 20。纯 JS 代码两者无差异,但原生绑定(如 tree-sitter)按 Node ABI 编译,24 上能装不代表 20 上能跑。以 CI 的 `smoke` 任务(镜像内真实运行)为准;本地建议 `nvm use` 切到 20 再验证。提交前请用 Node 20 跑一遍测试(本机 Node 24 复现不出 Node 20 下的问题)。`engines` 写成 `>=20 <21`,pnpm 在 Node 24 上只会警告不会报错(未开启 engine-strict)。
