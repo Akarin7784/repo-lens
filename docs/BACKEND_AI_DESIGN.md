@@ -1,7 +1,7 @@
 # repo-lens 后端与 AI 详细设计
 
 > 范围：后端与 AI 部分（解析、存储、队列、摘要、RAG、引用校验、成本、MCP、安全、风险、里程碑）
-> 技术栈：Next.js（App Router + Route Handlers）/ TypeScript / Node.js 20 / MySQL 8 / Redis 7 / BullMQ / Qdrant
+> 技术栈：Next.js（App Router，前端）/ Fastify（`apps/api`，REST + SSE）/ TypeScript / Node.js ≥ 20（本机实测 24）/ MySQL 8 / Redis 7 / BullMQ / Qdrant
 > 约束：4 周上线；**第 1 周只做 TypeScript 仓库**，先跑通「解析 → 画图 → 部署」
 > 标注「待验证」的地方：库 API 或数值还没实测，写代码前要先确认
 
@@ -9,7 +9,7 @@
 
 ```mermaid
 flowchart LR
-  U[浏览器 Next.js] -- POST /api/repos --> API[Next.js API]
+  U[浏览器 Next.js] -- POST /api/repos --> API[Fastify API]
   API -- jobId --> U
   U -- SSE /api/jobs/:id/events --> API
   API -- enqueue --> Q[(Redis / BullMQ)]
@@ -33,7 +33,7 @@ flowchart LR
 |---|---|
 | `POST /api/repos` | 入参 `{url, ref?}`，返回 `{repoId, jobId}` |
 | `GET /api/jobs/:id/events` | SSE，推送任务进度（格式见 §3） |
-| `GET /api/repos/:id/graph` | 返回 `{nodes, edges, meta}`；节点分 `dir/module/file` 三层，带 `parentId` |
+| `GET /api/repos/:id/graph` | 返回 `{nodes, edges, meta}`；节点分 `module → dir → file` 三层，带 `parentId`；`?parentId=` 懒加载，单次 ≤ 300 节点 |
 | `POST /api/repos/:id/chat` | SSE 流，事件只有三种：`token` / `citation` / `done`；`citation` = `{path,startLine,endLine,nodeId}`，**后端校验通过后才下发** |
 
 ---
@@ -41,7 +41,7 @@ flowchart LR
 ## 1. Tree-sitter 解析与依赖提取
 
 **选型结论**
-- 用 Node 原生绑定 `tree-sitter` + `tree-sitter-typescript`（`typescript` / `tsx` 两种语法）+ `tree-sitter-javascript`；第 3 周加 `tree-sitter-python`。不用 web-tree-sitter（WASM）的原因是 Worker 跑在服务端，原生绑定更快。两者在 Node 20 下的预编译包是否可用：**待验证**，如果装不上就退回 web-tree-sitter。
+- 用 Node 原生绑定 `tree-sitter` + `tree-sitter-typescript`（`typescript` / `tsx` 两种语法）+ `tree-sitter-javascript`；第 3 周加 `tree-sitter-python`。不用 web-tree-sitter（WASM）的原因是 Worker 跑在服务端，原生绑定更快。Node ≥ 20 下的预编译包已在本机 Node 24 试装；`tree-sitter-typescript` 与 `tree-sitter@0.25` 有 peer 依赖冲突（spike 已记录，锁定兼容版本或 `--legacy-peer-deps`），装不上就退回 web-tree-sitter。
 - 只提取语法级信息（符号、import、调用），**不做类型推断**。import 路径解析时读取 `tsconfig.json` 的 `baseUrl/paths`，按架构师定稿：import 路径由 ts-morph 解析（含 tsconfig paths）；ts-morph 失败时降级为我们自己写的 `baseUrl/paths` 前缀替换（纯 Tree-sitter 结果）。Tree-sitter 负责切块和符号提取。
 - 提取规则用 Tree-sitter Query（`.scm`）声明，每种语言一份，方便扩展到 Python。
 
@@ -64,33 +64,42 @@ Query 示例（TS，字段名需要对照语法的 `node-types.json` 核实，**
                             (member_expression property: (property_identifier) @call.name)])
 ```
 
+**解析器接口与初始化钩子**
+`LanguageAnalyzer` 增加初始化钩子：`init(ctx: {repoRoot, tsconfigPath?}): Promise<void>` 先建 ts-morph `Project`（有状态，读 tsconfig `baseUrl/paths`），之后 `resolveImport(fromFile, spec)` 才复用该 Project 同步解析；`init` 失败则标记降级，`resolveImport` 走纯 Tree-sitter + 自写 paths 前缀替换；`dispose()` 释放 Project。
+
 **依赖解析流程**
-1. `import.source` 是相对路径时，按 `.ts .tsx .js .jsx /index.ts …` 顺序尝试补全，得到 file→file 的 `imports` 边。
+1. `import.source` 是相对路径时，按 `.ts .tsx .js .jsx /index.ts …` 顺序尝试补全，得到 file→file 边：`type:"imports"`，并按语法标 `kind`：`import`/`export … from` 为 `static`（`export … from` 为 `re-export`）、`import type` 为 `type-only`、`import()` 为 `dynamic`、`require()` 为 `require`；每条边带 `srcFileId`（= 源文件 `file.id`，库表 `src_file_id`）。
 2. 命中 tsconfig `paths` 别名时，先替换前缀再按第 1 步补全。
 3. 裸模块（如 `react`）记为外部依赖节点 `ext:react`，只计数，**默认不画进图里**。
 4. 调用边：同文件内按名字匹配到 symbol；跨文件时，只有被调用名来自某个 named import，才连到目标文件的同名导出。匹配不上的调用丢弃（是否展示由 confidence 控制：同文件 1.0、经 import 0.8）。
 
-**三层图的生成（只用约定的结构）**
-- `dir`：目录。`module`：TS 项目里 module 的含义需要定义，这里定为「monorepo 里的 package（含 package.json 的目录）或者顶层 src 子目录」，规则写进 `meta.moduleRule`。`file`：源码文件。
-- `parentId`：file→module→dir 链。没有 module 的 file 直接挂到 dir 下。
-- 边先在 file 层算出来，再向上聚合：module 之间的边权 = 下属 file 边数之和。
+**三层图的生成（module → dir → file，按架构师定稿）**
+- 层级：`module` 是顶层（`parentId: null`），其下是 `dir`，再下是 `file`。节点 id = 前缀 + 相对仓库根的 POSIX 路径：`m:src/core`、`d:src/core/utils`、`f:src/core/a.ts`；module id 必须写全路径，不用省略 `src/` 的简写。同一 commit 内 id 稳定。
+- **module 判定规则**：
+  1. 有 workspace（pnpm `pnpm-workspace.yaml` 或 npm `package.json#workspaces`）时，每个 workspace 包的根目录是一个 module（如 `m:packages/core`）。
+  2. 没有 workspace 时：有 `src/` 就取 `src/` 下的一级目录（`m:src/core`），否则取仓库根下的一级目录（`m:lib`）。
+  3. 剩下的根目录文件（及 `src/` 下的直属文件）归入根模块 `m:.`。
+  4. 嵌套的 workspace 包不再往下拆 module，module 之下更深的目录一律是 `dir`。
+- `parentId` 链：`file` → 所在最近的 `dir`（直接位于 module 根下的 file 挂 module）→ `module` → `null`。
+- 边先在 file 层算出来，再向上聚合：一端落在返回范围外的边聚合到范围内最近的祖先，`weight` = 被聚合的 file 边数之和。
+- 节点字段平铺（`path`、`loc`、`weight`、`summary` 等可选字段直接放在节点上，不放进嵌套对象）；`meta` 与 ARCHITECTURE §5.2 一致：`{repoId, commitSha, parentId, language, cycles?}`。
 
 ```json
 {
   "nodes": [
-    {"id":"d:src","type":"dir","label":"src","parentId":null},
-    {"id":"m:src/server","type":"module","label":"server","parentId":"d:src"},
-    {"id":"f:src/server/app.ts","type":"file","label":"app.ts","parentId":"m:src/server",
-     "data":{"path":"src/server/app.ts","loc":182,"symbols":7,"summary":"Express 入口…"}}
+    {"id":"m:src/server","type":"module","label":"server","parentId":null,"path":"src/server","weight":12},
+    {"id":"d:src/server/routes","type":"dir","label":"routes","parentId":"m:src/server","path":"src/server/routes"},
+    {"id":"f:src/server/routes/user.ts","type":"file","label":"user.ts","parentId":"d:src/server/routes",
+     "path":"src/server/routes/user.ts","loc":182,"summary":"用户路由…"}
   ],
   "edges": [
-    {"id":"e:1","source":"f:src/server/app.ts","target":"f:src/db/index.ts","type":"imports","weight":1}
+    {"id":"e:1","source":"f:src/server/routes/user.ts","target":"f:src/db/index.ts",
+     "type":"imports","kind":"static","srcFileId":301,"weight":1}
   ],
-  "meta": {"repoId":12,"commitSha":"a1b2c3d","level":"file","truncated":false,
-           "stats":{"files":412,"symbols":3100,"edges":1800},"moduleRule":"package|src-subdir"}
+  "meta": {"repoId":12,"commitSha":"a1b2c3d","parentId":"d:src/server/routes","language":"typescript"}
 }
 ```
-`meta.level` / `meta.truncated` 是给大图折叠用的（见 §10）。
+请求 `GET /api/repos/:id/graph` 不带 `parentId` 时返回 module 层（`meta.parentId: null`）。
 
 **增量解析**
 - 文件级增量：`file.content_hash = sha256(内容)`。重新分析时先 `git diff --name-only old..new`，只重新解析变化的文件；相关的边按 `src_file_id` 删掉再重建。
@@ -101,7 +110,7 @@ Query 示例（TS，字段名需要对照语法的 `node-types.json` 核实，**
 | 规则 | 默认值 |
 |---|---|
 | 克隆方式 | `git clone --depth 1 --filter=blob:limit=1m --single-branch`（filter 是否被 GitHub 支持：待验证，失败则去掉） |
-| 仓库上限 | 磁盘占用 ≤ 300MB，源码文件数 ≤ 5000，单文件 ≤ 512KB，超过的直接跳过 |
+| 仓库上限 | 磁盘占用 ≤ 300MB，源码文件数 ≤ 5000，单文件 ≤ 500KB，超过的直接跳过 |
 | 忽略 | `.gitignore` 规则 + 内置：`node_modules dist build .next coverage vendor *.min.js *.map *.lock` 和生成文件（首行含 `@generated`） |
 | 并发 | 每个 Worker 用 `p-limit(8)` 控制解析并发；单文件解析超时 2s |
 | 二进制 | 前 8KB 里出现 NUL 字节就视为二进制，跳过 |
@@ -145,7 +154,9 @@ CREATE TABLE symbol (
 CREATE TABLE edge (
   id BIGINT PRIMARY KEY AUTO_INCREMENT, repo_id BIGINT NOT NULL, commit_sha CHAR(40) NOT NULL,
   level ENUM('file','module','dir','symbol') NOT NULL, type ENUM('imports','calls','contains') NOT NULL,
-  src_id VARCHAR(255) NOT NULL, dst_id VARCHAR(255) NOT NULL, src_file_id BIGINT,
+  kind ENUM('static','dynamic','type-only','re-export','require') NULL,  -- 仅 type='imports' 时有值
+  src_id VARCHAR(255) NOT NULL, dst_id VARCHAR(255) NOT NULL,   -- 图 nodeId(m:/d:/f: + POSIX 路径)
+  src_file_id BIGINT,                                           -- 源文件 file.id,增量解析按它删边重建
   weight INT DEFAULT 1, confidence DECIMAL(3,2) DEFAULT 1.00,
   KEY idx_src (repo_id, commit_sha, level, src_id), KEY idx_dst (repo_id, commit_sha, level, dst_id),
   KEY idx_srcfile (src_file_id)
@@ -185,7 +196,7 @@ CREATE TABLE llm_usage (
 | BullMQ 队列 | `bull:analyze:*`、`bull:summarize:*`（BullMQ 自己管理） | — |
 | 任务进度事件 | `job:{jobId}:events` | Stream，`MAXLEN ~ 500`，TTL 24h |
 | 任务去重锁 | `lock:repo:{repoId}:{commit}` | String NX，TTL 30min |
-| 图缓存 | `graph:{repoId}:{commit}:{level}` | String(JSON, gzip)，TTL 7d |
+| 图缓存 | `graph:{repoId}:{commitSha}:{parentId|root}` | String(JSON, gzip)，TTL 7d |
 | LLM 响应缓存 | `llm:{sha256(model+prompt)}` | String，TTL 30d |
 | Embedding 缓存 | `emb:{model}:{contentHash}` | String(base64 float32)，TTL 30d |
 | 限流 | `rl:ip:{ip}:{yyyyMMddHH}` | INCR，TTL 1h |
@@ -265,16 +276,17 @@ event: progress
 data: {"jobId":"12:a1b2c3d","stage":"parsing","progress":27,"message":"解析 112/412 文件"}
 
 event: graph_ready
-data: {"jobId":"12:a1b2c3d","repoId":12,"graphUrl":"/api/repos/12/graph?level=module"}
+data: {"jobId":"12:a1b2c3d","repoId":12,"graphUrl":"/api/repos/12/graph"}
 
 event: stage_error
-data: {"stage":"summarizing","code":"LLM_UNAVAILABLE","degraded":true,"message":"摘要降级为规则摘要"}
+data: {"jobId":"12:a1b2c3d","stage":"summarizing","message":"LLM 不可用，摘要降级为规则摘要"}
 
 event: done
 data: {"jobId":"12:a1b2c3d","status":"done","stats":{"files":412,"chunks":2900,"costUsd":0.31}}
 ```
 - `id` 直接用 Redis Stream 的 ID，客户端断线重连时带 `Last-Event-ID` 续传；每 15s 发一次 `: ping` 注释行保活。
-- Next.js Route Handler 返回 `ReadableStream`，设置 `export const runtime='nodejs'` 和 `dynamic='force-dynamic'`；部署平台（Vercel 等）对长连接的超时限制：**待验证**。建议 API 和 Worker 一起部署在同一台 VPS 上用 Docker Compose 跑，规避这个限制。
+- SSE 由 Fastify（`apps/api`）实现：`reply.raw` 写 `text/event-stream`，关闭压缩与代理缓冲（`X-Accel-Buffering: no`）。API 和 Worker 一起部署在同一台 VPS 上用 Docker Compose 跑，不受 Serverless 长连接时限影响。
+- `stage_error` 载荷与 ARCHITECTURE 一致为 `{jobId, stage, message}`，不另加字段。
 
 ---
 
@@ -421,7 +433,7 @@ flowchart TD
 |---|---|---|
 | `analyze_repo` | `{url: string, ref?: string}` | `{repoId, jobId, status}` |
 | `get_job_status` | `{jobId}` | `{stage, progress, error?}` |
-| `get_graph` | `{repoId, level: 'dir'\|'module'\|'file', parentId?: string, depth?: number}` | `{nodes, edges, meta}`（和 HTTP 接口同构） |
+| `get_graph` | `{repoId, parentId?: string, depth?: number}`（不带 `parentId` 返回 module 层） | `{nodes, edges, meta}`（和 HTTP 接口同构） |
 | `search_code` | `{repoId, query, k?: number(≤20)}` | `[{path,startLine,endLine,nodeId,symbol,score,snippet}]` |
 | `get_file` | `{repoId, path, startLine?, endLine?}` | `{path, content(带行号), totalLines}`，单次最多 400 行 |
 | `get_summary` | `{repoId, level, targetId}` | `{content, model, updatedAt}` |
@@ -469,7 +481,7 @@ Resources（可选）：`repo://{repoId}/summary`、`repo://{repoId}/file/{path}
 | 维度 | 上限 / 策略 |
 |---|---|
 | 仓库 | ≤ 5000 源码文件，≤ 300MB；超过就拒绝，并提示「可指定子目录」（`?path=packages/core`，W4 可选） |
-| 图渲染 | 默认返回 `level=module`；单次返回节点数 ≤ 300，超过就把最深层折叠成聚合节点（`meta.truncated=true`，聚合节点 `data.childCount`）；前端点击节点再调用 `GET /api/repos/:id/graph?parentId=` 懒加载子节点 |
+| 图渲染 | 默认返回 module 层（不带 `parentId`）；单次返回节点数 ≤ 300，超过时按聚合层继续上卷，范围外的边聚合为带 `weight` 的边；前端点击节点再调用 `GET /api/repos/:id/graph?parentId=` 懒加载子节点 |
 | 边 | file 层只返回当前可见节点之间的边；权重低于阈值的 module 边隐藏 |
 | token 预算 | 单仓库分析 $0.50 ≈ 小模型约 300 万 tokens（按当时价格估算，待验证）；超预算时摘要只做到 file 层 + repo 层，跳过 function 层 |
 | 问答 | 上下文 ≤ 8k，输出 ≤ 800；多轮对话只保留最近 3 轮的问答原文，更早的压缩成一句话摘要 |
@@ -480,7 +492,7 @@ Resources（可选）：`repo://{repoId}/summary`、`repo://{repoId}/file/{path}
 |---|---|
 | 主 provider 超时或 5xx | 单次重试（指数退避）→ 切到备用 provider（OpenAI 兼容接口，比如 DeepSeek，只换 baseURL 和 model） |
 | 连续 5 次失败 | 熔断器打开 60s（`cb:llm:*`），这期间直接走备用 |
-| 全部不可用：分析 | 跳过 summarize，用规则摘要（导出名 + 注释首行）；图照常生成；SSE 推 `stage_error{degraded:true}` |
+| 全部不可用：分析 | 跳过 summarize，用规则摘要（导出名 + 注释首行）；图照常生成；SSE 推 `stage_error{jobId, stage:"summarizing", message}` |
 | 全部不可用：embedding | 只用 BM25 + 符号名两路检索 |
 | 全部不可用：问答 | 返回「检索模式」：不生成答案，直接列出 top5 片段作为 citation，并下发一句提示 token |
 | 演示现场 | 使用 §10.1 的回放 |
