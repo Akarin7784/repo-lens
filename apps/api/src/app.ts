@@ -99,7 +99,6 @@ export function buildApp(deps?: AppDeps): FastifyInstance {
     if ([owner, name].some((s) => s === '.' || s === '..'))
       throw new HttpError('INVALID_REPO_URL', '仓库路径无效');
     const url = `https://github.com/${owner}/${name}`;
-    await rateLimit(req.ip);
 
     const commitSha = await git.lsRemote(url, body.data.ref);
     if (!commitSha) throw new HttpError('REPO_NOT_FOUND', '仓库不存在、不可访问或 ref 无效');
@@ -114,6 +113,10 @@ export function buildApp(deps?: AppDeps): FastifyInstance {
 
     const repo = await store.upsertRepo({ url, owner: owner!, name: name! });
     const jobId = publicJobId(repo.id, commitSha);
+    // 限流只计"真正入队"的提交:同仓库同 commit 已有未失败的任务(done/queued/running)时直接复用,不计数;
+    // 新任务或 failed 重试会入队,先计数,超限 429 且不建任务。
+    const existing = await store.getTask(jobId);
+    if (!existing || existing.stage === 'failed') await rateLimit(req.ip);
     const { task, created } = await store.createTask({ jobId, repoId: repo.id, commitSha });
     const data: AnalyzeJobData = { jobId, repoId: repo.id, repoUrl: url, commitSha };
     let status = statusOf(task.stage);
