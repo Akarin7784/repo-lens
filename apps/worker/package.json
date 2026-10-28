@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@repolens/shared": "workspace:*",
-    "bullmq": "^5.34.0"
+    "bullmq": "^5.34.0",
+    "@repolens/analyzer": "workspace:*"
   }
 }
