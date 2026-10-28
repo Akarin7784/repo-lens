@@ -211,6 +211,8 @@ export async function runPipeline(
       let result = readJson<AnalyzeResult>(anaPath);
       if (!result || result.stats.files !== files.length) {
         let last = 0;
+        // 并发解析时回调交错,用 promise 链串行写入,保证进度单调
+        let chain: Promise<void> = Promise.resolve();
         await progress('parsing', 12, `解析 0/${files.length} 文件`);
         try {
           result = await analyzeRepo(
@@ -218,15 +220,16 @@ export async function runPipeline(
             {
               parseTimeoutMs: config.parseTimeoutMs,
               concurrency: config.parseConcurrency,
-              onFileParsed: async (done, total) => {
+              onFileParsed: (done, total) => {
                 const pct = 12 + Math.floor((done / total) * 26); // 留 38–40 给 import 解析
-                if (pct > last || done === total) {
-                  last = pct;
-                  await progress('parsing', pct, `解析 ${done}/${total} 文件`);
-                }
+                if (pct <= last && done !== total) return;
+                last = Math.max(last, pct);
+                const msg = `解析 ${done}/${total} 文件`;
+                chain = chain.then(() => progress('parsing', pct, msg));
               },
             },
           );
+          await chain;
         } catch (err) {
           if (err instanceof AnalyzerError)
             throw new PipelineError(err.code, 'parsing', err.message, false);

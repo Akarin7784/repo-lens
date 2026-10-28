@@ -44,6 +44,8 @@ describe('runPipeline', () => {
       'done:100',
       'done',
     ]);
+    const pcts = events.events.flatMap((e) => (e.event === 'progress' ? [e.data.progress] : []));
+    expect(pcts).toEqual([...pcts].sort((a, b) => a - b)); // 进度单调不减
     expect(stats).toMatchObject({ files: 3, edges: 2, assetImports: 1, resolverMode: 'ts-morph' });
     const g = await store.loadGraph(data.repoId, data.commitSha);
     expect(g.files.map((f) => f.path).sort()).toEqual([
