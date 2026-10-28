@@ -6,7 +6,7 @@
 ## 1. 目标与范围
 
 ### 1.1 MVP(必须)
-- 公开 GitHub 仓库 URL 输入,只读浅 clone(`--depth 1`),仓库 ≤ 50MB、源文件 ≤ 5000。
+- 公开 GitHub 仓库 URL 输入,只读浅 clone(`--depth 1`),仓库 ≤ 300MB(磁盘占用,含 .git)、源文件 ≤ 5000。
 - TypeScript/TSX 解析:文件树、import/export 依赖、tsconfig `paths` 别名解析。
 - 模块聚类(目录 + 依赖社区),LLM 生成模块摘要。
 - 交互式架构图:模块视图 ↔ 文件视图下钻,搜索、高亮、折叠。
@@ -422,7 +422,7 @@ volumes: { repos: {}, mysql: {}, qdrant: {} }
 | `LLM_CHAT_MODEL` / `LLM_SUMMARY_MODEL` | `gpt-4o` / `gpt-4o-mini` | 问答/摘要模型 |
 | `EMBEDDING_MODEL` | `text-embedding-3-small` | 向量 |
 | `GITHUB_TOKEN` | 只读 PAT(可选) | 提高 API 限额 |
-| `MAX_REPO_MB` / `MAX_FILES` | `50` / `5000` | 仓库限制 |
+| `MAX_REPO_MB` / `MAX_FILES` | `300` / `5000` | 仓库限制 |
 | `DAILY_LLM_BUDGET_CENTS` | `500` | 每日预算熔断 |
 | `WORKER_CONCURRENCY` | `2` | 并发分析数 |
 | `QDRANT_URL` | `http://qdrant:6333` | Qdrant 地址 |
@@ -464,7 +464,7 @@ volumes: { repos: {}, mysql: {}, qdrant: {} }
 |---|---|---|
 | 演示现场网络/LLM 故障 | zustand/hono/zod(trpc 备选)固定 commitSha 预解析并缓存,布局离线预计算;演示前一天冻结部署 + 冒烟脚本 | 线上实时 → 打开预解析缓存 → 播放 hono 兜底视频 |
 | 引用不准(行号幻觉) | 模型只能引用上下文片段;后端逐条校验文件存在、行号范围、内容 hash;定位类问题先缓冲校验再下发 | 失败引用丢弃并计入 `done.droppedCitations`;一条都不通过则重试一次(前端显示「正在定位…」),仍失败用检索 top 片段作引用并标 `fallback:"retrieval"` |
-| 仓库过大/大图卡顿 | 仓库 ≤50MB、源文件 ≤5000;单次图接口 ≤300 节点,聚合层 + 懒加载;zod 默认 module 层 | 超限返回 422;布局慢 → 静态布局文件或 dagre |
+| 仓库过大/大图卡顿 | 仓库 ≤300MB、源文件 ≤5000;单次图接口 ≤300 节点,聚合层 + 懒加载;zod 默认 module 层 | 超限返回 422;布局慢 → 静态布局文件或 dagre |
 | token 成本失控 | 摘要只做 fanIn 前 200 文件;问答上下文 ≤12k、工具 ≤5 轮;`budget:day:*`/`budget:repo:*` 预算;LLM 与 embedding 缓存 | 超预算:停新分析,问答发 `error{code:"BUDGET_EXCEEDED"}` |
 | LLM 接口故障 | 可切备用 OpenAI 兼容服务;摘要异步,不阻塞出图 | 摘要失败发 `stage_error`,图照常可用;问答发 `error{code:"LLM_UNAVAILABLE",retryable:true}`,前端提示并展示检索片段 |
 | 解析失败 | ts-morph 只做 import 路径解析 | 失败降级纯 Tree-sitter;非 TS 仓库 422 |
