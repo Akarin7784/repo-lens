@@ -43,7 +43,14 @@ export const RepoStatusSchema = z.object({
 });
 
 /** GET /api/repos/:id/graph?parentId= */
-export const GraphQuerySchema = z.object({ parentId: NodeIdSchema.optional() });
+/** includeExternal=true 时额外返回派生的 x:<包名> 节点及指向它们的边(默认不返回) */
+export const GraphQuerySchema = z.object({
+  parentId: NodeIdSchema.optional(),
+  includeExternal: z
+    .enum(['true', 'false'])
+    .transform((v) => v === 'true')
+    .optional(),
+});
 
 /** GET /api/repos/:id/files?path=&start=&end= */
 export const FileQuerySchema = z.object({
@@ -55,7 +62,7 @@ export const FileQuerySchema = z.object({
 /** GET /api/repos/:id/nodes/:nodeId */
 export const NodeDetailSchema = z.object({
   id: NodeIdSchema,
-  kind: z.enum(['module', 'file', 'external']),
+  kind: z.enum(['module', 'dir', 'file', 'external']),
   path: z.string(),
   summary: z.string().nullable(),
   exports: z.array(z.string()),

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { NodeIdSchema } from './ids.js';
+import { FileIdSchema, ModuleIdSchema } from './ids.js';
 
 export const TokenEventSchema = z.object({
   event: z.literal('token'),
@@ -13,8 +13,8 @@ export const CitationSchema = z
     path: z.string().min(1),
     startLine: z.number().int().positive(),
     endLine: z.number().int().positive(),
-    nodeId: NodeIdSchema.refine((v) => v.startsWith('f:'), 'citation.nodeId 必须是 file 节点'),
-    moduleId: NodeIdSchema.optional(),
+    nodeId: FileIdSchema,
+    moduleId: ModuleIdSchema.optional(),
   })
   .strict()
   .refine((c) => c.endLine >= c.startLine, 'endLine 不能小于 startLine');

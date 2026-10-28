@@ -4,51 +4,183 @@ import {
   ChatRequestSchema,
   CreateRepoRequestSchema,
   GraphDataSchema,
+  GraphQuerySchema,
   JobEventSchema,
   NodeDetailSchema,
   PROGRESS_STAGES,
+  NodeIdSchema,
+  ROOT_MODULE_ID,
+  dirId,
   fileId,
   moduleId,
 } from './index.js';
 
 const graph = {
   nodes: [
-    { id: 'm:src', type: 'module', label: 'src' },
-    { id: 'f:src/compose.ts', type: 'file', label: 'compose.ts', parentId: 'm:src', loc: 72 },
-    { id: 'f:src/hono.ts', type: 'file', label: 'hono.ts', parentId: 'm:src' },
+    { id: 'm:.', type: 'module', label: '(root)', path: '.', parentId: null },
+    { id: 'm:src/core', type: 'module', label: 'core', path: 'src/core', parentId: null },
+    {
+      id: 'd:src/core/utils',
+      type: 'dir',
+      label: 'utils',
+      path: 'src/core/utils',
+      parentId: 'm:src/core',
+    },
+    {
+      id: 'f:src/core/a.ts',
+      type: 'file',
+      label: 'a.ts',
+      path: 'src/core/a.ts',
+      parentId: 'm:src/core',
+      loc: 72,
+    },
+    {
+      id: 'f:src/core/utils/b.ts',
+      type: 'file',
+      label: 'b.ts',
+      path: 'src/core/utils/b.ts',
+      parentId: 'd:src/core/utils',
+    },
   ],
   edges: [
-    { id: 'e1', source: 'f:src/hono.ts', target: 'f:src/compose.ts', kind: 'import', weight: 1 },
+    {
+      id: 'e1',
+      source: 'f:src/core/a.ts',
+      target: 'f:src/core/utils/b.ts',
+      type: 'imports',
+      kind: 'static',
+      srcFileId: 'f:src/core/a.ts',
+      weight: 1,
+    },
+    {
+      id: 'e2',
+      source: 'm:.',
+      target: 'd:src/core/utils',
+      type: 'imports',
+      kind: 're-export',
+      srcFileId: 'f:index.ts',
+      weight: 3,
+    },
   ],
   meta: { repoId: 12, commitSha: 'a1b2c3d', parentId: null, language: 'typescript' },
 };
+const node = (i: number) => graph.nodes[i]!;
+const edge = graph.edges[0]!;
 
 describe('ids', () => {
-  it('确定性生成 nodeId', () => {
-    expect(fileId('./src/a.ts')).toBe('f:src/a.ts');
-    expect(moduleId('src\\core/')).toBe('m:src/core');
+  it('确定性生成 POSIX 相对路径 nodeId', () => {
+    expect(fileId('./src/core/a.ts')).toBe('f:src/core/a.ts');
+    expect(dirId('src\\core\\utils/')).toBe('d:src/core/utils');
+    expect(moduleId('')).toBe(ROOT_MODULE_ID);
+    expect(moduleId('./')).toBe('m:.');
+  });
+  it('拒绝非法前缀和非 POSIX 路径', () => {
+    for (const bad of [
+      'x:',
+      'y:react',
+      'src/a.ts',
+      'f:/abs/a.ts',
+      'f:src//a.ts',
+      'd:src/',
+      'f:src\\a.ts',
+      'd:.',
+      'f:src/../a.ts',
+    ])
+      expect(NodeIdSchema.safeParse(bad).success, bad).toBe(false);
   });
 });
 
 describe('GraphDataSchema', () => {
-  it('接受合法图', () => expect(GraphDataSchema.safeParse(graph).success).toBe(true));
+  it('接受合法三层图', () => expect(GraphDataSchema.safeParse(graph).success).toBe(true));
   it('meta.layout 不属于 schema,解析后被剥离', () => {
-    const bad = { ...graph, meta: { ...graph.meta, layout: {} } };
-    expect(GraphDataSchema.parse(bad).meta).not.toHaveProperty('layout');
+    const g = { ...graph, meta: { ...graph.meta, layout: {} } };
+    expect(GraphDataSchema.parse(g).meta).not.toHaveProperty('layout');
   });
-  it('拒绝非法 nodeId', () => {
-    const bad = { ...graph, nodes: [{ id: 'src/a.ts', type: 'file', label: 'a' }], edges: [] };
-    expect(GraphDataSchema.safeParse(bad).success).toBe(false);
+  it('module 的 parentId 必须为 null,dir/file 必须有 parentId', () => {
+    const bad1 = { ...graph, nodes: [{ ...node(1), parentId: 'm:.' }], edges: [] };
+    const bad2 = { ...graph, nodes: [{ ...node(2), parentId: null }], edges: [] };
+    const bad3 = { ...graph, nodes: [{ ...node(3), parentId: 'f:src/x.ts' }], edges: [] };
+    for (const b of [bad1, bad2, bad3]) expect(GraphDataSchema.safeParse(b).success).toBe(false);
   });
-  it('拒绝悬空边', () => {
-    const bad = { ...graph, edges: [{ ...graph.edges[0], target: 'f:nope.ts' }] };
-    expect(GraphDataSchema.safeParse(bad).success).toBe(false);
+  it('类型与前缀不匹配、path 与 id 不一致都拒绝', () => {
+    expect(
+      GraphDataSchema.safeParse({ ...graph, nodes: [{ ...node(3), type: 'dir' }], edges: [] })
+        .success,
+    ).toBe(false);
+    expect(
+      GraphDataSchema.safeParse({
+        ...graph,
+        nodes: [{ ...node(3), path: 'src/other.ts' }],
+        edges: [],
+      }).success,
+    ).toBe(false);
+  });
+  it('节点字段平铺,data 字段不被接受到结果里', () => {
+    const r = GraphDataSchema.parse({
+      ...graph,
+      nodes: graph.nodes.map((n) => ({ ...n, data: { x: 1 } })),
+    });
+    expect(r.nodes[0]).not.toHaveProperty('data');
+  });
+  it('边须 type=imports、合法 kind 与 file 类型的 srcFileId', () => {
+    for (const k of ['static', 'dynamic', 'type-only', 're-export', 'require'])
+      expect(
+        GraphDataSchema.safeParse({ ...graph, edges: [{ ...edge, kind: k }] }).success,
+        k,
+      ).toBe(true);
+    const bad = [
+      { ...edge, kind: 'aggregated' },
+      { ...edge, type: 'calls' },
+      { ...edge, srcFileId: 'm:src/core' },
+      { ...edge, srcFileId: undefined },
+      { ...edge, target: 'f:nope.ts' },
+      { ...edge, weight: 0 },
+    ];
+    for (const e of bad)
+      expect(GraphDataSchema.safeParse({ ...graph, edges: [e] }).success, JSON.stringify(e)).toBe(
+        false,
+      );
+  });
+  it('派生的 external 节点和 aggregated 边合法', () => {
+    const g = {
+      ...graph,
+      nodes: [
+        ...graph.nodes,
+        {
+          id: 'x:@scope/pkg',
+          type: 'external',
+          label: '@scope/pkg',
+          path: '@scope/pkg',
+          parentId: null,
+        },
+      ],
+      edges: [
+        ...graph.edges,
+        {
+          id: 'e3',
+          source: 'f:src/core/utils/b.ts',
+          target: 'x:@scope/pkg',
+          type: 'imports',
+          kind: 'static',
+          srcFileId: 'f:src/core/utils/b.ts',
+          weight: 1,
+        },
+        { ...edge, id: 'e4', source: 'm:src/core', target: 'm:.', aggregated: true, weight: 5 },
+      ],
+    };
+    expect(GraphDataSchema.safeParse(g).success).toBe(true);
+  });
+  it('GraphQuery 的 includeExternal 默认不开', () => {
+    expect(GraphQuerySchema.parse({}).includeExternal).toBeUndefined();
+    expect(GraphQuerySchema.parse({ includeExternal: 'true' }).includeExternal).toBe(true);
   });
   it('拒绝超过 300 个节点', () => {
     const nodes = Array.from({ length: 301 }, (_, i) => ({
       id: `f:${i}.ts`,
       type: 'file',
       label: `${i}`,
+      path: `${i}.ts`,
+      parentId: 'm:.',
     }));
     expect(GraphDataSchema.safeParse({ ...graph, nodes, edges: [] }).success).toBe(false);
   });
@@ -74,7 +206,7 @@ describe('ChatEventSchema', () => {
           startLine: 10,
           endLine: 42,
           nodeId: 'f:src/compose.ts',
-          moduleId: 'm:core',
+          moduleId: 'm:src',
         },
       },
       {

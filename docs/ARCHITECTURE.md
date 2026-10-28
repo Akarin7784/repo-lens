@@ -162,7 +162,7 @@ sequenceDiagram
 | POST | `/api/repos` | 创建分析任务,返回 `{id, jobId}` |
 | GET | `/api/repos/:id` | 仓库/最近任务状态 |
 | GET | `/api/jobs/:id/events` | SSE 进度 |
-| GET | `/api/repos/:id/graph?parentId=` | 图数据:不传 `parentId` 返回顶层,传则返回该父节点直接子节点 + 相关边 |
+| GET | `/api/repos/:id/graph?parentId=&includeExternal=` | 图数据:不传 `parentId` 返回顶层,传则返回该父节点直接子节点 + 相关边;`includeExternal=true` 额外返回派生的 `x:` 外部包节点(默认否) |
 | GET | `/api/repos/:id/files?path=&start=&end=` | 读文件片段 |
 | GET | `/api/repos/:id/nodes/:nodeId` | 节点详情(摘要、导出符号) |
 | POST | `/api/repos/:id/chat` | 问答(SSE 响应) |
@@ -211,7 +211,7 @@ data: {"text":"中间件由 compose 函数按洋葱模型串联"}
 
 // 仅校验通过才下发,无 verified 字段
 event: citation
-data: {"id":1,"path":"src/compose.ts","startLine":10,"endLine":42,"nodeId":"f:src/compose.ts","moduleId":"m:core"}
+data: {"id":1,"path":"src/compose.ts","startLine":10,"endLine":42,"nodeId":"f:src/compose.ts","moduleId":"m:src"}
 
 event: done
 data: {"messageId":881,"droppedCitations":1,"fallback":"retrieval","usage":{"in":5321,"out":402}}
@@ -234,30 +234,36 @@ data: {"code":"BUDGET_EXCEEDED","message":"今日 LLM 预算已用完","retryabl
 ```
 
 ### 5.2 图数据 schema
+> 以 `packages/shared/src/graph.ts`(zod)为准。三层结构、id 规则、边 kind、module 判定与派生数据规则为群内架构师决定(T-001)。
+
 ```ts
-// GET /api/repos/:id/graph?parentId=m:src/core
+// GET /api/repos/:id/graph?parentId=m:src/core&includeExternal=true
 export type GraphData = {
-  nodes: Array<{
-    id: string;               // 确定性:"m:<dir>" | "f:<path>",同 commit 内稳定
-    type: 'module' | 'file' | 'external';
-    label: string;
-    parentId?: string;        // 父模块 id
-    path?: string;
-    weight?: number;          // 可选:重要度(fanIn 等)
-    loc?: number;             // 可选:代码行数
-    summary?: string;
-  }>;
+  // 节点字段平铺,不放 data;不含 x/y
+  nodes: Array<
+    | { id: `m:${string}`; type: 'module'; parentId: null; label; path; weight?; loc?; summary? }          // 根模块 id = "m:."
+    | { id: `d:${string}`; type: 'dir'; parentId: ModuleId | DirId; label; path; weight?; loc?; summary? }
+    | { id: `f:${string}`; type: 'file'; parentId: ModuleId | DirId; label; path; weight?; loc?; summary?;
+        externalDeps?: string[] }                                                                      // 该文件 import 的外部包名
+    | { id: `x:${string}`; type: 'external'; parentId: null; label; path; weight? }                     // 派生,见下
+  >;
   edges: Array<{
-    id: string; source: string; target: string;
-    kind: 'import' | 'type-import' | 'dynamic-import' | 're-export' | 'aggregated';
-    weight: number;           // 聚合边 = 被聚合的 import 次数
+    id: string; source: NodeId; target: NodeId;
+    type: 'imports';
+    kind: 'static' | 'dynamic' | 'type-only' | 're-export' | 'require';
+    srcFileId: `f:${string}`;   // 产生这条依赖的源文件
+    weight: number;             // 原始边 = 1;聚合边 = 被聚合的 import 次数
+    aggregated?: boolean;       // 派生的聚合边
   }>;
   meta: { repoId: number; commitSha: string; parentId: string | null; language: 'typescript'; cycles?: string[][] };
 };
 // 不含 x/y 与 meta.layout:布局由前端 elkjs 计算
 ```
+- **nodeId**:前缀 `m:`/`d:`/`f:` + 相对仓库根的 POSIX 路径(如 `m:src/core`、`d:src/core/utils`、`f:src/core/a.ts`),根模块 `m:.`;同 commit 内确定、稳定。module 的 `parentId` 为 `null`,dir/file 的 `parentId` 为直接上一层。
+- **module 判定**:有 workspace 时每个 workspace 包根目录为 module,嵌套在包内的目录不再拆 module(作为 dir);无 workspace 时取 `src/` 下一级目录,无 `src/` 则取仓库根下一级目录;其余根文件归 `m:.`。
+- **入库 vs 派生**:分析器只产出 module/dir/file 节点和 file→file 原始边(file 节点带 `externalDeps`)。`x:<包名>` 节点、指向它的边,以及 `aggregated` 边,都是 API 层返回图时**现算的派生数据,不入库**。`includeExternal=true` 时才返回 `x:` 节点(默认不返回)。
 - 问答 `citation.nodeId` 必须是本图中存在的 `file` 节点 id(校验项之一),前端据此高亮并沿 `parentId` 展开祖先模块。
-- 按 `parentId` 返回直接子节点 + 相关边;一端落在返回范围外的边,聚合到范围内最近的祖先节点,`kind='aggregated'`,`weight` 累加。
+- 按 `parentId` 返回直接子节点 + 相关边;一端落在返回范围外的边,聚合到范围内最近的祖先节点,`aggregated: true`,`weight` 累加,`kind` 取被聚合边中最多的一种。
 - **单次返回节点 ≤ 300**:超过时按聚合层(dir → module)继续上卷,前端按 `parentId` 逐层懒加载。
 - **zod 默认只展示 module 层**,双击模块再下钻文件。
 - 示例仓库(zustand/hono/zod/trpc)的布局由前端**离线预计算为静态布局文件**(如 `apps/web/public/layouts/{owner}-{repo}-{commitSha}.json`,按 nodeId 存坐标),与图数据分开,不进服务端数据;**示例仓库固定 commitSha**(预解析与布局文件都按该 commitSha 生成并命名),前端加载时校验图数据 `meta.commitSha` 与布局文件一致,不一致则退回 elkjs 实时计算;非示例仓库一律前端 elkjs 实时布局。
@@ -296,7 +302,7 @@ CREATE TABLE symbol (
 CREATE TABLE edge (
   id BIGINT PRIMARY KEY AUTO_INCREMENT, repo_id BIGINT NOT NULL, commit_sha CHAR(40) NOT NULL,
   level ENUM('file','module','dir','symbol') NOT NULL, type ENUM('imports','calls','contains') NOT NULL,
-  src_id VARCHAR(255) NOT NULL, dst_id VARCHAR(255) NOT NULL,   -- 即图 nodeId(m:<dir> / f:<path>)
+  src_id VARCHAR(255) NOT NULL, dst_id VARCHAR(255) NOT NULL,   -- 即图 nodeId(m:/d:/f: + POSIX 路径;只存原始 file→file 边,x: 与聚合边不入库)
   weight INT DEFAULT 1,
   KEY idx_src (repo_id, commit_sha, level, src_id), KEY idx_dst (repo_id, commit_sha, level, dst_id)
 );
