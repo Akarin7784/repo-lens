@@ -6,4 +6,11 @@ export * from './redis-keys.js';
 export * from './store.js';
 export { MemoryStore } from './memory-store.js';
 export { MysqlStore } from './mysql-store.js';
-export { runMigrations, MIGRATIONS_DIR } from './migrate.js';
+export {
+  runMigrations,
+  waitForSchema,
+  withRetry,
+  expectedMigrations,
+  MIGRATIONS_DIR,
+  type RetryOptions,
+} from './migrate.js';

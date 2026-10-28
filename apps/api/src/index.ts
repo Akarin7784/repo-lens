@@ -16,7 +16,8 @@ const JOB_OPTS = {
 const port = Number(process.env.API_PORT ?? 4000);
 const dbUrl = process.env.DATABASE_URL;
 if (!dbUrl) throw new Error('DATABASE_URL 未设置');
-await runMigrations(dbUrl);
+// 只有 API 跑迁移:连接有限次重试 + GET_LOCK 互斥
+await runMigrations(dbUrl, { label: 'api' });
 const redis = new Redis(process.env.REDIS_URL ?? 'redis://127.0.0.1:6379', {
   maxRetriesPerRequest: null,
 });

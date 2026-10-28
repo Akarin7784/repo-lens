@@ -1,13 +1,14 @@
 import { Worker } from 'bullmq';
 import { Redis } from 'ioredis';
-import { MysqlStore, redisKeys, runMigrations } from '@repolens/db';
+import { MysqlStore, redisKeys, waitForSchema } from '@repolens/db';
 import { loadConfig } from './config.js';
 import { RedisEventSink } from './events.js';
 import { ANALYZE_QUEUE, processAnalyzeJob, type AnalyzeJobData } from './queue.js';
 
 const config = loadConfig();
 if (!config.databaseUrl) throw new Error('DATABASE_URL 未设置');
-await runMigrations(config.databaseUrl);
+// 迁移只由 API 执行;worker 等待 schema 就绪(有限次指数退避重试)
+await waitForSchema(config.databaseUrl, { label: 'worker' });
 const store = MysqlStore.create(config.databaseUrl);
 const redis = new Redis(config.redisUrl, { maxRetriesPerRequest: null });
 const events = new RedisEventSink(redis);
