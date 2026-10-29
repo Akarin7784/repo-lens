@@ -6,8 +6,6 @@ export type GraphState = {
   nodes: GraphNode[];
   /** 已加载的边:fixture 为全部原始边;真实接口为各层切片返回的边(按 id 去重累积) */
   edges: GraphEdge[];
-  /** 各层切片 meta.cycles 的并集(强连通分量,成员为该层可见节点 id) */
-  cycles: string[][];
   /** 真实接口:边 id → 返回它的层(根层 null)。fixture 为空 */
   edgeLayer: Map<string, string | null>;
   /** 子节点被截断的层(x-graph-truncated: true),根层记为 '' */
@@ -23,7 +21,6 @@ export type GraphAction =
       type: 'init';
       nodes: GraphNode[];
       edges: GraphEdge[];
-      cycles?: string[][];
       /** 真实接口:记录边所属层 */
       layered?: boolean;
       truncated?: boolean;
@@ -33,7 +30,6 @@ export type GraphAction =
       parentId: string;
       nodes: GraphNode[];
       edges?: GraphEdge[];
-      cycles?: string[][];
       truncated?: boolean;
     }
   | { type: 'expand'; id: string }
@@ -44,7 +40,6 @@ export type GraphAction =
 export const initialGraphState: GraphState = {
   nodes: [],
   edges: [],
-  cycles: [],
   edgeLayer: new Map(),
   truncated: new Set(),
   loaded: new Set(),
@@ -59,7 +54,6 @@ export function graphReducer(state: GraphState, action: GraphAction): GraphState
         ...initialGraphState,
         nodes: action.nodes,
         edges: action.edges,
-        cycles: mergeCycles([], action.cycles),
         edgeLayer: new Map(action.layered ? action.edges.map((e) => [e.id, null] as const) : []),
         truncated: action.truncated ? new Set(['']) : new Set(),
         loaded: new Set(),
@@ -76,7 +70,6 @@ export function graphReducer(state: GraphState, action: GraphAction): GraphState
         ...state,
         nodes: [...state.nodes, ...add],
         edges: addEdges.length ? [...state.edges, ...addEdges] : state.edges,
-        cycles: mergeCycles(state.cycles, action.cycles),
         edgeLayer: addEdges.length
           ? new Map([...state.edgeLayer, ...addEdges.map((e) => [e.id, action.parentId] as const)])
           : state.edgeLayer,
@@ -109,21 +102,4 @@ export function graphReducer(state: GraphState, action: GraphAction): GraphState
     case 'toggleExternal':
       return { ...state, includeExternal: !state.includeExternal };
   }
-}
-
-/** 合并环列表,按排序后的成员去重 */
-export function mergeCycles(
-  base: readonly string[][],
-  add: readonly (readonly string[])[] | undefined,
-): string[][] {
-  if (!add?.length) return base as string[][];
-  const key = (c: readonly string[]) => [...c].sort().join('|');
-  const seen = new Set(base.map(key));
-  const out = [...base];
-  for (const c of add)
-    if (!seen.has(key(c))) {
-      seen.add(key(c));
-      out.push([...c]);
-    }
-  return out;
 }

@@ -320,7 +320,7 @@ describe('真实接口模式(T-007)', () => {
       ...extra,
     }) as GraphEdge;
 
-  it('childrenLoaded 累积切片边(按 id 去重)和 meta.cycles', () => {
+  it('childrenLoaded 累积切片边(按 id 去重),不再收集 meta.cycles', () => {
     let s = graphReducer(initialGraphState, {
       type: 'init',
       nodes: [mod('m:a'), mod('m:b')],
@@ -331,17 +331,15 @@ describe('真实接口模式(T-007)', () => {
       parentId: 'm:a',
       nodes: [file('a/x.ts', 'm:a'), file('a/y.ts', 'm:a')],
       edges: [e('f:a/x.ts', 'f:a/y.ts'), e('f:a/y.ts', 'f:a/x.ts')],
-      cycles: [['f:a/x.ts', 'f:a/y.ts']],
     });
     s = graphReducer(s, {
       type: 'childrenLoaded',
       parentId: 'm:a',
       nodes: [],
       edges: [e('f:a/x.ts', 'f:a/y.ts')],
-      cycles: [['f:a/y.ts', 'f:a/x.ts']],
     });
     expect(s.edges).toHaveLength(3);
-    expect(s.cycles).toEqual([['f:a/x.ts', 'f:a/y.ts']]);
+    expect('cycles' in s).toBe(false);
     void SHA;
   });
 
