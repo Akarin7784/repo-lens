@@ -358,10 +358,10 @@ describe('EMBEDDING_PROVIDER 配置', () => {
     expect(c.dashscope).toEqual({
       apiKey: undefined,
       baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-      model: 'text-embedding-v3',
+      model: 'qwen3.7-text-embedding',
       dim: 1024,
       batchSize: 10,
-      tpm: 1_000_000,
+      tpm: 800_000,
       taskBudgetCents: 50,
     });
     expect(

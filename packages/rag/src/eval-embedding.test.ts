@@ -41,13 +41,13 @@ describe('评测 embedding 选择(scripts/rag-eval.mjs)', () => {
     );
   });
 
-  it('dashscope:默认模型仍为 text-embedding-v3;集合名带 provider+model+请求维度', () => {
+  it('dashscope:默认模型为 qwen3.7-text-embedding;集合名带 provider+model+请求维度', () => {
     const c = selectEvalEmbedding({ EMBEDDING_PROVIDER: 'dashscope', DASHSCOPE_API_KEY: FAKE_KEY });
     expect([c.provider, c.model, c.dim, c.collection]).toEqual([
       'dashscope',
-      'text-embedding-v3',
+      'qwen3.7-text-embedding',
       1024,
-      'eval_dashscope_text-embedding-v3_1024',
+      'eval_dashscope_qwen3_7-text-embedding_1024',
     ]);
     const q = selectEvalEmbedding({
       EMBEDDING_PROVIDER: 'dashscope',
@@ -98,6 +98,7 @@ describe('评测 embedding 选择(scripts/rag-eval.mjs)', () => {
     const c = selectEvalEmbedding({
       EMBEDDING_PROVIDER: 'dashscope',
       DASHSCOPE_API_KEY: FAKE_KEY,
+      DASHSCOPE_EMBEDDING_MODEL: 'text-embedding-v3', // 64 维仅 v3 支持
       DASHSCOPE_EMBEDDING_DIM: '64',
     });
     const urls: string[] = [];
@@ -131,6 +132,7 @@ describe('评测索引用量行(EVAL embedding usage)', () => {
   const c = selectEvalEmbedding({
     EMBEDDING_PROVIDER: 'dashscope',
     DASHSCOPE_API_KEY: FAKE_KEY,
+    DASHSCOPE_EMBEDDING_MODEL: 'text-embedding-v3', // 64 维仅 v3 支持
     DASHSCOPE_EMBEDDING_DIM: '64',
     EMBEDDING_BATCH_SIZE: '2',
   });

@@ -22,7 +22,7 @@ export const evalCollectionName = (provider: string, model: string, dim: number)
 /**
  * 按环境变量选择评测 embedding。只读 EMBEDDING_PROVIDER(local|dashscope,缺省 local)
  * 与 DASHSCOPE_*;local 时模型固定为 multilingual-e5-small(与改动前一致,不读 EMBEDDING_MODEL)。
- * dashscope 时 key 只取 DASHSCOPE_API_KEY,缺失直接报错(只报变量名)。默认模型不变(text-embedding-v3)。
+ * dashscope 时 key 只取 DASHSCOPE_API_KEY,缺失直接报错(只报变量名)。默认模型 qwen3.7-text-embedding(与 config 的 DASHSCOPE_DEFAULT_MODEL 一致)。
  */
 export function selectEvalEmbedding(env: NodeJS.ProcessEnv = process.env): EvalEmbeddingChoice {
   const pick = (k: string) => (env[k] === undefined ? {} : { [k]: env[k] });

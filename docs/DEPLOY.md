@@ -173,7 +173,7 @@ volumes: { repos: {}, mysql: {}, qdrant: {}, caddy_data: {} }
 
 ## 4. 外部服务与密钥
 - 默认 `EMBEDDING_PROVIDER=dashscope`,不放本地模型;`LLM_PROVIDER=deepseek`。
-- embedding 模型:**冻结后才定**。部署配置不写死 qwen3.7 的哪一个:`DASHSCOPE_EMBEDDING_MODEL=<冻结记录里的模型,占位>`,来源为调优轮次后的冻结记录;未冻结前留空即代码默认 `text-embedding-v3`。
+- embedding 模型:调优集选型为 `qwen3.7-text-embedding`(见 docs/EMBEDDING_TUNING.md,冻结待做),代码默认已改为它;`DASHSCOPE_EMBEDDING_MODEL` 留空即用默认,冻结后以冻结记录为准。
 - 密钥只放服务器 `/etc/repo-lens/*.env`,`root:root`、`chmod 600`;不写进 compose、不入库(仓库 `.gitignore` / `.dockerignore` 已含 `.env`);日志不含密钥。检查命令(只看有无泄漏,不打印值):
   ```
   stat -c '%a %U %n' /etc/repo-lens/*.env          # 期望 600 root
