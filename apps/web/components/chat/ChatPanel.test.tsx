@@ -11,6 +11,10 @@ function ask(q = '【假数据】示例问题') {
   fireEvent.click(screen.getByRole('button', { name: '发送' }));
 }
 const lastAnswer = () => screen.getAllByTestId('answer').at(-1)!;
+/** T-238:纯 fake 下刷 microtask / React 提交,不按真实时间轮询 */
+async function flushFake() {
+  await act(() => vi.advanceTimersByTimeAsync(0));
+}
 const errorOf = (code: string, retryable: boolean): FakeStep =>
   ({
     event: 'error',
@@ -150,17 +154,19 @@ describe('<ChatPanel>(假流,未接真实后端)', () => {
   });
 
   it('RATE_LIMITED:重试按钮倒计时 10 秒后才可点', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
+    // T-238:纯 fake timers;勿开 shouldAdvanceTime(真实时间会叠手动推进,CI 易越档)
+    vi.useFakeTimers();
     render(
       <ChatPanel repoId={1} transport={createFakeTransport([errorOf('RATE_LIMITED', true)])} />,
     );
     ask();
-    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('提问太频繁'));
+    await flushFake();
+    expect(screen.getByRole('alert')).toHaveTextContent('提问太频繁');
     expect(screen.getByRole('button', { name: '重试' })).toBeDisabled();
     expect(screen.getByTestId('retry-wait')).toHaveTextContent('10 秒后可再提问');
-    // 倒计时是逐秒 setTimeout 链,CI 上 React 提交可能晚于计时推进:多推一秒并等待提交,避免时序抖动
-    for (let i = 0; i < 11; i++) await act(async () => void vi.advanceTimersByTime(1000));
-    await waitFor(() => expect(screen.getByRole('button', { name: '重试' })).toBeEnabled());
+    // 逐秒 setTimeout 链(effect 依赖 left 才挂下一个):每次推 1s 并让 React 提交后再推
+    for (let i = 0; i < 10; i++) await act(() => vi.advanceTimersByTimeAsync(1000));
+    expect(screen.getByRole('button', { name: '重试' })).toBeEnabled();
     expect(screen.queryByTestId('retry-wait')).toBeNull();
   });
 
@@ -225,7 +231,7 @@ describe('<ChatPanel>(假流,未接真实后端)', () => {
   });
 
   it('20 秒无 token 且无 done/error → abort 并显示「回答超时,请重试」', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.useFakeTimers();
     const signals: AbortSignal[] = [];
     render(
       <ChatPanel
@@ -235,8 +241,8 @@ describe('<ChatPanel>(假流,未接真实后端)', () => {
     );
     ask();
     expect(screen.getByText('正在思考…')).toBeTruthy();
-    await act(async () => void vi.advanceTimersByTime(CLIENT_TIMEOUT_MS + 10));
-    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('回答超时,请重试'));
+    await act(() => vi.advanceTimersByTimeAsync(CLIENT_TIMEOUT_MS + 10));
+    expect(screen.getByRole('alert')).toHaveTextContent('回答超时,请重试');
     expect(signals[0]!.aborted).toBe(true);
   });
 
@@ -605,40 +611,36 @@ describe('<ChatPanel> 契约 v2:429 按 details.reason 细分(T-235)', () => {
 
 describe('<ChatPanel> 等待提示行(T-237)', () => {
   it('提示行是 role=status(polite);61 秒走 1 秒后跨档重新取整「约 2 分钟」→「约 1 分钟」', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    try {
-      const fetchImpl = vi.fn(
-        async () =>
-          new Response(
-            JSON.stringify({
-              error: {
-                code: 'RATE_LIMITED',
-                message: 'x',
-                details: { reason: 'rate_limit', retryAfterSec: 61 },
-              },
-            }),
-            { status: 429, headers: { 'content-type': 'application/json' } },
-          ),
-      );
-      render(
-        <ChatPanel
-          repoId={1}
-          transport={createFetchTransport('http://api.test', fetchImpl as unknown as typeof fetch)}
-        />,
-      );
-      ask();
-      await waitFor(() => expect(lastAnswer().dataset.status).toBe('error'));
-      const status = within(lastAnswer()).getByRole('status');
-      expect(status).toHaveAttribute('aria-live', 'polite');
-      expect(status).toBe(within(lastAnswer()).getByTestId('retry-wait'));
-      expect(status.textContent).toBe('约 2 分钟后可再提问');
-      await act(async () => void vi.advanceTimersByTime(1000));
-      await waitFor(() =>
-        expect(within(lastAnswer()).getByRole('status').textContent).toBe('约 1 分钟后可再提问'),
-      );
-      expect(within(lastAnswer()).getByRole('button', { name: '重试' })).toBeDisabled();
-    } finally {
-      vi.useRealTimers();
-    }
+    // T-238:纯 fake;推进后同步断言(勿 waitFor 按真实时间轮询,CI 负载下会叠真实秒导致仍见「约 2 分钟」)
+    vi.useFakeTimers();
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            error: {
+              code: 'RATE_LIMITED',
+              message: 'x',
+              details: { reason: 'rate_limit', retryAfterSec: 61 },
+            },
+          }),
+          { status: 429, headers: { 'content-type': 'application/json' } },
+        ),
+    );
+    render(
+      <ChatPanel
+        repoId={1}
+        transport={createFetchTransport('http://api.test', fetchImpl as unknown as typeof fetch)}
+      />,
+    );
+    ask();
+    await flushFake();
+    expect(lastAnswer().dataset.status).toBe('error');
+    const status = within(lastAnswer()).getByRole('status');
+    expect(status).toHaveAttribute('aria-live', 'polite');
+    expect(status).toBe(within(lastAnswer()).getByTestId('retry-wait'));
+    expect(status.textContent).toBe('约 2 分钟后可再提问');
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    expect(within(lastAnswer()).getByRole('status').textContent).toBe('约 1 分钟后可再提问');
+    expect(within(lastAnswer()).getByRole('button', { name: '重试' })).toBeDisabled();
   });
 });
