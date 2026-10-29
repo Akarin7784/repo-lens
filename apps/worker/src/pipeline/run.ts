@@ -9,8 +9,24 @@ import {
   type AnalyzeResult,
   type ScanResult,
 } from '@repolens/analyzer';
-import type { FileInput, GraphInput, Store, SymbolInput, TaskStats } from '@repolens/db';
-import type { GraphNode, ProgressStage } from '@repolens/shared';
+import {
+  DEFAULT_PRICES,
+  LlmGateway,
+  MemoryLlmKv,
+  createLlmClient,
+  summarizeRepo,
+  summaryKey,
+  type SummaryFileInput,
+} from '@repolens/agent';
+import {
+  GraphIndex,
+  type FileInput,
+  type GraphInput,
+  type Store,
+  type SymbolInput,
+  type TaskStats,
+} from '@repolens/db';
+import { sensitiveRule, type GraphNode, type ProgressStage } from '@repolens/shared';
 import type { WorkerConfig } from '../config.js';
 import type { EventSink } from '../events.js';
 import { cloneAtCommit } from './clone.js';
@@ -31,6 +47,8 @@ export interface PipelineDeps {
   config: WorkerConfig;
   /** 图入库后回调(Redis 图缓存失效) */
   onGraphPersisted?: (repoId: number, commitSha: string) => Promise<void>;
+  /** LLM 网关;不传时按 config.llm 建一个进程内缓存的网关(测试用) */
+  gateway?: LlmGateway;
   /** 仅测试:允许 file:// 克隆源 */
   allowFileProtocol?: boolean;
 }
@@ -258,8 +276,27 @@ export async function runPipeline(
       data: { jobId, repoId, graphUrl: `/api/repos/${repoId}/graph` },
     });
 
-    // summarizing / embedding:W2 实现,当前为桩
-    await progress('summarizing', 50, '摘要尚未实现(W2),跳过');
+    // summarizing 50–85:失败或预算熔断只发一次 stage_error,任务仍然 done(摘要非关键路径)
+    stage = 'summarizing';
+    await progress('summarizing', 50, '生成分层摘要');
+    try {
+      const msg = await runSummaries(data, deps, root, progress);
+      await progress('summarizing', 85, msg.text);
+      if (msg.warn)
+        await events.emit({
+          event: 'stage_error',
+          data: { jobId, stage: 'summarizing', message: msg.warn },
+        });
+    } catch (err) {
+      await events.emit({
+        event: 'stage_error',
+        data: {
+          jobId,
+          stage: 'summarizing',
+          message: `摘要失败,已跳过:${err instanceof Error ? err.message : String(err)}`,
+        },
+      });
+    }
     await progress('embedding', 85, '向量化尚未实现(W2),跳过');
 
     await store.updateTask(jobId, { stage: 'done', progress: 100, finishedAt: new Date() });
@@ -299,4 +336,116 @@ export async function runPipeline(
     }
     throw pe;
   }
+}
+
+const gatewayOf = (deps: PipelineDeps) =>
+  deps.gateway ??
+  new LlmGateway({
+    client: createLlmClient(deps.config.llm),
+    kv: new MemoryLlmKv(),
+    usage: deps.store,
+    prices: DEFAULT_PRICES,
+    dailyBudgetCents: deps.config.llm.dailyBudgetCents,
+    taskBudgetCents: deps.config.llm.taskBudgetCents,
+  });
+
+/** 分层摘要(T-211):file → dir → module → repo,写 summary 表;返回进度消息与降级告警 */
+export async function runSummaries(
+  data: AnalyzeJobData,
+  deps: PipelineDeps,
+  root: string,
+  progress: (s: ProgressStage, pct: number, message?: string) => Promise<void>,
+): Promise<{ text: string; warn: string | null }> {
+  const { store, config } = deps;
+  const { repoId, commitSha, jobId } = data;
+  const g = await store.loadGraph(repoId, commitSha);
+  const tree = new GraphIndex(g);
+  const importsOf = new Map<string, string[]>();
+  for (const e of g.edges) {
+    const l = importsOf.get(e.srcId) ?? [];
+    l.push(e.dstId.replace(/^[a-z]:/, ''));
+    importsOf.set(e.srcId, l);
+  }
+  const files = new Map<string, SummaryFileInput>();
+  for (const f of g.files) {
+    const id = `f:${f.path}`;
+    const rel = safeRelPath(f.path);
+    let code: string | null = null;
+    try {
+      code = rel ? await readFile(join(root, rel), 'utf8') : null;
+    } catch {
+      code = null;
+    }
+    // 敏感文件(.env*、密钥/证书、内容含 key 特征):只留路径/语言/行数做规则摘要
+    const sensitive = sensitiveRule(f.path, code);
+    if (sensitive) {
+      files.set(id, {
+        path: f.path,
+        lang: f.lang ?? langOf(f.path),
+        loc: f.loc,
+        exports: [],
+        imports: [],
+        contentHash: '',
+        code: null,
+        sensitive,
+      });
+      continue;
+    }
+    files.set(id, {
+      path: f.path,
+      lang: f.lang ?? langOf(f.path),
+      loc: f.loc,
+      exports: await store.exportsOf(f.id),
+      imports: [...(importsOf.get(id) ?? []), ...f.externalDeps].sort(),
+      contentHash: code === null ? '' : sha256(code),
+      code,
+    });
+  }
+  const readOpt = async (p: string) => {
+    try {
+      const c = await readFile(join(root, p), 'utf8');
+      // README / package.json 也会进 repo 提示词:含 key 特征就不送
+      return sensitiveRule(p, c) ? null : c;
+    } catch {
+      return null;
+    }
+  };
+  const existing = new Map(
+    (await store.listSummaries(repoId)).map((r) => [summaryKey(r.level, r.targetId), r]),
+  );
+  const task = await store.getTask(jobId);
+  let last = 50;
+  const r = await summarizeRepo(
+    {
+      repoName: data.repoUrl
+        .replace(/\.git$/, '')
+        .split('/')
+        .slice(-2)
+        .join('/'),
+      tree,
+      files,
+      readme: await readOpt('README.md'),
+      packageJson: await readOpt('package.json'),
+      existing,
+    },
+    {
+      gateway: gatewayOf(deps),
+      summaryModel: config.llm.summaryModel,
+      repoModel: config.llm.chatModel,
+      repoId,
+      taskId: task?.id,
+      save: (row) => store.upsertSummary(repoId, row),
+      onProgress: async (done, total) => {
+        const pct = 50 + Math.floor((done / total) * 34);
+        if (pct <= last) return;
+        last = pct;
+        await progress('summarizing', pct, `摘要 ${done}/${total}`);
+      },
+    },
+  );
+  const text = `摘要完成:LLM ${r.llm},规则 ${r.rule},复用 ${r.reused},失败降级 ${r.failed}`;
+  const warn = r.budget
+    ? `LLM ${r.budget.scope === 'task' ? '单任务' : '日'}预算已用尽,${r.budget.degraded} 个节点改用规则摘要`
+    : null;
+  return { text, warn };
 }

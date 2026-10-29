@@ -1,3 +1,4 @@
+import { readLlmConfig } from '@repolens/agent';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -45,6 +46,7 @@ export function testConfig(over: Partial<WorkerConfig> = {}): WorkerConfig {
     parseTimeoutMs: 5000,
     parseConcurrency: 4,
     concurrency: 1,
+    llm: readLlmConfig({}),
     ...over,
   };
 }

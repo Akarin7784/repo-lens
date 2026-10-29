@@ -153,7 +153,7 @@ describe('BreakerClient cb:llm:{provider}', () => {
     await expect(b.call(call)).rejects.toBeInstanceOf(CircuitOpenError);
     expect(inner.n).toBe(5);
     // 模拟 60 秒到期
-    await kv.set('p:cb:llm:deepseek', '', 'EX', 1);
+    await kv.set('p:cb:llm:deepseek', '');
     inner.ok = true;
     await expect(b.call(call)).resolves.toMatchObject({ text: 'ok' });
   });

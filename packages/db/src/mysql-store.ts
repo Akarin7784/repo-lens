@@ -7,6 +7,8 @@ import type {
   GraphInput,
   LlmUsageInput,
   LlmUsageRow,
+  SummaryLevel,
+  SummaryRow,
   RepoRow,
   Store,
   StoredGraph,
@@ -85,6 +87,51 @@ export class MysqlStore implements Store {
     if (Object.keys(set).length)
       await this.db.update(schema.repo).set(set).where(eq(schema.repo.id, id));
   }
+  async listSummaries(repoId: number): Promise<SummaryRow[]> {
+    const rows = await this.db
+      .select()
+      .from(schema.summary)
+      .where(eq(schema.summary.repoId, repoId));
+    return rows.map((r) => ({
+      level: r.level,
+      targetId: r.targetId,
+      inputHash: r.inputHash,
+      model: r.model ?? '',
+      content: r.content ?? '',
+      tokensIn: r.tokensIn ?? 0,
+      tokensOut: r.tokensOut ?? 0,
+    }));
+  }
+
+  async upsertSummary(repoId: number, row: SummaryRow) {
+    const v = {
+      inputHash: row.inputHash,
+      model: row.model,
+      content: row.content,
+      tokensIn: row.tokensIn,
+      tokensOut: row.tokensOut,
+    };
+    await this.db
+      .insert(schema.summary)
+      .values({ repoId, level: row.level, targetId: row.targetId, ...v })
+      .onDuplicateKeyUpdate({ set: v });
+  }
+
+  async getSummary(repoId: number, level: SummaryLevel, targetId: string) {
+    const [r] = await this.db
+      .select({ content: schema.summary.content })
+      .from(schema.summary)
+      .where(
+        and(
+          eq(schema.summary.repoId, repoId),
+          eq(schema.summary.level, level),
+          eq(schema.summary.targetId, targetId),
+        ),
+      )
+      .limit(1);
+    return r?.content ?? null;
+  }
+
   async insertLlmUsage(row: LlmUsageInput) {
     await this.db.insert(schema.llmUsage).values({
       repoId: row.repoId ?? null,

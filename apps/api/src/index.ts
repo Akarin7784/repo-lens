@@ -1,5 +1,6 @@
 import { Queue } from 'bullmq';
 import { Redis } from 'ioredis';
+import { readLlmConfig } from '@repolens/agent';
 import { MysqlStore, queueJobId, runMigrations } from '@repolens/db';
 import { buildApp, type AnalyzeJobData, type JobQueue } from './app.js';
 import { createGitHost } from './githost.js';
@@ -16,6 +17,8 @@ const JOB_OPTS = {
 
 // 限额配置不合法时启动即失败
 const limits = readSubmitLimits(process.env);
+// LLM 配置(provider、日/任务预算)不合法时启动即失败;/chat(W3)接入网关时使用
+const llm = readLlmConfig(process.env);
 const port = Number(process.env.API_PORT ?? 4000);
 const dbUrl = process.env.DATABASE_URL;
 if (!dbUrl) throw new Error('DATABASE_URL 未设置');
@@ -42,6 +45,10 @@ const app = buildApp({
   maxRepoMb: Number(process.env.MAX_REPO_MB ?? 300),
   ...limits,
 });
+app.log.info(
+  { llmProvider: llm.provider, dailyBudgetCents: llm.dailyBudgetCents },
+  'llm config loaded',
+);
 app.listen({ port, host: '0.0.0.0' }).catch((err: unknown) => {
   app.log.error(err);
   process.exit(1);

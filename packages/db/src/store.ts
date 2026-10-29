@@ -127,6 +127,11 @@ export interface Store {
   }): Promise<{ task: TaskRow; created: boolean }>;
   getTask(jobId: string): Promise<TaskRow | null>;
   latestTask(repoId: number): Promise<TaskRow | null>;
+  /** 某仓库全部摘要(T-211;uk = repoId + level + targetId,新 commit 覆盖旧行) */
+  listSummaries(repoId: number): Promise<SummaryRow[]>;
+  /** 按 (repoId, level, targetId) 插入或覆盖 */
+  upsertSummary(repoId: number, row: SummaryRow): Promise<void>;
+  getSummary(repoId: number, level: SummaryLevel, targetId: string): Promise<string | null>;
   /** 写一条 llm_usage(每次 LLM 调用一条,含缓存命中与失败;T-210) */
   insertLlmUsage(row: LlmUsageInput): Promise<void>;
   /** 某任务的 llm_usage,按 id 升序 */
@@ -162,4 +167,18 @@ export interface LlmUsageInput {
 }
 export interface LlmUsageRow extends LlmUsageInput {
   id: number;
+}
+
+/** schema 的 level 枚举;module 层摘要与 dir 共用 'dir',targetId 用 m:… 区分 */
+export type SummaryLevel = 'function' | 'file' | 'dir' | 'repo';
+export interface SummaryRow {
+  level: SummaryLevel;
+  /** 节点 id(f:/d:/m:)或 'repo' */
+  targetId: string;
+  inputHash: string;
+  /** 模型名;规则摘要为 'rule' */
+  model: string;
+  content: string;
+  tokensIn: number;
+  tokensOut: number;
 }

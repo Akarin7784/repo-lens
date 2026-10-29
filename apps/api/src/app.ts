@@ -297,7 +297,10 @@ export function buildApp(deps?: AppDeps): FastifyInstance {
       );
       if (row) exports = await store.exportsOf(row.id);
     }
-    const res: NodeDetail = { ...d, exports };
+    // summary 表不带 commit:返回该仓库最近一次分析写入的摘要;module 存在 level 'dir' 下
+    const level = d.kind === 'file' ? 'file' : d.kind === 'external' ? null : 'dir';
+    const summary = level ? await store.getSummary(repoId, level, nodeId) : null;
+    const res: NodeDetail = { ...d, exports, summary };
     return res;
   });
 

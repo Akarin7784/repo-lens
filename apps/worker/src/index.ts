@@ -1,17 +1,32 @@
 import { Worker } from 'bullmq';
 import { Redis } from 'ioredis';
+import { DEFAULT_PRICES, LlmGateway, createLlmClient } from '@repolens/agent';
 import { MysqlStore, redisKeys, waitForSchema } from '@repolens/db';
 import { loadConfig } from './config.js';
 import { RedisEventSink } from './events.js';
 import { ANALYZE_QUEUE, processAnalyzeJob, type AnalyzeJobData } from './queue.js';
 
+// 配置(含 LLM 预算等)不合法时启动即失败
 const config = loadConfig();
+console.log(
+  `[worker] llm provider=${config.llm.provider} daily=${config.llm.dailyBudgetCents}¢ task=${config.llm.taskBudgetCents}¢`,
+);
 if (!config.databaseUrl) throw new Error('DATABASE_URL 未设置');
 // 迁移只由 API 执行;worker 等待 schema 就绪(有限次指数退避重试)
 await waitForSchema(config.databaseUrl, { label: 'worker' });
 const store = MysqlStore.create(config.databaseUrl);
 const redis = new Redis(config.redisUrl, { maxRetriesPerRequest: null });
 const events = new RedisEventSink(redis);
+// LLM 网关:缓存与预算计数放 Redis,记账写 llm_usage
+const gateway = new LlmGateway({
+  // LLM_PROVIDER=deepseek 时套 cb:llm:{provider} 熔断(状态放共享 Redis)
+  client: createLlmClient(config.llm, { kv: redis }),
+  kv: redis,
+  usage: store,
+  prices: DEFAULT_PRICES,
+  dailyBudgetCents: config.llm.dailyBudgetCents,
+  taskBudgetCents: config.llm.taskBudgetCents,
+});
 
 async function invalidateGraphCache(repoId: number, commitSha: string) {
   const stream = redis.scanStream({ match: redisKeys.graphPattern(repoId, commitSha), count: 200 });
@@ -22,7 +37,13 @@ async function invalidateGraphCache(repoId: number, commitSha: string) {
 const worker = new Worker<AnalyzeJobData>(
   ANALYZE_QUEUE,
   (job) =>
-    processAnalyzeJob(job, { store, events, config, onGraphPersisted: invalidateGraphCache }),
+    processAnalyzeJob(job, {
+      store,
+      events,
+      config,
+      gateway,
+      onGraphPersisted: invalidateGraphCache,
+    }),
   { connection: redis.duplicate(), concurrency: config.concurrency },
 );
 

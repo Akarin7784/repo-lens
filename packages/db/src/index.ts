@@ -4,6 +4,7 @@ export * as schema from './schema.js';
 export { TASK_STAGES } from './schema.js';
 export * from './redis-keys.js';
 export * from './store.js';
+export { GraphIndex } from './graph-index.js';
 export { MemoryStore } from './memory-store.js';
 export { MysqlStore } from './mysql-store.js';
 export {

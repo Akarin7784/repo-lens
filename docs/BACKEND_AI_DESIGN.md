@@ -344,6 +344,16 @@ data: {"jobId":"12:a1b2c3d","status":"done","stats":{"files":412,"chunks":2900,"
 - 文件内容不变 → function/file 摘要的 hash 也不变；只有变化文件的祖先 dir 要重新摘要（一般只有几条）。
 - 跨仓库复用：同一个 `content_hash` 的文件（比如 vendored 代码）直接共用摘要。
 
+**W2 实现现状(T-211,与上表的差异)**
+- 不做 function 层:file 层输入改为路径、语言、行数、导出名、依赖,加截断后的源码(150 行或 6000 字,放在 `<code>` 里),输出 `{"summary"}` ≤ 600 字(`PROMPT_VERSION=1`)。
+- module 摘要存在 `summary.level='dir'`,targetId 为 `m:…`;repo 摘要的 targetId 为 `repo`。表里没有 commit 列,重新分析会覆盖旧行;节点详情返回最近一次写入的摘要。
+- 数量控制(D8):按 fanIn 取前 200 个文件走 LLM,其余文件用规则摘要。dir、module、repo 走 LLM;repo 用 chatModel,其余用 summaryModel。
+- 规则摘要:file 为路径、语言、行数、导出名;dir 为路径、文件数、行数、主要子项;repo 为名称、文件数、模块列表。model 记为 `rule`,同样按 input_hash 复用。
+- 复用:库里已有行的 input_hash 与本次一致时直接复用,不经过网关,所以同 commit 重跑不新增 llm_usage。
+- 失败(D6):LLM 不可用或 JSON 解析失败时,改写 user 消息重试 1 次(避开已缓存的坏响应),仍失败就用规则摘要。
+- 成本上限与降级:每个任务受 `LLM_TASK_BUDGET_CENTS`(默认 30¢)约束,全站受日预算约束。网关一抛 `BUDGET_EXCEEDED`,剩余节点全部改用规则摘要,已复用的 LLM 摘要保留。summarizing 阶段只发一次 `stage_error`,任务仍然 done。摘要阶段的意外异常同样只发一次 stage_error,然后跳过摘要。
+- 并发:进程内池,默认 4;尚未接独立的 summarize 队列和全局 limiter。跨仓库按 content_hash 复用尚未实现。
+
 ---
 
 ## 5. 代码 RAG
@@ -456,7 +466,8 @@ flowchart TD
 
 T-210 已实现的部分（不依赖 D1）：
 - 缓存：`llm:{sha256(model + messages + maxTokens/temperature/json)}`，TTL 30d；命中不查预算、不计费，记一条 `cache_hit=1` 的 `llm_usage`。
-- 预算：Redis 计数 `llm:spend:day:{yyyyMMdd UTC}`（TTL 2d）与 `llm:spend:task:{taskId}`（TTL 7d），单位 micro-USD；调用前检查、调用后 INCRBY，并发时最多超出（并发数 − 1）次调用的花费。超限抛 `BUDGET_EXCEEDED`（scope = daily / task），不调用模型、不写 `llm_usage`。
+- 缓存内容损坏（非 JSON 或字段缺失/非法）按未命中处理，照常检查预算并调用，成功后覆盖。
+- 预算：Redis 计数 `llm:spend:day:{yyyyMMdd UTC}`（TTL 2d）与 `llm:spend:task:{taskId}`（TTL 7d），单位 micro-USD；调用前检查、调用后 INCRBY，并发时最多超出（并发数 − 1）次调用的花费。超限抛 `BUDGET_EXCEEDED`（scope = daily / task），不调用模型、不写 `llm_usage`。**`DAILY_LLM_BUDGET_CENTS=0` 表示禁止一切模型调用**（只允许缓存命中），`LLM_TASK_BUDGET_CENTS=0` 同理只作用于分析任务；日预算按 UTC 自然日分桶，过 UTC 零点（北京时间 08:00）自动恢复。预算变量在 api 和 worker 启动时由 `readLlmConfig` 校验，非法即启动失败。
 - 记账：每次调用写 `llm_usage`；费用按价格表（每百万 token 美元）换算成 micro-USD 并向上取整；不在价格表里的模型拒绝调用。模型失败写 `ok=0` 并抛 `LLM_UNAVAILABLE`，重试与规则降级由调用方（T-211，D6）负责。
 - `FakeLlm`：确定性输出、不联网、不需要 key；`LLM_PROVIDER` 默认 `fake`。
 
@@ -467,6 +478,23 @@ T-210b（DeepSeek，D1）：
 - 价格（https://api-docs.deepseek.com/quick_start/pricing ，2026-10-29 核对，美元/百万 token）：`deepseek-flash` 高峰价缓存命中输入 0.006、未命中输入 0.30、输出 1.2；官方非高峰时段减半。记账一律按高峰价（偏保守，记账 ≥ 实际扣费）。费用 = 未命中输入×未命中价 + 命中输入×命中价 + 输出×输出价，向上取整到 micro-USD。
 - 熔断 `BreakerClient`：`cb:llm:{provider}:fails` 记连续失败（成功清零），达到 5 次写 `cb:llm:{provider}`（EX 60），打开期间直接抛 `CircuitOpenError`，网关按 `LLM_UNAVAILABLE` 处理（写 `ok=0`），60s 后自动放行下一次调用。
 - 手动冒烟：`LLM_PROVIDER=deepseek node scripts/llm-smoke.mjs`（需先 build agent），只打印回复长度、usage 和折算费用，不打印 key；CI 不跑。
+**敏感文件排除（T-210b，接真实 provider 前的合并门槛）**：
+- 事实：`LLM_PROVIDER=deepseek` 时，被选中做 LLM 摘要的文件源码、README、package.json 会发送给第三方模型服务（DeepSeek）。前端提交页与 README 的提示由前端/架构师负责。
+- 规则表在 `packages/shared/src/sensitive.ts`（摘要、embedding 切块、T-213 `/files` 共用一份）：
+  - 路径（按文件名）：`.env*`、`*.pem`、`id_rsa*` / `id_ed25519*` 等 SSH 私钥、`*.key`、证书 `*.crt` / `*.cer` / `*.der` / `*.p7b`、密钥库 `*.p12` / `*.pfx` / `*.jks` / `*.keystore`、`.npmrc`、`.netrc`、`.pgpass`、`.htpasswd`。
+  - 内容特征：`-----BEGIN … PRIVATE KEY-----`、`AKIA` / `ASIA` + 16 位、`ghp_` / `gho_` / `ghu_` / `ghs_` / `ghr_` / `github_pat_`、`sk-`（含 `sk-proj-`、`sk-ant-`）+ ≥20 位、Slack `xox?-`、Google `AIza…`、Stripe `sk_live_` / `rk_live_`。往 `SENSITIVE_PATH_RULES` / `SENSITIVE_CONTENT_RULES` 追加即可扩展。日志和提示里只出现规则 id，不出现命中内容。
+- 命中后：
+  - 摘要：只做规则摘要，输入只有路径、语言、行数。不含源码，也不含导出名和 import：导出名是从源码里抽出来的标识符，可能就是常量名或值本身，与其逐个甄别不如一律不带。`contentHash` 也置空。worker 读文件时判定（`sensitiveRule(path, code)`），`summarizeRepo` 见到 `sensitive` 再强制一次。
+  - README / package.json 内容命中特征时不进 repo 提示词。
+  - embedding / RAG：分析器对命中文件 `chunks = []` 并标 `ParsedFile.sensitive`，因此不会被切块、向量化或作为检索来源；图节点与导入关系保留。
+  - `/files`（T-213）：命中文件不返回内容，只返回 `SENSITIVE_PLACEHOLDER`「已排除」提示。这一条写进 T-213 的验收标准和测试。
+  - `.env`、`.pem` 等非源码文件本来就不在扫描结果里，规则表对它们是第二道保险。
+- 测试：
+  - `packages/shared/src/sensitive.test.ts`：规则正反例。
+  - `packages/analyzer/src/sensitive.test.ts`：切块路径。
+  - `apps/worker/src/sensitive.e2e.test.ts`：端到端。夹具仓库含 `.env`、`.npmrc`、`certs/dev.pem`、带 `AKIAFAKEFAKEFAKE1111` 的 `src/aws.ts`、带假 PEM 的 `src/tls.ts`；跑完整流水线，记录 FakeLlm 收到的每个请求体，断言请求体、摘要和切块文本都不含假 key。
+- 克隆：只接受公开仓库，克隆不带凭据。worker `clone.ts` 用独立 env（`HOME=/nonexistent`、`GIT_CONFIG_GLOBAL=/dev/null`、`GIT_CONFIG_NOSYSTEM=1`、`GIT_ASKPASS=/bin/false`、`GIT_TERMINAL_PROMPT=0`），不继承进程环境，因此读不到 git 凭据助手和 token；只允许 https。`GITHUB_TOKEN` 只在 api 的 GitHub REST 元数据请求（`repoInfo`）里使用，不参与 ls-remote 或克隆。
+
 - 待做：备用 provider（§10.4）。embedding：DeepSeek 官方 API 文档没有 embedding 接口，型号、维度、价格均未确认，供应商仍按 D4 另定。
 
 ---

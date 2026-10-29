@@ -2,6 +2,8 @@ import type {
   GraphInput,
   LlmUsageInput,
   LlmUsageRow,
+  SummaryLevel,
+  SummaryRow,
   RepoRow,
   Store,
   StoredEdge,
@@ -21,6 +23,18 @@ export class MemoryStore implements Store {
   private graphs = new Map<string, { g: StoredGraph; symbols: Map<number, SymbolInput[]> }>();
   private seq = { repo: 0, task: 0, file: 0, usage: 0 };
   private usage: LlmUsageRow[] = [];
+  private summaries = new Map<number, Map<string, SummaryRow>>();
+
+  async listSummaries(repoId: number) {
+    return [...(this.summaries.get(repoId)?.values() ?? [])].map((r) => ({ ...r }));
+  }
+  async upsertSummary(repoId: number, row: SummaryRow) {
+    if (!this.summaries.has(repoId)) this.summaries.set(repoId, new Map());
+    this.summaries.get(repoId)!.set(`${row.level}|${row.targetId}`, { ...row });
+  }
+  async getSummary(repoId: number, level: SummaryLevel, targetId: string) {
+    return this.summaries.get(repoId)?.get(`${level}|${targetId}`)?.content ?? null;
+  }
 
   async insertLlmUsage(row: LlmUsageInput) {
     this.usage.push({

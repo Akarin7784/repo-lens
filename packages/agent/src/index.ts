@@ -25,3 +25,18 @@ export {
   BREAKER_OPEN_S,
   type BreakerKv,
 } from './llm/breaker.js';
+export * from './summary/rules.js';
+export { PROMPT_VERSION, parseSummary, truncateCode } from './summary/prompts.js';
+export {
+  summarizeRepo,
+  summaryKey,
+  inputHash,
+  RULE_MODEL,
+  REPO_TARGET,
+  DEFAULT_MAX_LLM_FILES,
+  type SummaryFileInput,
+  type SummarizeInput,
+  type SummarizeDeps,
+  type SummarizeResult,
+} from './summary/summarize.js';
+export { MemoryLlmKv } from './llm/memory-kv.js';
