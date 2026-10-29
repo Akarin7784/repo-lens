@@ -89,6 +89,8 @@ export function AnalysisWorkspace({ repoId, jobId, repoLabel, api: apiProp, even
   // T-222:右栏详情。选中来自 GraphView;?node= 写入 URL,打开链接时据此跳转
   const [sel, setSel] = useState<({ id: string } & GraphNeighbors) | null>(null);
   const [jump, setJump] = useState<{ id: string; n: number } | null>(null);
+  // T-222d:抽屉「关闭」= 取消选中(与 Esc / 点空白一致),计数变化即触发
+  const [closeTick, setCloseTick] = useState(0);
   const jumpTo = useCallback((id: string) => setJump((j) => ({ id, n: (j?.n ?? 0) + 1 })), []);
   const urlRead = useRef(false);
   useEffect(() => {
@@ -156,12 +158,34 @@ export function AnalysisWorkspace({ repoId, jobId, repoLabel, api: apiProp, even
               onRootLoaded={setRootInfo}
               onSelectionChange={setSel}
               jumpRequest={jump}
+              clearRequest={closeTick}
             />
           </div>
+          {/* T-222d:≥768px 为右栏;<768px 未选中时隐藏,选中后为底部抽屉(高 55vh,图仍可见),可关闭 */}
           <aside
             aria-label="详情"
-            className="w-[360px] shrink-0 overflow-y-auto border-l border-line bg-bg"
+            data-testid="detail-aside"
+            data-drawer={sel ? 'open' : 'closed'}
+            className={
+              'overflow-y-auto border-line bg-bg ' +
+              'md:static md:block md:h-auto md:max-h-none md:w-[360px] md:shrink-0 md:rounded-none md:border-l md:border-t-0 md:shadow-none ' +
+              (sel
+                ? 'fixed inset-x-0 bottom-0 z-30 max-h-[55vh] rounded-t-[12px] border-t shadow-soft'
+                : 'hidden')
+            }
           >
+            {sel && (
+              <div className="sticky top-0 z-10 flex justify-end border-b border-line bg-bg px-3 py-1.5 md:hidden">
+                <button
+                  type="button"
+                  aria-label="关闭详情"
+                  onClick={() => setCloseTick((t) => t + 1)}
+                  className="rounded-control border border-line bg-panel px-3 py-1 text-[13px] text-fg"
+                >
+                  关闭
+                </button>
+              </div>
+            )}
             {sel ? (
               <NodeDetail
                 repoId={repoId}
