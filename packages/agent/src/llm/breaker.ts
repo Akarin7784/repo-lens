@@ -23,6 +23,7 @@ export class CircuitOpenError extends Error {
  * provider 级熔断(BACKEND_AI_DESIGN §7):连续 5 次失败后打开 60 秒,期间直接失败、不打 provider。
  * - `cb:llm:{provider}` 存在即为打开状态(TTL 60s,到期自动半开:下一次调用放行)。
  * - `cb:llm:{provider}:fails` 为连续失败计数,任何一次成功清零。
+ * - 半开:打开时把失败计数置为 阈值-1,到期后放行的第一次调用再失败就立即重新打开 60 秒;成功则清零、完全关闭。
  * 多个进程共享同一 Redis 时状态共享。
  */
 export class BreakerClient implements LlmClient {
@@ -51,9 +52,11 @@ export class BreakerClient implements LlmClient {
     } catch (err) {
       const n = await this.kv.incrby(this.failKey, 1);
       await this.kv.expire(this.failKey, openS * 10);
-      if (n >= (this.o.failures ?? BREAKER_FAILURES)) {
+      const max = this.o.failures ?? BREAKER_FAILURES;
+      if (n >= max) {
         await this.kv.set(this.openKey, '1', 'EX', openS);
-        await this.kv.set(this.failKey, '0', 'EX', openS * 10);
+        // 进入半开预备:计数停在阈值-1,到期后第一次失败就重新打开
+        await this.kv.set(this.failKey, String(max - 1), 'EX', openS * 10);
       }
       throw err;
     }

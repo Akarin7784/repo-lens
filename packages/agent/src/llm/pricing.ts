@@ -12,11 +12,16 @@ export interface ModelPrice {
 export type PriceTable = Record<string, ModelPrice>;
 
 export const DEFAULT_PRICES: PriceTable = {
-  // DeepSeek(D1):https://api-docs.deepseek.com/quick_start/pricing ,2026-10-29 核对。
-  // 官方分时段计价,高峰(周一至周五 UTC 01:00–04:00、06:00–10:00)为下列价格,其余时段减半。
-  // 为了预算保守,一律按高峰价记账(实际扣费 ≤ 记账)。
+  // DeepSeek(D1):https://api-docs.deepseek.com/zh-cn/quick_start/pricing ,2026-10-29 架构核对。
+  // 官方页按「人民币元 / 百万 token」标价;高峰价(元):
+  //   flash:缓存命中输入 0.04、未命中输入 2、输出 8
+  //   pro:  缓存命中输入 0.30、未命中输入 9.0、输出 27.0
+  // 这里统一按 1 USD ≈ 6.67 元换算成美元(两个模型同一汇率),保留到 0.001:
+  //   flash:0.04/6.67≈0.006、2/6.67≈0.30、8/6.67≈1.2
+  //   pro:  0.30/6.67≈0.045、9.0/6.67≈1.35、27.0/6.67≈4.05
+  // 官方分时段计价,其余时段减半;为了预算保守,一律按高峰价记账(实际扣费 ≤ 记账)。
   'deepseek-flash': { inputPerMTok: 0.3, cachedInputPerMTok: 0.006, outputPerMTok: 1.2 },
-  'deepseek-v4-pro': { inputPerMTok: 1.32, cachedInputPerMTok: 0.044, outputPerMTok: 3.96 },
+  'deepseek-v4-pro': { inputPerMTok: 1.35, cachedInputPerMTok: 0.045, outputPerMTok: 4.05 },
   'gpt-4o-mini': { inputPerMTok: 0.15, outputPerMTok: 0.6 },
   'gpt-4o': { inputPerMTok: 2.5, outputPerMTok: 10 },
   'text-embedding-3-small': { inputPerMTok: 0.02, outputPerMTok: 0 },

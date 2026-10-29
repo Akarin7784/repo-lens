@@ -478,16 +478,17 @@ T-210b（DeepSeek，D1）：
 - 模型变量：保留 `LLM_SUMMARY_MODEL`（file/dir/module 摘要）与 `LLM_CHAT_MODEL`（repo 摘要、问答），默认都为 `deepseek-flash`；fake 下忽略。
 - usage：`tokensIn = prompt_tokens`（= `prompt_cache_hit_tokens + prompt_cache_miss_tokens`），`tokensOut = completion_tokens`，`cachedTokensIn = prompt_cache_hit_tokens`。来源 https://api-docs.deepseek.com/api/create-chat-completion 。
 - 价格（https://api-docs.deepseek.com/quick_start/pricing ，2026-10-29 核对，美元/百万 token）：`deepseek-flash` 高峰价缓存命中输入 0.006、未命中输入 0.30、输出 1.2；官方非高峰时段减半。记账一律按高峰价（偏保守，记账 ≥ 实际扣费）。费用 = 未命中输入×未命中价 + 命中输入×命中价 + 输出×输出价，向上取整到 micro-USD。
-- 熔断 `BreakerClient`：`cb:llm:{provider}:fails` 记连续失败（成功清零），达到 5 次写 `cb:llm:{provider}`（EX 60），打开期间直接抛 `CircuitOpenError`，网关按 `LLM_UNAVAILABLE` 处理（写 `ok=0`），60s 后自动放行下一次调用。
+- 熔断 `BreakerClient`：`cb:llm:{provider}:fails` 记连续失败（成功清零），达到 5 次写 `cb:llm:{provider}`（EX 60），打开期间直接抛 `CircuitOpenError`，网关按 `LLM_UNAVAILABLE` 处理（写 `ok=0`），60s 后进入半开、放行下一次调用：打开时把失败计数置为 阈值-1，所以半开调用失败会立即重新打开 60s，成功则清零。
 - 手动冒烟：`LLM_PROVIDER=deepseek node scripts/llm-smoke.mjs`（需先 build agent），只打印回复长度、usage 和折算费用，不打印 key；CI 不跑。
 **敏感文件排除（T-210b，接真实 provider 前的合并门槛）**：
 - 事实：`LLM_PROVIDER=deepseek` 时，被选中做 LLM 摘要的文件源码、README、package.json 会发送给第三方模型服务（DeepSeek）。前端提交页与 README 的提示由前端/架构师负责。
 - 规则表在 `packages/shared/src/sensitive.ts`（摘要、embedding 切块、T-213 `/files` 共用一份）：
-  - 路径（按文件名）：`.env*`、`*.pem`、`id_rsa*` / `id_ed25519*` 等 SSH 私钥、`*.key`、证书 `*.crt` / `*.cer` / `*.der` / `*.p7b`、密钥库 `*.p12` / `*.pfx` / `*.jks` / `*.keystore`、`.npmrc`、`.netrc`、`.pgpass`、`.htpasswd`。
-  - 内容特征：`-----BEGIN … PRIVATE KEY-----`、`AKIA` / `ASIA` + 16 位、`ghp_` / `gho_` / `ghu_` / `ghs_` / `ghr_` / `github_pat_`、`sk-`（含 `sk-proj-`、`sk-ant-`）+ ≥20 位、Slack `xox?-`、Google `AIza…`、Stripe `sk_live_` / `rk_live_`。往 `SENSITIVE_PATH_RULES` / `SENSITIVE_CONTENT_RULES` 追加即可扩展。日志和提示里只出现规则 id，不出现命中内容。
+  - 路径（按文件名）：`.env*`、`*.pem`、`id_rsa*` / `id_ed25519*` 等 SSH 私钥、`*.key`、证书 `*.crt` / `*.cer` / `*.der` / `*.p7b`、密钥库 `*.p12` / `*.pfx` / `*.jks` / `*.keystore`、`.npmrc`、`.netrc`、`.pgpass`、`.htpasswd`、凭据文件 `credentials`（无扩展名或配置/数据扩展名，如 `~/.aws/credentials`、`.git-credentials`、`gcp-credentials.json`；`credentials.ts` 这类源码不算）、`secrets.*`。
+  - 内容特征：`-----BEGIN … PRIVATE KEY-----`、`AKIA` / `ASIA` + 16 位、`ghp_` / `gho_` / `ghu_` / `ghs_` / `ghr_` / `github_pat_`、`sk-`（含 `sk-proj-`、`sk-ant-`）+ ≥20 位、Slack `xox?-`、Google `AIza…`、Stripe `sk_live_` / `rk_live_` / `sk_test_` / `rk_test_`、npm `_authToken=`（`${ENV}` 引用除外）与 `npm_` + 36 位、JWT（`eyJ….eyJ….…` 三段）。往 `SENSITIVE_PATH_RULES` / `SENSITIVE_CONTENT_RULES` 追加即可扩展。日志和提示里只出现规则 id，不出现命中内容。
 - 命中后：
-  - 摘要：只做规则摘要，输入只有路径、语言、行数。不含源码，也不含导出名和 import：导出名是从源码里抽出来的标识符，可能就是常量名或值本身，与其逐个甄别不如一律不带。`contentHash` 也置空。worker 读文件时判定（`sensitiveRule(path, code)`），`summarizeRepo` 见到 `sensitive` 再强制一次。
+  - 摘要：只做规则摘要，输入只有路径、语言、行数。不含源码，也不含导出名和 import：导出名是从源码里抽出来的标识符，可能就是常量名或值本身，与其逐个甄别不如一律不带。`contentHash` 也置空。worker 读文件时判定（`exclusionRule(path, code)`），`summarizeRepo` 见到 `sensitive` 再强制一次。
   - README / package.json 内容命中特征时不进 repo 提示词。
+- 超限与二进制：扫描阶段已跳过 >500KB 与前 8KB 含 NUL 的文件（不成为图节点）；送模型/切块前再用 `exclusionRule` = 敏感规则 → `unsendableContentRule`（UTF-8 字节数 > `MAX_SEND_BYTES` 500KB 记 `too-large`，含 NUL 记 `binary`）兜一次，命中同样只给规则摘要、不送模型、不切块。
   - embedding / RAG：分析器对命中文件 `chunks = []` 并标 `ParsedFile.sensitive`，因此不会被切块、向量化或作为检索来源；图节点与导入关系保留。
   - `/files`（T-213）：命中文件不返回内容，只返回 `SENSITIVE_PLACEHOLDER`「已排除」提示。这一条写进 T-213 的验收标准和测试。
   - `.env`、`.pem` 等非源码文件本来就不在扫描结果里，规则表对它们是第二道保险。

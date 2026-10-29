@@ -26,7 +26,7 @@ import {
   type SymbolInput,
   type TaskStats,
 } from '@repolens/db';
-import { sensitiveRule, type GraphNode, type ProgressStage } from '@repolens/shared';
+import { exclusionRule, type GraphNode, type ProgressStage } from '@repolens/shared';
 import type { WorkerConfig } from '../config.js';
 import type { EventSink } from '../events.js';
 import { cloneAtCommit } from './clone.js';
@@ -376,8 +376,8 @@ export async function runSummaries(
     } catch {
       code = null;
     }
-    // 敏感文件(.env*、密钥/证书、内容含 key 特征):只留路径/语言/行数做规则摘要
-    const sensitive = sensitiveRule(f.path, code);
+    // 敏感文件(.env*、密钥/证书、内容含 key 特征)以及超限/二进制内容:只留路径/语言/行数做规则摘要
+    const sensitive = exclusionRule(f.path, code);
     if (sensitive) {
       files.set(id, {
         path: f.path,
@@ -404,8 +404,8 @@ export async function runSummaries(
   const readOpt = async (p: string) => {
     try {
       const c = await readFile(join(root, p), 'utf8');
-      // README / package.json 也会进 repo 提示词:含 key 特征就不送
-      return sensitiveRule(p, c) ? null : c;
+      // README / package.json 也会进 repo 提示词:含 key 特征、超限或二进制就不送
+      return exclusionRule(p, c) ? null : c;
     } catch {
       return null;
     }

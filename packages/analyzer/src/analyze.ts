@@ -1,4 +1,4 @@
-import { sensitiveRule } from '@repolens/shared';
+import { exclusionRule } from '@repolens/shared';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { GraphData } from '@repolens/shared';
@@ -69,7 +69,7 @@ export async function analyzeRepo(
         limit(async () => {
           const content = await readFile(join(repo.root, path), 'utf8');
           // 敏感判断用整份原始内容、在切块之前做:key 落在切块边界或不在任何切块里也能命中
-          const rule = sensitiveRule(path, content);
+          const rule = exclusionRule(path, content);
           const p = await analyzer.parseFile({ path, content });
           // 敏感文件:保留图结构(导入关系),但不产出切块,内容不会进 embedding 与检索
           if (rule) {

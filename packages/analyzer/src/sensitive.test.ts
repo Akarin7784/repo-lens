@@ -34,6 +34,30 @@ describe('敏感文件 → 不产出 embedding 切块', () => {
     expect(r.graph.nodes.some((n) => n.id === 'f:src/aws.ts')).toBe(true);
   });
 
+  it('超限 / 二进制内容(绕过扫描直接传入):只留节点,不切块', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'rl-big-'));
+    const files: Record<string, string> = {
+      'tsconfig.json': '{}',
+      'src/ok.ts': 'export function ok() {\n  return 1;\n}\n',
+      'src/big.ts': 'export function big() {\n  return 1;\n}\n' + '// pad\n'.repeat(80_000),
+      'src/bin.ts': 'export function bin() {\n  return 1;\n}\n\u0000\u0001',
+    };
+    for (const [p, c] of Object.entries(files)) {
+      mkdirSync(dirname(join(root, p)), { recursive: true });
+      writeFileSync(join(root, p), c);
+    }
+    const r = await analyzeRepo({ root, files: ['src/ok.ts', 'src/big.ts', 'src/bin.ts'] });
+    const by = new Map(r.parsed.map((p) => [p.path, p]));
+    expect(by.get('src/big.ts')).toMatchObject({ sensitive: 'too-large', chunks: [] });
+    expect(by.get('src/bin.ts')).toMatchObject({ sensitive: 'binary', chunks: [] });
+    expect(by.get('src/ok.ts')?.chunks.length).toBeGreaterThan(0);
+    // 正常扫描阶段本来就会跳过它们(第一道闸)
+    const scanned = scanSourceFiles(root);
+    expect(scanned).toContain('src/ok.ts');
+    expect(scanned).not.toContain('src/big.ts');
+    expect(scanned).not.toContain('src/bin.ts');
+  });
+
   it('假 key 正好落在切块边界(跨两个切块 / 夹在切块之间)也按整份原始内容排除', async () => {
     // PEM 头在函数 a 的最后一行、正文和尾在函数 b;AKIA 在两个函数之间的注释行,不属于任何切块
     const src = (pemHead: string, aws: string) =>

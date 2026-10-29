@@ -25,6 +25,14 @@ export const SENSITIVE_PATH_RULES: SensitivePathRule[] = [
   { id: 'netrc', test: /^[._]netrc$/ },
   { id: 'pgpass', test: /^\.pgpass$/ },
   { id: 'htpasswd', test: /^\.htpasswd$/ },
+  // credentials、credentials.json、.git-credentials、gcp-credentials.json 这类凭据文件;
+  // 只认无扩展名或配置/数据扩展名,credentials.ts 这类源码不算
+  {
+    id: 'credentials-file',
+    test: /(^|[._-])credentials(\.(json|ya?ml|toml|ini|xml|txt|csv|conf|cfg|properties))?$/,
+  },
+  // secrets.yml / secrets.json / secrets.enc.yaml …
+  { id: 'secrets-file', test: /^secrets\./ },
 ];
 
 export const SENSITIVE_CONTENT_RULES: SensitiveContentRule[] = [
@@ -34,7 +42,12 @@ export const SENSITIVE_CONTENT_RULES: SensitiveContentRule[] = [
   { id: 'openai-style-key', test: /\bsk-(proj-|ant-)?[A-Za-z0-9_-]{20,}/ },
   { id: 'slack-token', test: /\bxox[abprs]-[A-Za-z0-9-]{10,}/ },
   { id: 'google-api-key', test: /\bAIza[0-9A-Za-z_-]{35}\b/ },
-  { id: 'stripe-secret-key', test: /\b[sr]k_live_[0-9A-Za-z]{16,}/ },
+  { id: 'stripe-secret-key', test: /\b[sr]k_(live|test)_[0-9A-Za-z]{16,}/ },
+  // .npmrc 写法:`//registry.npmjs.org/:_authToken=…` 或顶层 `_authToken=…`(值为 ${ENV} 引用的不算)
+  { id: 'npm-auth-token', test: /(^|:)_authToken\s*=\s*(?!\$\{)\S+/m },
+  { id: 'npm-token', test: /\bnpm_[A-Za-z0-9]{36}\b/ },
+  // JWT:三段 base64url,头和载荷都以 eyJ 开头
+  { id: 'jwt', test: /\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/ },
 ];
 
 const base = (p: string) => (p.split('/').pop() ?? p).toLowerCase();
@@ -53,6 +66,21 @@ export function sensitiveContentRule(content: string): string | null {
 /** 路径或内容任一命中即排除;content 为 null 时只看路径 */
 export function sensitiveRule(path: string, content: string | null): string | null {
   return sensitivePathRule(path) ?? (content === null ? null : sensitiveContentRule(content));
+}
+
+/** 送模型 / 切块的单文件体积上限(字节),与 analyzer 扫描的 MAX_FILE_BYTES 一致 */
+export const MAX_SEND_BYTES = 500 * 1024;
+
+/** 超限或二进制(含 NUL)的内容:只给规则摘要,不送模型、不切块 */
+export function unsendableContentRule(content: string): 'too-large' | 'binary' | null {
+  if (Buffer.byteLength(content, 'utf8') > MAX_SEND_BYTES) return 'too-large';
+  if (content.includes('\u0000')) return 'binary';
+  return null;
+}
+
+/** 送模型 / 切块前的总闸:敏感规则 → 体积 → 二进制;content 为 null 时只看路径 */
+export function exclusionRule(path: string, content: string | null): string | null {
+  return sensitiveRule(path, content) ?? (content === null ? null : unsendableContentRule(content));
 }
 
 /** `/files` 等对外接口返回的占位提示 */

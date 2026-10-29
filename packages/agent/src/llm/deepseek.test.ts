@@ -160,6 +160,26 @@ describe('BreakerClient cb:llm:{provider}', () => {
     inner.ok = true;
     await expect(b.call(call)).resolves.toMatchObject({ text: 'ok' });
   });
+  it('半开:到期放行的第一次调用失败 → 立即重新打开;半开成功 → 完全关闭', async () => {
+    const kv = new MemoryKv();
+    const inner = failing();
+    const b = new BreakerClient(inner, kv);
+    for (let i = 0; i < 5; i++) await expect(b.call(call)).rejects.toThrow('boom');
+    await kv.set('cb:llm:deepseek', ''); // 模拟 60 秒到期
+    await expect(b.call(call)).rejects.toThrow('boom');
+    expect(await kv.get('cb:llm:deepseek')).toBe('1');
+    await expect(b.call(call)).rejects.toBeInstanceOf(CircuitOpenError);
+    expect(inner.n).toBe(6);
+    // 再次到期,半开成功 → 清零;之后要重新攒满 5 次才打开
+    await kv.set('cb:llm:deepseek', '');
+    inner.ok = true;
+    await b.call(call);
+    inner.ok = false;
+    for (let i = 0; i < 4; i++) await expect(b.call(call)).rejects.toThrow('boom');
+    expect(await kv.get('cb:llm:deepseek')).toBeFalsy();
+    await expect(b.call(call)).rejects.toThrow('boom');
+    expect(await kv.get('cb:llm:deepseek')).toBe('1');
+  });
   it('中间一次成功清零连续失败计数', async () => {
     const kv = new MemoryKv();
     const inner = failing();
@@ -223,6 +243,23 @@ describe('按真实 usage 记账(deepseek-flash,高峰价)', () => {
     expect(costMicroUsd(p, 1000, 200, 600)).toBe(364);
     expect(costMicroUsd(p, 1000, 200)).toBe(540);
     expect(costMicroUsd(p, 10, 0, 999)).toBe(1); // cached 截断到 tokensIn
+  });
+  it('flash / pro 都按同一汇率 6.67 元/USD 从官方人民币高峰价换算(误差 < 1%)', () => {
+    const CNY_PER_USD = 6.67;
+    const cny = {
+      'deepseek-flash': { cached: 0.04, input: 2, output: 8 },
+      'deepseek-v4-pro': { cached: 0.3, input: 9.0, output: 27.0 },
+    };
+    for (const [m, c] of Object.entries(cny)) {
+      const p = DEFAULT_PRICES[m]!;
+      const near = (usd: number, rmb: number) =>
+        expect(Math.abs(usd * CNY_PER_USD - rmb) / rmb).toBeLessThan(0.01);
+      near(p.cachedInputPerMTok!, c.cached);
+      near(p.inputPerMTok, c.input);
+      near(p.outputPerMTok, c.output);
+    }
+    // pro:400*1.35 + 600*0.045 + 200*4.05 = 540 + 27 + 810 = 1377 micro-USD
+    expect(costMicroUsd(DEFAULT_PRICES['deepseek-v4-pro']!, 1000, 200, 600)).toBe(1377);
   });
   it('网关 → 熔断 → DeepSeekClient → 假服务:cost 与 llm_usage 一致', async () => {
     const env = { LLM_PROVIDER: 'deepseek', DEEPSEEK_API_KEY: KEY, DEEPSEEK_BASE_URL: base };
