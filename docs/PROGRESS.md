@@ -215,6 +215,8 @@
 
 - 2026-10-30:合并 #128(91c2dca,#126 非阻塞 2–5 跟进):抽出 \`mysqlServerRootUrl\`/\`mysqlUrlWithDb\`(WHATWG URL 设 pathname,无库名不再被吃成 \`mysql://\`);\`probeService\` 第 N 次(i>1)才连上时 warn 且文案无「不可达」;最坏耗时注释(不加 PROBE_ATTEMPTS);脱敏边界单测锁定现状(口令含空格/无 scheme)。4 文件,仅测试基础设施。架构师与独立审查均无阻塞。CI/smoke 绿(run 40932255496)。不声称证明原 flaky 根因。
 
+- 2026-10-30:合并 #130(eba524f)与 #131(02d13a9)。#130 gateway E:`redactSecrets` 抽到 `llm/redact.ts`(每次 `new RegExp`),deepseek/gateway 共用并去掉 sticky `SK_PATTERN`;llm.test 误命名「补行 warn」改为「缓存写失败 warn」,补 zero-cost insert 含 sk- 脱敏与 errMsg 边界(短 sk-/多 key/空串);不脱敏 `LlmError.cause`(上层只读 `cause.name`)。#131 worker C:`buildJobDeps` 抽出装配、index 连库后调用;去掉脆的源码 grep 测;CachedEmbedder 同文本二次不增 fetch;DEPLOY 旧「无 key 退回 baseEmbedder」结论已清。架构师与独立审查均无阻塞。非阻塞后续:BACKEND_AI_DESIGN 仍写旧 `SK_PATTERN` 路径;index 接线仍无行为级测;onGraphPersisted 逐 key del(键量通常不大)。CI/smoke 均绿。开源 PR 队列暂空。
+
 ## 演示检查清单(第 4 周前逐项勾选)
 - [ ] 演示前抽查 hono 的 `embeddingStatus` 为 `ready`(或 `reused`)。
 - [ ] 「镜像构建下载模型」:CI 已验证(GitHub 环境直连 huggingface.co,手动 workflow `worker-model-build.yml` run 40838998679,5 个文件 `sha256sum -c` 全 OK,镜像内 ONNX embedding 维度 384,构建约 58 秒);**演示机(国内网络)上的构建仍待验证**:演示前先在演示机构建好镜像,下载慢时设 `EMBEDDING_MODEL_BASE_URL` 为镜像站(哈希校验不变)。
