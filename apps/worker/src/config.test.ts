@@ -12,6 +12,6 @@ describe('loadConfig 接入 readLlmConfig', () => {
   it('LLM 配置非法时直接抛错(worker 启动失败)', () => {
     expect(() => loadConfig({ DAILY_LLM_BUDGET_CENTS: 'abc' })).toThrow(/DAILY_LLM_BUDGET_CENTS/);
     expect(() => loadConfig({ LLM_TASK_BUDGET_CENTS: '-5' })).toThrow(/LLM_TASK_BUDGET_CENTS/);
-    expect(() => loadConfig({ LLM_PROVIDER: 'openai' })).toThrow(/D1/);
+    expect(() => loadConfig({ LLM_PROVIDER: 'openai' })).toThrow(/LLM_PROVIDER/);
   });
 });

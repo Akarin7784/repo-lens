@@ -302,7 +302,9 @@ describe('readLlmConfig', () => {
       /DAILY_LLM_BUDGET_CENTS/,
     );
   });
-  it('真实 provider 尚未实现(待 D1),显式报错而不是悄悄用 fake', () => {
-    expect(() => readLlmConfig({ LLM_PROVIDER: 'openai', LLM_API_KEY: 'k' })).toThrow(/D1/);
+  it('未知 provider 显式报错而不是悄悄用 fake', () => {
+    expect(() => readLlmConfig({ LLM_PROVIDER: 'openai', LLM_API_KEY: 'k' })).toThrow(
+      /LLM_PROVIDER/,
+    );
   });
 });

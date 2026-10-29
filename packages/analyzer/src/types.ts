@@ -49,6 +49,8 @@ export interface ParsedFile {
   /** 导出名(named / default / re-export 的别名;`export *` 记为 '*') */
   exports: string[];
   chunks: CodeChunk[];
+  /** 命中敏感文件规则(@repolens/shared sensitive)时的规则 id;此时 chunks 为空,不进 embedding / RAG */
+  sensitive?: string;
   /** Tree-sitter 语法树里有 ERROR 节点(仍尽量抽取) */
   hasSyntaxError: boolean;
   /** 单文件解析超时(Tree-sitter setTimeoutMicros),此时 imports/symbols 为空,文件仍作为节点保留 */
