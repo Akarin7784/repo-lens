@@ -425,6 +425,8 @@ volumes: { repos: {}, mysql: {}, qdrant: {} }
 | `LLM_BASE_URL` / `LLM_API_KEY` | `https://api.openai.com/v1` | OpenAI 兼容 |
 | `LLM_CHAT_MODEL` / `LLM_SUMMARY_MODEL` | `gpt-4o` / `gpt-4o-mini` | 问答/摘要模型 |
 | `EMBEDDING_MODEL` | `text-embedding-3-small` | 向量 |
+
+> 供应商已定为 DeepSeek,embedding 供应商待定,变量以 `docs/WEEK2_PLAN.md` D1/D4 和 `.env.example` 为准,上表 OpenAI 示例值仅作历史参考。
 | `GITHUB_TOKEN` | 只读 PAT(可选) | 提高 API 限额 |
 | `MAX_REPO_MB` / `MAX_FILES` | `300` / `5000` | 仓库限制 |
 | `DAILY_LLM_BUDGET_CENTS` | `500` | 每日预算熔断 |
