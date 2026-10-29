@@ -35,6 +35,7 @@ import { loadLayoutFile, type LayoutFile } from '../../lib/layout/layoutFile';
 import { edgeTypes } from './WeightedEdge';
 import { nodeTypes } from './nodes';
 import { ToggleContext } from './ToggleContext';
+import { GraphSearch } from './GraphSearch';
 import { HoverContext } from './HoverContext';
 import { createHoverController, createHoverStore } from '../../lib/graph/hover';
 
@@ -333,11 +334,11 @@ function Inner({
     onSelRef.current?.(JSON.parse(selKey));
   }, [selKey]);
 
-  // T-222:外部跳转。目标已可见直接选中;否则复用 suggestedFocus 的逐层展开,展开到位后选中
-  useEffect(() => {
-    if (!jumpRequest) return;
+  // T-222:跳转。目标已可见直接选中;否则复用 suggestedFocus 的逐层展开,展开到位后选中。
+  // 外部跳转(jumpRequest)和 T-224 搜索都走这里;每次渲染重建,读到的总是最新 state/flow
+  const startJump = (want: string) => {
     // 面包屑给的是 d:,顶层目录可能是 module(m:):按路径匹配已加载节点
-    const id = resolveJumpTarget(state.nodes, jumpRequest.id);
+    const id = resolveJumpTarget(state.nodes, want);
     if (flow.nodes.some((n) => n.id === id)) {
       pendingJump.current = null;
       setSelectedId(id);
@@ -350,8 +351,45 @@ function Inner({
       autoFocus.current = focus;
       setAutoTick((t) => t + 1);
     }
+  };
+  useEffect(() => {
+    if (jumpRequest) startJump(jumpRequest.id);
     // 只由新的 jumpRequest 触发
   }, [jumpRequest]);
+
+  // T-224:搜索定位后把视图对准目标节点。布局 effect 在 rAF 里 fitView 全图,这里再晚一帧
+  // 覆盖它;centerTarget 保留到选中变化为止,窄屏抽屉打开引起的尺寸变化也按它重新对准
+  const centerTarget = useRef<string | null>(null);
+  // 再次搜索同一个已选中节点时 flow/selectedId 都不变,用计数触发重新对准
+  const [centerTick, setCenterTick] = useState(0);
+  const centerOn = useCallback(
+    (id: string, duration: number) =>
+      void fitView({ nodes: [{ id }], padding: 0.6, maxZoom: 1.2, duration }),
+    [fitView],
+  );
+  useEffect(() => {
+    const id = centerTarget.current;
+    if (!id) return;
+    if (selectedId !== id) {
+      // 跳转展开中选中还没到位:继续等;否则(跳转结束/用户改选)不再对准
+      if (!pendingJump.current) centerTarget.current = null;
+      return;
+    }
+    if (!flow.nodes.some((n) => n.id === id)) return;
+    let r2 = 0;
+    const r1 = requestAnimationFrame(() => {
+      r2 = requestAnimationFrame(() => centerOn(id, 300));
+    });
+    return () => {
+      cancelAnimationFrame(r1);
+      cancelAnimationFrame(r2);
+    };
+  }, [flow, selectedId, centerOn, centerTick]);
+  const onSearchPick = (id: string) => {
+    centerTarget.current = resolveJumpTarget(state.nodes, id);
+    setCenterTick((t) => t + 1);
+    startJump(id);
+  };
   useEffect(() => {
     if (!pendingJump.current) return;
     // 逐层展开后可能出现按路径对应的 m: 节点(面包屑给的是 d:):重新解析
@@ -391,14 +429,18 @@ function Inner({
     const ro = new ResizeObserver(() => {
       if (first) return void (first = false); // 首次回调是挂载本身,布局 effect 已负责 fitView
       clearTimeout(t);
-      t = setTimeout(() => void fitView({ padding: 0.12, duration: 200 }), 150);
+      t = setTimeout(() => {
+        const c = centerTarget.current;
+        if (c && c === selectedRef.current) centerOn(c, 200);
+        else void fitView({ padding: 0.12, duration: 200 });
+      }, 150);
     });
     ro.observe(el);
     return () => {
       clearTimeout(t);
       ro.disconnect();
     };
-  }, [fitView]);
+  }, [fitView, centerOn]);
 
   useEffect(() => {
     if (clearRequest > 0) setSelectedId(null);
@@ -414,6 +456,10 @@ function Inner({
     <ToggleContext.Provider value={userToggle}>
       <HoverContext.Provider value={hoverStore}>
         <div ref={wrapRef} data-testid="graph-wrap" className="relative h-full w-full bg-canvas">
+          {/* T-224:左上搜索框;宽度给右上两个按钮留出 13rem */}
+          <div className="absolute left-3 top-3 z-20 w-[calc(100%-14rem)] max-w-[22rem]">
+            <GraphSearch nodes={state.nodes} onPick={onSearchPick} />
+          </div>
           <div className="absolute right-3 top-3 z-10 flex gap-2">
             <button
               type="button"
@@ -466,7 +512,7 @@ function Inner({
             <div
               role="note"
               data-testid="truncated-notice"
-              className="absolute left-3 top-3 z-10 max-w-[420px] rounded-control border border-line bg-panel px-3 py-1.5 text-[12px] text-fg shadow-soft"
+              className="absolute left-3 top-14 z-10 max-w-[420px] rounded-control border border-line bg-panel px-3 py-1.5 text-[12px] text-fg shadow-soft"
             >
               {derived.truncatedLayers
                 .map((p) => (p === '' ? '顶层' : `「${p.replace(/^[a-z]:/, '')}」`))
