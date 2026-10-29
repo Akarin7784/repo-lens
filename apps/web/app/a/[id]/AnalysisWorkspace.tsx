@@ -161,7 +161,7 @@ export function AnalysisWorkspace({ repoId, jobId, repoLabel, api: apiProp, even
               clearRequest={closeTick}
             />
           </div>
-          {/* T-222d:≥768px 为右栏;<768px 未选中时隐藏,选中后为占下方 55vh 的底部抽屉(在文档流里,图区随之缩到上方,不被遮挡),可关闭 */}
+          {/* T-222d:≥768px 为右栏;<768px 未选中时隐藏,选中后为占下方 55dvh 的底部抽屉(在文档流里,图区随之缩到上方,不被遮挡),可关闭 */}
           <aside
             aria-label="详情"
             data-testid="detail-aside"
@@ -170,7 +170,7 @@ export function AnalysisWorkspace({ repoId, jobId, repoLabel, api: apiProp, even
               'shrink-0 overflow-y-auto border-line bg-bg ' +
               'md:block md:max-h-none md:w-[360px] md:rounded-none md:border-l md:border-t-0 md:shadow-none ' +
               (sel
-                ? 'h-[55vh] max-h-[55vh] shrink-0 rounded-t-[12px] border-t shadow-soft md:h-auto'
+                ? 'h-[55dvh] max-h-[55dvh] shrink-0 rounded-t-[12px] border-t shadow-soft md:h-auto'
                 : 'hidden')
             }
           >

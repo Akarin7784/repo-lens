@@ -223,7 +223,7 @@ function aggregateEdges(raw: GraphEdge[], visibleAncestor: (id: string) => strin
 
 > T-004 已实现：单击选中（选中节点 `--accent-strong` 2px 描边 + 引用高亮底色，一跳邻居保持不透明，相连边加粗并改用 `--accent-strong`，其余节点/边淡出到 15%，展开后的容器不淡出）、▸ 与双击展开、Esc/点击空白取消。右栏详情尚未实现，暂由左下状态条显示所选节点路径与依赖/被依赖条数；`?node=`、文件树联动、Shift 多选未实现。
 
-> T-222 已实现右栏 `<NodeDetail>`（`apps/web/components/detail/NodeDetail.tsx`）：调用 `GET /api/repos/:id/nodes/:nodeId`，显示面包屑、类型、摘要、LOC/入度/出度、导出符号、`topDependents`，以及当前图中可见层级的一跳依赖/被依赖（接口本身只返回 `topDependents`）。列表项可点击跳转：目标未加载时按 suggestedFocus 同一套逐层展开后再选中。摘要为 `null` 时显示骨架并在 `done` 后重新请求，空字符串显示「暂无摘要」；接口没有摘要来源字段，所以不区分规则摘要和模型摘要。切换节点时取消旧请求并丢弃过期响应；`?node=` 已写入 URL，进入页面时会读取。`inCycle`、文件树联动、「问问这个模块」仍未实现。
+> T-222 已实现右栏 `<NodeDetail>`（`apps/web/components/detail/NodeDetail.tsx`）：调用 `GET /api/repos/:id/nodes/:nodeId`，显示面包屑、类型、摘要、LOC/入度/出度、导出符号、`topDependents`，以及当前图中可见层级的一跳依赖/被依赖（接口本身只返回 `topDependents`）。列表项可点击跳转：目标未加载时按 suggestedFocus 同一套逐层展开后再选中。摘要为 `null` 时显示骨架并在 `done` 后重新请求，空字符串显示「暂无摘要」；（T-222e 起按 `summarySource` 区分规则摘要和模型摘要，见下文「摘要来源与在环中」。）切换节点时取消旧请求并丢弃过期响应；`?node=` 已写入 URL，进入页面时会读取。`inCycle` 已在 T-222e 实现；文件树联动、「问问这个模块」仍未实现。
 
 详情面板内容（`<NodeDetail>`）：
 - 头部：图标 + 路径面包屑（可点，用于跳转父节点）+ 类型标签。
@@ -251,7 +251,7 @@ interface NodeDetail {
 ```
 
 > **T-222d 详情面板收尾**（#43 评审的非阻塞后续）：
-> - **窄屏抽屉**：视口 ≥768px（Tailwind `md`）时详情仍是 360px 右栏；<768px 时未选中节点不显示详情区（图占满），选中后详情变为占下方 55vh 的底部抽屉。抽屉在文档流内（工作区改为 `flex-col md:flex-row`），图区随之缩到上方而不是被盖住；图区尺寸变化时 `ResizeObserver` 防抖 150ms 后 `fitView`。抽屉顶部「关闭」按钮通过 `GraphView` 的 `clearRequest` 取消选中，与 Esc、点空白一致（`?node=` 随之从 URL 去掉）。窄屏隐藏图例（否则盖住约一半图区）。
+> - **窄屏抽屉**：视口 ≥768px（Tailwind `md`）时详情仍是 360px 右栏；<768px 时未选中节点不显示详情区（图占满），选中后详情变为占下方 55dvh 的底部抽屉（T-222e 起用 `55dvh`，移动端浏览器地址栏收起/展开时按动态视口计算，不会被地址栏挡住一截）。抽屉在文档流内（工作区改为 `flex-col md:flex-row`），图区随之缩到上方而不是被盖住；图区尺寸变化时 `ResizeObserver` 防抖 150ms 后 `fitView`。抽屉顶部「关闭」按钮通过 `GraphView` 的 `clearRequest` 取消选中，与 Esc、点空白一致（`?node=` 随之从 URL 去掉）。窄屏隐藏图例（否则盖住约一半图区）。
 > - **折叠后不保留旧详情**：选中节点因所在目录被折叠或「全部收起」而不在画布上时，清除选中并关闭详情（回调 `onSelectionChange(null)`）。没有选「标注该节点当前未显示」：状态栏和高亮都以画布为准，面板单独显示一个看不到的节点会让「依赖于（图中可见层级）」列表与画面对不上；需要时可从面包屑或 `?node=` 再跳回去，跳转会自动展开。唯一例外是外部跳转进行中（`pendingJump` 非空，含 `?node=` 首次打开），这时节点暂不可见是正常的，保持原状态，因此 #43 的深链接逻辑不变。
 > - 同时修正一个潜在问题：选中回调曾写成 `return onSelectionChange(null)`，若回调有返回值会被 React 当作 effect 清理函数调用而报错。
 > - 真实浏览器验证（Chromium/Playwright，hono 本地数据，`LLM_PROVIDER=fake`）截图：`docs/assets/T-222d/desktop-detail.png`、`desktop-after-collapse.png`、`narrow-drawer.png`（390×844）、`narrow-closed.png`。Safari、Firefox、深色模式未验证。
@@ -633,3 +633,11 @@ zustand（秒出图）和 zod（默认 module 层、按需下钻）不在 3 分�
 - 性能:悬停状态不进 React state 和 `node.data`,放在外部 store(`lib/graph/hover.ts`),每条边用 `useSyncExternalStore` 订阅布尔值「是否与悬停节点相连」,只有翻转的边重渲染;其余边的压暗由容器 `data-hovering` 属性 + CSS 完成。
 - 触屏设备没有悬停,不做替代(计划约定),点击选中仍可用。
 - 截图(hono `d:src`,浅色):`docs/assets/T-221/hover-before.png`、`hover-d-src-utils.png`。
+
+### 摘要来源与在环中(T-222e)
+- 数据:`GET /api/repos/:id/nodes/:nodeId` 的 `summarySource: 'llm' | 'rule' | null`(默认 null)与 `inCycle: boolean`(默认 false),schema 在 `packages/shared`,本 PR 未改。旧响应缺这两个字段时按默认值处理,不显示任何标签。
+- 摘要标签:「摘要」标题右侧小号描边胶囊,用次要文字色(不抢摘要正文)。`rule` → 「规则摘要」,title/aria-label「规则摘要:由解析规则生成,未调用模型」;`llm` → 「AI 生成」,title「AI 生成:由大模型根据源码生成,可能有误,请以源码为准」;`null` 或摘要为空/骨架时不显示。
+- 在环中:类型标签旁「↻ 在环中」,底色 `--accent-strong`(与图上环边同一赤陶色、同一 ↻ 符号),只在 `inCycle === true` 时出现。file 的 title「该文件处于循环依赖中」;dir/module 的口径是「其下任一文件在环中」,title 写明「该目录/模块下有文件处于循环依赖中」。
+- 窄屏状态条:状态条 `max-w-[calc(100%-5rem)] truncate`,右侧给缩放按钮留出 5rem,长路径省略号截断;「Esc 取消」提示 `hidden md:inline`,触屏窄屏不显示。
+- 跳转中保留选中的例外:跳转目标逐层展开期间,选中节点暂时不在图里也不清空选中(否则右栏闪空);若展开被中断(用户收起了相关目录、请求失败或 autoFocus 变化),`jumpStopped` 计数触发收尾:清掉 pendingJump,选中节点也不在图里时取消选中,不留下看不见的选中。
+- 截图(生产构建 `next build` + `next start`,浅色):`docs/assets/T-222e/tag-rule.png`(hono `f:src/jsx/dom/client.ts`)、`tag-llm.png`(hono `f:src/jsx/base.ts`,摘要文本来自本地 `LLM_PROVIDER=fake`)、`in-cycle-badge.png`(zod `f:packages/zod/src/v4/core/core.ts`)、`narrow-status-bar.png`(390×844)。

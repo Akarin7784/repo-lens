@@ -17,6 +17,8 @@ const detail = (over: Partial<NodeDetailData> = {}): NodeDetailData =>
     inDegree: 5,
     outDegree: 2,
     topDependents: ['f:src/hono-base.ts'],
+    summarySource: 'llm',
+    inCycle: false,
     ...over,
   });
 
@@ -172,5 +174,77 @@ describe('ApiClient.getNodeDetail', () => {
       expect((await api.getNodeDetail(3, 'f:src/compose.ts')).loc).toBe(72),
     );
     expect(f.mock.calls[0]![0]).toBe('/api/repos/3/nodes/f%3Asrc%2Fcompose.ts');
+  });
+});
+
+describe('<NodeDetail> 摘要来源与在环中(T-222e,接 #48 的 summarySource / inCycle)', () => {
+  const show = async (over: Record<string, unknown>) => {
+    const api = { getNodeDetail: vi.fn(async () => NodeDetailSchema.parse({ ...base, ...over })) };
+    render(<NodeDetail repoId={1} nodeId="f:src/compose.ts" api={api} onJump={() => {}} />);
+    await screen.findByText(String(over.summary ?? base.summary));
+  };
+  const base = {
+    id: 'f:src/compose.ts',
+    kind: 'file',
+    path: 'src/compose.ts',
+    summary: '按洋葱模型串联中间件。',
+    exports: [],
+    loc: 72,
+    inDegree: 5,
+    outDegree: 2,
+    topDependents: [],
+  };
+
+  it("summarySource='rule':显示「规则摘要」,title/aria 说明未调用模型", async () => {
+    await show({ summarySource: 'rule', inCycle: false });
+    const tag = screen.getByTestId('summary-source');
+    expect(tag).toHaveTextContent('规则摘要');
+    expect(tag.getAttribute('title')).toBe('规则摘要:由解析规则生成,未调用模型');
+    expect(tag.getAttribute('aria-label')).toContain('未调用模型');
+    // 标签不在摘要正文段落里
+    expect(screen.getByText('按洋葱模型串联中间件。').contains(tag)).toBe(false);
+  });
+
+  it("summarySource='llm':显示「AI 生成」", async () => {
+    await show({ summarySource: 'llm', inCycle: false });
+    expect(screen.getByTestId('summary-source')).toHaveTextContent('AI 生成');
+    expect(screen.queryByText('规则摘要')).toBeNull();
+  });
+
+  it('summarySource=null:不显示来源标签', async () => {
+    await show({ summarySource: null, inCycle: false });
+    expect(screen.queryByTestId('summary-source')).toBeNull();
+  });
+
+  it('旧响应缺两个字段:schema 缺省为 null / false,不显示标签与「在环中」', async () => {
+    await show({});
+    expect(screen.queryByTestId('summary-source')).toBeNull();
+    expect(screen.queryByTestId('in-cycle-badge')).toBeNull();
+  });
+
+  it('summary 为空字符串时即使有来源也不显示标签(只显示「暂无摘要」)', async () => {
+    const api = {
+      getNodeDetail: vi.fn(async () =>
+        NodeDetailSchema.parse({ ...base, summary: '', summarySource: 'rule' }),
+      ),
+    };
+    render(
+      <NodeDetail repoId={1} nodeId="f:src/compose.ts" api={api} analysisDone onJump={() => {}} />,
+    );
+    await screen.findByText('暂无摘要。');
+    expect(screen.queryByTestId('summary-source')).toBeNull();
+  });
+
+  it('inCycle=true:显示 ↻「在环中」;false 不显示', async () => {
+    await show({ summarySource: 'rule', inCycle: true });
+    const badge = screen.getByTestId('in-cycle-badge');
+    expect(badge).toHaveTextContent('↻在环中');
+    expect(badge.className).toContain('bg-accent-strong');
+    expect(badge.getAttribute('title')).toBe('该文件处于循环依赖中');
+  });
+
+  it('inCycle=false:不显示「在环中」', async () => {
+    await show({ summarySource: 'llm', inCycle: false });
+    expect(screen.queryByTestId('in-cycle-badge')).toBeNull();
   });
 });

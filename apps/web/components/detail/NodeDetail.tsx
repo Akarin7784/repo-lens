@@ -124,6 +124,34 @@ export function NodeDetail({
   );
 }
 
+const CYCLE_TITLE: Record<NodeDetailData['kind'], string> = {
+  file: '该文件处于循环依赖中',
+  dir: '该目录下有文件处于循环依赖中',
+  module: '该模块下有文件处于循环依赖中',
+  external: '该节点处于循环依赖中',
+};
+
+/** T-222e:摘要来源标签。放在「摘要」标题旁、用次要文字色的描边小标签,不与正文混排 */
+const SOURCE_TAG = {
+  rule: { text: '规则摘要', title: '规则摘要:由解析规则生成,未调用模型' },
+  llm: { text: 'AI 生成', title: 'AI 生成:由大模型根据源码生成,可能有误,请以源码为准' },
+} as const;
+
+function SourceTag({ source }: { source: 'llm' | 'rule' }) {
+  const t = SOURCE_TAG[source];
+  return (
+    <span
+      data-testid="summary-source"
+      data-source={source}
+      title={t.title}
+      aria-label={t.title}
+      className="rounded-full border border-line bg-panel px-2 py-0.5 font-sans text-[11px] leading-4 text-muted"
+    >
+      {t.text}
+    </span>
+  );
+}
+
 function Skeleton() {
   return (
     <div data-testid="summary-skeleton" className="flex flex-col gap-2">
@@ -173,13 +201,29 @@ function Body({
             </span>
           ))}
         </nav>
-        <span className="w-fit rounded-full border border-line px-2 py-0.5 text-[12px] text-muted">
-          {KIND_TEXT[d.kind]}
-        </span>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="w-fit rounded-full border border-line px-2 py-0.5 text-[12px] text-muted">
+            {KIND_TEXT[d.kind]}
+          </span>
+          {d.inCycle && (
+            // 与图上环边同一视觉:--accent-strong 底 + ↻(DESIGN_STYLE 图区令牌「循环依赖边」)
+            <span
+              data-testid="in-cycle-badge"
+              title={CYCLE_TITLE[d.kind]}
+              aria-label={`在环中:${CYCLE_TITLE[d.kind]}`}
+              className="inline-flex w-fit items-center gap-1 rounded-full bg-accent-strong px-2 py-0.5 text-[12px] text-on-accent"
+            >
+              <span aria-hidden>↻</span>在环中
+            </span>
+          )}
+        </div>
       </header>
 
       <div>
-        <h3 className="mb-2 font-serif text-[15px] font-semibold text-fg">摘要</h3>
+        <div className="mb-2 flex items-center gap-2">
+          <h3 className="font-serif text-[15px] font-semibold text-fg">摘要</h3>
+          {d.summary?.trim() && d.summarySource ? <SourceTag source={d.summarySource} /> : null}
+        </div>
         {pending ? (
           <>
             <Skeleton />

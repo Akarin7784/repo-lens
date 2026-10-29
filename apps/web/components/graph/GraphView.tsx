@@ -104,6 +104,8 @@ function Inner({
   const [autoTick, setAutoTick] = useState(0);
   // T-222:等待中的外部跳转目标(见下方跳转 effect)。根层加载回调里也要读,所以声明在这里
   const pendingJump = useRef<string | null>(null);
+  // T-222e:逐层展开被中止时递增,用来结束等待中的跳转(见下方跳转 effect)
+  const [jumpStopped, setJumpStopped] = useState(0);
   const onRootRef = useRef(onRootLoaded);
   onRootRef.current = onRootLoaded;
 
@@ -197,6 +199,8 @@ function Inner({
       // 请求失败(toggle 已显示错误)或结果被丢弃:停止下探;成功则触发下一步
       if (!ok || autoFocus.current !== focus) {
         autoFocus.current = null;
+        // T-222e:下探中止(请求失败,或用户手动展开/折叠使结果被丢弃)时,若有跳转在等待,结束它
+        if (pendingJump.current) setJumpStopped((t) => t + 1);
         return;
       }
       setAutoTick((t) => t + 1);
@@ -368,6 +372,16 @@ function Inner({
     }
   }, [flow, state.nodes]);
 
+  // T-222e:跳转的逐层展开被中止:跳转不会再完成,结束等待;此时选中节点若已不在图中
+  // (例如跳转途中用户折叠了它所在目录),按 T-222d 规则清除选中,不留看不到的旧详情
+  useEffect(() => {
+    if (jumpStopped === 0 || !pendingJump.current) return;
+    if (flow.nodes.some((n) => n.id === pendingJump.current)) return;
+    pendingJump.current = null;
+    if (selectedId && !flow.nodes.some((n) => n.id === selectedId)) setSelectedId(null);
+    // 只由 jumpStopped 触发
+  }, [jumpStopped]);
+
   // T-222d:图区尺寸变化(窄屏底部抽屉打开/关闭、窗口缩放)后重新适配视图,避免节点落在可视区外
   useEffect(() => {
     const el = wrapRef.current;
@@ -460,14 +474,24 @@ function Inner({
               的子节点超过 {MAX_NODES_PER_RESPONSE} 个,只显示了前 {MAX_NODES_PER_RESPONSE} 个。
             </div>
           )}
+          {/* T-222e:最大宽度给右下缩放按钮(Controls)留出 5rem,超长截断;窄屏没有键盘,不提示 Esc */}
           <div
             role="status"
-            className="absolute bottom-3 left-3 z-10 rounded-full border border-line bg-panel px-3 py-1 text-[12px] text-muted"
+            data-testid="graph-status"
+            className="absolute bottom-3 left-3 z-10 max-w-[calc(100%-5rem)] truncate rounded-full border border-line bg-panel px-3 py-1 text-[12px] text-muted"
           >
             {error ??
-              (selectedNode
-                ? `已选中 ${selectedNode.data.node.path} · 依赖 ${view.out} · 被依赖 ${view.in} · Esc 取消`
-                : status)}
+              (selectedNode ? (
+                <>
+                  已选中 {selectedNode.data.node.path} · 依赖 {view.out} · 被依赖 {view.in}
+                  <span data-testid="esc-hint" className="hidden md:inline">
+                    {' '}
+                    · Esc 取消
+                  </span>
+                </>
+              ) : (
+                status
+              ))}
           </div>
         </div>
       </HoverContext.Provider>

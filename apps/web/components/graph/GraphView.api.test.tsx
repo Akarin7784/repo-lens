@@ -345,3 +345,91 @@ describe('<GraphView> 挂载即带 jumpRequest(?node= 直接打开,#43 评审)',
     expect(screen.queryByText(/图中找不到/)).toBeNull();
   });
 });
+
+describe('<GraphView> 跳转进行中保留选中(T-222d 例外,T-222e 补测)', () => {
+  /** m:a 下有 a/x.ts;m:b 的子层请求由测试手动放行,模拟「跳转还在逐层展开」 */
+  function slowSource() {
+    const calls: (string | null)[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const src: GraphSource = {
+      repoLabel: 't/t',
+      loadChildren: vi.fn(async (p: string | null) => {
+        calls.push(p);
+        if (p === null) return slice(null, [mod('m:a'), mod('m:b')], [agg('m:a', 'm:b', 1)]);
+        if (p === 'm:a') return slice('m:a', [file('a/x.ts', 'm:a')], []);
+        await gate;
+        return slice('m:b', [file('b/z.ts', 'm:b')], []);
+      }),
+    };
+    return { src, calls, release: () => release() };
+  }
+
+  async function selectThenJump() {
+    const s = slowSource();
+    const engine = await createInlineEngine();
+    const onSel = vi.fn();
+    const ui = (jump: { id: string; n: number } | null) => (
+      <div style={{ width: 800, height: 600 }}>
+        <GraphView
+          source={s.src}
+          owner="t"
+          repo="t"
+          engine={engine}
+          onSelectionChange={onSel}
+          jumpRequest={jump}
+        />
+      </div>
+    );
+    const r = render(ui(null));
+    fireEvent.click(await screen.findByRole('button', { name: '展开 a' }));
+    fireEvent.click(await screen.findByTestId('node-f:a/x.ts'));
+    await waitFor(() =>
+      expect(onSel).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'f:a/x.ts' })),
+    );
+    const afterSelect = onSel.mock.calls.length;
+    // 跳到 m:b 里的文件:m:b 的子层请求挂起
+    r.rerender(ui({ id: 'f:b/z.ts', n: 1 }));
+    await waitFor(() => expect(s.calls).toContain('m:b'));
+    // 跳转途中折叠选中节点所在的 m:a:选中节点暂时不在图中
+    fireEvent.click(screen.getByRole('button', { name: '收起 a' }));
+    await waitFor(() => expect(screen.queryByTestId('node-f:a/x.ts')).toBeNull());
+    return { ...s, onSel, afterSelect };
+  }
+
+  it('逐层展开尚未结束时,选中节点不在图中也不清除选中(不回调 null)', async () => {
+    const { onSel, release, afterSelect } = await selectThenJump();
+    // 给 effect 多轮机会;有 pendingJump 时 selKey 的「不在图中」分支必须直接返回
+    await new Promise((r) => setTimeout(r, 50));
+    expect(onSel.mock.calls.slice(afterSelect).some(([v]) => v === null)).toBe(false);
+    release();
+  });
+
+  it('展开被中止(用户折叠使下探结果被丢弃)且选中节点仍不在图中:结束跳转并清除选中,不报「找不到」', async () => {
+    const { onSel, release } = await selectThenJump();
+    release();
+    await waitFor(() => expect(onSel).toHaveBeenLastCalledWith(null));
+    expect(screen.queryByText(/图中找不到/)).toBeNull();
+    expect(screen.queryByTestId('node-f:b/z.ts')).toBeNull();
+  });
+});
+
+describe('<GraphView> 状态条窄屏(T-222e,#49 评审)', () => {
+  it('选中后「Esc 取消」只在 ≥768px 显示;状态条限宽并截断,给右下缩放按钮让位', async () => {
+    const src = apiSource();
+    const engine = await createInlineEngine();
+    render(
+      <div style={{ width: 800, height: 600 }}>
+        <GraphView source={src} owner="t" repo="t" engine={engine} />
+      </div>,
+    );
+    fireEvent.click(await screen.findByTestId('node-m:a'));
+    const status = screen.getByTestId('graph-status');
+    await waitFor(() => expect(status).toHaveTextContent('已选中'));
+    const hint = screen.getByTestId('esc-hint');
+    expect(hint).toHaveTextContent('Esc 取消');
+    expect(hint.className.split(' ')).toEqual(expect.arrayContaining(['hidden', 'md:inline']));
+    expect(status.className).toContain('max-w-[calc(100%-5rem)]');
+    expect(status.className).toContain('truncate');
+  });
+});

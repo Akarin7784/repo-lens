@@ -24,7 +24,7 @@ const SHA = '382d29c485e67018c06e75ec7235130d0968522c';
 const jobId = `1:${SHA}`;
 
 describe('<AnalysisWorkspace> 详情面板窄屏抽屉(T-222d)', () => {
-  it('未选中:aside 带 hidden(窄屏不占位)+ md:block;选中:底部抽屉(文档流内,高 55vh);点「关闭」收起', async () => {
+  it('未选中:aside 带 hidden(窄屏不占位)+ md:block;选中:底部抽屉(文档流内,高 55dvh);点「关闭」收起', async () => {
     const api = {
       getRepoStatus: vi.fn(),
       getGraph: vi.fn(() => new Promise(() => {})),
@@ -46,8 +46,8 @@ describe('<AnalysisWorkspace> 详情面板窄屏抽屉(T-222d)', () => {
 
     act(() => stub.select!({ id: 'f:src/a.ts', deps: [], dependents: [] }));
     await waitFor(() => expect(aside.dataset.drawer).toBe('open'));
-    expect(aside.className).toContain('h-[55vh]');
-    expect(aside.className).toContain('max-h-[55vh]');
+    expect(aside.className).toContain('h-[55dvh]');
+    expect(aside.className).toContain('max-h-[55dvh]');
     expect(aside.className).toContain('md:w-[360px]');
     expect(aside.className).not.toMatch(/(^| )hidden( |$)/);
     expect(screen.getByTestId('node-detail')).toBeTruthy();
