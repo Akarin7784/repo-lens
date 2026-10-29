@@ -15,6 +15,13 @@
       "when": 1793255674985,
       "tag": "0001_summary_commit",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1793320000000,
+      "tag": "0002_summary_input_idx",
+      "breakpoints": true
     }
   ]
 }

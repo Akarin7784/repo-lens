@@ -64,6 +64,15 @@ echo "SMOKE migration_0001 rows=$rows"
 [ "$ukcols" = "repo_id,level,target_id,commit_sha" ] || { echo "SMOKE FAIL: uk_target_commit 列不对"; exit 1; }
 want="f:a.ts=$SHA_OLD/llm f:b.ts=$SHA_OLD/rule f:c.ts=/rule m:src=$SHA_OLD/llm"
 [ "$rows" = "$want" ] || { echo "SMOKE FAIL: 回填不符,期望 $want"; exit 1; }
+# 迁移 0002:摘要复用复合索引 idx_reuse,同样连跑两遍断言幂等与列顺序
+for i in 1 2; do
+  mig_sql packages/db/migrations/0002_summary_input_idx.sql | mysql_q mig_check \
+    || { echo "SMOKE FAIL: 0002 第 $i 次执行失败"; exit 1; }
+  echo "SMOKE migration_0002_run_$i=ok"
+done
+reuse=$(mysql_q mig_check -e "SELECT GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA='mig_check' AND TABLE_NAME='summary' AND INDEX_NAME='idx_reuse'")
+echo "SMOKE migration_0002 idx_reuse=$reuse"
+[ "$reuse" = "repo_id,level,target_id,input_hash" ] || { echo "SMOKE FAIL: idx_reuse 列不对或不存在"; exit 1; }
 mysql_q -e 'DROP DATABASE mig_check'
 
 # web 也要能响应(不要求 200 的具体内容)
