@@ -54,7 +54,7 @@ services:
       mysql: { condition: service_healthy }
       redis: { condition: service_healthy }
       qdrant: { condition: service_healthy }
-    healthcheck: { test: ["CMD","wget","-qO-","http://localhost:4000/health"], interval: 10s, retries: 3 }
+    healthcheck: { test: ["CMD","wget","-qO-","http://127.0.0.1:4000/health"], interval: 10s, retries: 3 }
     mem_limit: 768m
     restart: unless-stopped
     logging: *log
