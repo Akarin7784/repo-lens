@@ -111,6 +111,8 @@
 - #49:768px 以下详情变底部抽屉;选中节点从图中消失时清除选中并关闭面板(深链跳转中保留);turbo `dev` 任务与根目录 `dev` 脚本;真实浏览器截图 `docs/assets/T-222d/`。评审 342 测试全过,14 个探针含 #43 深链场景,变异检查有效。
 - #49 非阻塞后续:窄屏状态条压住缩放按钮且显示「Esc 取消」;截图带 Next dev 角标;README 本地开发步骤仍是 `--filter` 写法,api 的 dev 需先 `pnpm build`;「跳转中保留选中」例外无测试;`55vh` 改 `55dvh`。
 
+- 2026-10-29 15:2x:#50 合并(后端一揽子修复,提交 b3a1002)。我在最新提交 29ff9cb 上独立重跑 install(frozen lockfile)、lint、typecheck、build、test(共 358 个,真实 Redis 与 MariaDB)全过,`ci` 与 `smoke` 绿,与 main 无冲突。内容:LLM 超时真正取消请求(`AbortSignal.any`,清定时器,取消的调用只记一次失败、费用 0,迟到回复只记一次账);敏感规则补缺口(JSON `"_authToken"`、`.yarnrc.yml` 的 `npmAuthToken`、`app-secrets.json`,credentials 与 secrets 共用扩展名表);README 与 package.json 先 `lstat`(用指向 `/etc/passwd` 的符号链接探针验证不会被读取);40 位 SHA ref 仅在 GitHub 明确 404 时返回 REPO_NOT_FOUND(403、5xx、网络错误照常放行);worker 不再调用 `listSummaries`,改为按节点按输入哈希查询、优先当前 commit;价格段与 `pricing.ts` 一致,孤儿 `commit_sha=''` 行只文档化手动清理;ARCHITECTURE §6 写明滚动发布顺序(先迁移、停旧 worker、同时发新 api 与 worker)。后续项(非阻塞):孤儿行清理的 DELETE 应限定 `repo_id`;补 README 符号链接与超大 README 的 worker 测试;摘要复用是 N+1 查询(约 1500 节点 1500 次),可按层批量或加复合索引 `(repo_id, level, target_id, input_hash)`;fake 客户端不响应 signal,取消行为只在 DeepSeek 客户端和网关测试覆盖;`npmAuthToken: process.env.X` 的源码行会被误判敏感(只给规则摘要),写进文档。#51(前端标签与 #49 后续)待评审。
+
 ## 演示检查清单(第 4 周前逐项勾选)
 - [ ] 演示前抽查 hono 的在环节点:节点详情里环上的文件显示「在环中」,数量与状态栏环边数相符(`inCycle` 须与图投影同源,不依赖 `stats`)。
 - [ ] 演示机内存至少 4 GB(本地 e5 embedding 峰值约 2.5 GB,见 D4 与 T-214);embedding 批大小可配置。
