@@ -216,7 +216,7 @@ function Inner({ source, owner, repo, engine, onRootLoaded }: GraphViewProps) {
           derived.cycleKeys.has(`${e.source}->${e.target}`),
         ).length;
         setStatus(
-          `${derived.nodes.length} 个节点 · ${derived.edges.length} 条边${nCycle ? ` · 环边 ${nCycle}` : ''} · 布局 ${Math.round(performance.now() - t0)} ms`,
+          `当前显示 ${derived.nodes.length} 节点 / ${derived.edges.length} 条边${nCycle ? ` · 环边 ${nCycle}` : ''} · 布局 ${Math.round(performance.now() - t0)} ms`,
         );
         requestAnimationFrame(() => fitView({ padding: 0.12, duration: 300 }));
       })

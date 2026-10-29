@@ -66,26 +66,26 @@ describe('<GraphView> 真实接口:聚合边、边界节点、截断提示', () 
     const q = (sel: string) => container.querySelector(sel);
     const status = () => screen.getByRole('status');
     // jsdom 不渲染边的 DOM,边数从状态条读(真实浏览器里的 ×N 标签与 hover 见 PR 截图)
-    await waitFor(() => expect(status()).toHaveTextContent('2 个节点 · 1 条边'));
+    await waitFor(() => expect(status()).toHaveTextContent('当前显示 2 节点 / 1 条边'));
     expect(screen.getByLabelText('图例')).toHaveTextContent('聚合次数');
     expect(screen.queryByTestId('truncated-notice')).toBeNull();
 
     fireEvent.click(await screen.findByRole('button', { name: '展开 a' }));
     // 容器边 m:a→m:b 被子层的 x→b、y→b 两条聚合边替代;边界节点 m:b 不进 m:a
-    await waitFor(() => expect(status()).toHaveTextContent('4 个节点 · 2 条边'));
+    await waitFor(() => expect(status()).toHaveTextContent('当前显示 4 节点 / 2 条边'));
     expect(container.querySelectorAll('[data-testid="node-m:b"]')).toHaveLength(1);
     expect(q('[data-testid="node-m:a"] [data-testid="node-m:b"]')).toBeNull();
     expect(screen.getByTestId('truncated-notice')).toHaveTextContent('「a」的子节点超过 300 个');
     expect(src.calls).toEqual([null, 'm:a']);
 
     fireEvent.click(await screen.findByRole('button', { name: '收起 a' }));
-    await waitFor(() => expect(status()).toHaveTextContent('2 个节点 · 1 条边'));
+    await waitFor(() => expect(status()).toHaveTextContent('当前显示 2 节点 / 1 条边'));
     expect(q('[data-testid="node-m:b"]')).not.toBeNull();
     expect(screen.queryByTestId('truncated-notice')).toBeNull();
 
     // 再展开走缓存,不重复请求
     fireEvent.click(await screen.findByRole('button', { name: '展开 a' }));
-    await waitFor(() => expect(status()).toHaveTextContent('4 个节点 · 2 条边'));
+    await waitFor(() => expect(status()).toHaveTextContent('当前显示 4 节点 / 2 条边'));
     expect(src.calls).toEqual([null, 'm:a']);
   });
 
@@ -122,14 +122,14 @@ describe('<GraphView> 真实接口:聚合边、边界节点、截断提示', () 
     );
     const status = () => screen.getByRole('status');
     // m:a、m:b、d:a/src、a/r.ts、x、y = 6 个节点;根层 module 作为面包屑保留
-    await waitFor(() => expect(status()).toHaveTextContent('6 个节点 · 1 条边'));
+    await waitFor(() => expect(status()).toHaveTextContent('当前显示 6 节点 / 1 条边'));
     expect(calls).toEqual([null, 'm:a', 'd:a/src']);
     expect(screen.getByTestId('node-m:b')).toBeInTheDocument();
 
     fireEvent.click(await screen.findByRole('button', { name: '收起 a/src' }));
-    await waitFor(() => expect(status()).toHaveTextContent('4 个节点 · 0 条边'));
+    await waitFor(() => expect(status()).toHaveTextContent('当前显示 4 节点 / 0 条边'));
     await new Promise((r) => setTimeout(r, 50));
-    expect(status()).toHaveTextContent('4 个节点');
+    expect(status()).toHaveTextContent('当前显示 4 节点');
     expect(screen.getByRole('button', { name: '展开 a/src' })).toBeInTheDocument();
   });
 
@@ -141,7 +141,9 @@ describe('<GraphView> 真实接口:聚合边、边界节点、截断提示', () 
         <GraphView source={src} owner="t" repo="t" engine={engine} />
       </div>,
     );
-    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('2 个节点 · 0 条边'));
+    await waitFor(() =>
+      expect(screen.getByRole('status')).toHaveTextContent('当前显示 2 节点 / 0 条边'),
+    );
     await new Promise((r) => setTimeout(r, 50));
     expect(calls).toEqual([null]);
   });
@@ -154,7 +156,7 @@ describe('<GraphView> 真实接口:聚合边、边界节点、截断提示', () 
         <GraphView source={src} owner="t" repo="t" engine={engine} />
       </div>,
     );
-    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('2 个节点'));
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('当前显示 2 节点'));
     await new Promise((r) => setTimeout(r, 50));
     expect(calls).toEqual([null]);
   });
