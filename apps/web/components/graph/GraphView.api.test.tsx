@@ -42,7 +42,14 @@ function apiSource(): GraphSource & { calls: (string | null)[] } {
     calls,
     loadChildren: vi.fn(async (p: string | null) => {
       calls.push(p);
-      if (p === null) return slice(null, [mod('m:a'), mod('m:b')], [agg('m:a', 'm:b', 3)]);
+      // m:p 先于 m:a 排布,把容器 m:a 推离原点:否则子节点即使丢了 parentId(相对坐标被当成绝对坐标)
+      // 也恰好落在容器框内,「不给子节点设 parentId」的变异抓不到(#87 遗留)
+      if (p === null)
+        return slice(
+          null,
+          [mod('m:p'), mod('m:a'), mod('m:b')],
+          [agg('m:p', 'm:a', 1), agg('m:a', 'm:b', 3)],
+        );
       // m:b 是边界节点(parentId !== 'm:a')
       return slice(
         'm:a',
@@ -77,19 +84,21 @@ describe('<GraphView> 真实接口:聚合边、边界节点、截断提示', () 
     const overlaps = (u: Box, v: Box) => u.x < v.r && v.x < u.r && u.y < v.b && v.y < u.b;
     const status = () => screen.getByRole('status');
     // jsdom 不渲染边的 DOM,边数从状态条读(真实浏览器里的 ×N 标签与 hover 见 PR 截图)
-    await waitFor(() => expect(status()).toHaveTextContent('当前显示 2 节点 / 1 条边'));
+    await waitFor(() => expect(status()).toHaveTextContent('当前显示 3 节点 / 2 条边'));
     expect(screen.getByLabelText('图例')).toHaveTextContent('聚合次数');
     expect(screen.queryByTestId('truncated-notice')).toBeNull();
 
     fireEvent.click(await screen.findByRole('button', { name: '展开 a' }));
     // 容器边 m:a→m:b 被子层的 x→b、y→b 两条聚合边替代;边界节点 m:b 不进 m:a
-    await waitFor(() => expect(status()).toHaveTextContent('当前显示 4 节点 / 2 条边'));
+    await waitFor(() => expect(status()).toHaveTextContent('当前显示 5 节点 / 2 条边'));
     // React Flow 在自身 effect 里同步 nodes,DOM 比状态条晚一拍,所以节点断言都要等。
     // 注意 React Flow 的节点 DOM 是平铺的(子节点不嵌套在容器 DOM 里),
     // 「m:a 里面查 m:b」这种选择器永远为空、会误通过;改为比较绝对坐标:
     // x/y 落在容器 m:a 的框内,边界节点 m:b 与 m:a 不重叠且只渲染一次。
     await waitFor(() => {
       const a = box('m:a');
+      // 前提:容器确实离原点足够远(子节点相对坐标 ≈ 绝对坐标时上面的变异会漏网)
+      expect(a.y).toBeGreaterThan(60);
       expect(inside(box('f:a/x.ts'), a)).toBe(true);
       expect(inside(box('f:a/y.ts'), a)).toBe(true);
       expect(container.querySelectorAll('[data-testid="node-m:b"]')).toHaveLength(1);
@@ -99,7 +108,7 @@ describe('<GraphView> 真实接口:聚合边、边界节点、截断提示', () 
     expect(src.calls).toEqual([null, 'm:a']);
 
     fireEvent.click(await screen.findByRole('button', { name: '收起 a' }));
-    await waitFor(() => expect(status()).toHaveTextContent('当前显示 2 节点 / 1 条边'));
+    await waitFor(() => expect(status()).toHaveTextContent('当前显示 3 节点 / 2 条边'));
     // 等子节点从 DOM 消失(React Flow 同步完成)后再看:边界节点 m:b 不随 m:a 折叠而隐藏
     await waitFor(() => {
       expect(q('[data-testid="node-f:a/x.ts"]')).toBeNull();
@@ -109,7 +118,7 @@ describe('<GraphView> 真实接口:聚合边、边界节点、截断提示', () 
 
     // 再展开走缓存,不重复请求
     fireEvent.click(await screen.findByRole('button', { name: '展开 a' }));
-    await waitFor(() => expect(status()).toHaveTextContent('当前显示 4 节点 / 2 条边'));
+    await waitFor(() => expect(status()).toHaveTextContent('当前显示 5 节点 / 2 条边'));
     expect(src.calls).toEqual([null, 'm:a']);
   });
 

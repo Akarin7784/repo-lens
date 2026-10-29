@@ -28,6 +28,38 @@ describe('answerReducer', () => {
     expect(a.done).toMatchObject({ messageId: 9, retrieval: 'hybrid' });
   });
 
+  it('done.sessionId(#108 起服务端始终填写)被保存到 Answer.done,不丢字段', () => {
+    const a = run([
+      tok('x'),
+      ev({
+        event: 'done',
+        data: { messageId: 3, sessionId: 42, droppedCitations: 0, usage: { in: 1, out: 1 } },
+      }),
+    ]);
+    expect(a.done?.sessionId).toBe(42);
+    expect(a.done?.messageId).toBe(3);
+  });
+
+  it('流中途 error(#108 总时限超时 / 上游出错):保留已输出正文与引用,状态为 error', () => {
+    const a = run([
+      ev({ event: 'tool', data: { name: 'retrieve', args: { k: 8 } } }),
+      tok('前半段'),
+      cite(1),
+      ev({
+        event: 'error',
+        data: { code: 'LLM_UNAVAILABLE', message: '回答超时,请重试', retryable: true },
+      }),
+    ]);
+    expect(a.status).toBe('error');
+    expect(a.segments).toEqual([
+      { kind: 'text', text: '前半段' },
+      { kind: 'cite', id: 1 },
+    ]);
+    expect(a.citations).toHaveLength(1);
+    expect(a.error).toMatchObject({ code: 'LLM_UNAVAILABLE', retryable: true });
+    expect(a.done).toBeNull();
+  });
+
   it('done.messageId 在 Answer 类型上可选(T-232,shared 放宽前置;只有类型层覆盖,见 PR)', () => {
     // 类型断言:messageId 改回必填时,这行在 `tsc --noEmit` 下编译失败
     const d: NonNullable<Answer['done']> = { droppedCitations: 0 };

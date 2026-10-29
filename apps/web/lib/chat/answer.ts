@@ -36,6 +36,8 @@ export type Answer = {
   done: {
     /** 可选:后端写 assistant 消息失败时 done 不带 messageId(shared 放宽的前置,T-232);缺失时保持 undefined,不兜底 */
     messageId?: number;
+    /** 本轮所属 chat_session(#108 起服务端始终填写);先保存不使用,多轮续聊另做。缺失时保持 undefined */
+    sessionId?: number;
     droppedCitations: number;
     fallback?: 'retrieval';
     retrieval?: 'hybrid' | 'keyword-only';
@@ -109,12 +111,12 @@ export function answerReducer(a: Answer, act: AnswerAction): Answer {
             segments: [...a.segments, { kind: 'cite', id: e.data.id }],
           };
         case 'done': {
-          const { messageId, droppedCitations, fallback, retrieval } = e.data;
+          const { messageId, sessionId, droppedCitations, fallback, retrieval } = e.data;
           return {
             ...a,
             status: 'done',
             toolHint: null,
-            done: { messageId, droppedCitations, fallback, retrieval },
+            done: { messageId, sessionId, droppedCitations, fallback, retrieval },
           };
         }
         case 'error':

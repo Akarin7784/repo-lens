@@ -270,7 +270,9 @@ type ChatEvent =
   | { event: "token"; data: { text: string } }
   | { event: "citation"; data: { id: number; path: string; startLine: number; endLine: number; nodeId: string; moduleId?: string } } // 只会收到已校验的引用；id 即显示编号
   | { event: "done"; data: {
-      messageId: number; droppedCitations: number;
+      messageId?: number;                        // 写 assistant 消息失败时缺省（T-232）
+      sessionId?: number;                        // 本轮所属会话；#108 起服务端始终填写，前端保存在 Answer.done（多轮续聊另做）
+      droppedCitations: number;
       fallback?: "retrieval";                    // 预算/服务不可用时只给检索结果，没有生成回答
       retrieval?: "hybrid" | "keyword-only";     // keyword-only → 显示「已降级为关键词检索」
       usage: { in: number; out: number } } }
@@ -319,7 +321,7 @@ async function chat(repoId: number, req: ChatRequest, signal: AbortSignal) {
 | `LLM_UNAVAILABLE` | 模型服务暂时不可用 | 通常有 | 示例仓库可展示检索片段或缓存答案 |
 | `BUDGET_EXCEEDED` | 今日额度已用完，明天再试 | 通常没有 | 禁用输入框，并显示原因 |
 | `REPO_NOT_READY` | 仓库还在分析中（摘要/索引未完成） | 有 | 顶栏小进度条高亮，完成后提示可以提问 |
-| `RATE_LIMITED` | 提问太频繁，请稍后 | 有，倒计时 10 秒后才可点 | — |
+| `RATE_LIMITED` | 提问太频繁，请稍后再试（429 没有 retryAfterSec，并发满也没有 details.reason，统一用此文案，契约补齐后再细分） | 有，倒计时 10 秒后才可点 | — |
 
 是否显示重试按钮一律以 `retryable` 为准，表里只是常见情况。
 

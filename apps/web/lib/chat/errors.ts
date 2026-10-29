@@ -5,7 +5,7 @@ export const CHAT_ERROR_TEXT: Record<string, string> = {
   LLM_UNAVAILABLE: '模型服务暂时不可用',
   BUDGET_EXCEEDED: '今日额度已用完,明天再试',
   REPO_NOT_READY: '仓库还在分析中(摘要/索引未完成)',
-  RATE_LIMITED: '提问太频繁,请稍后',
+  RATE_LIMITED: '提问太频繁,请稍后再试',
   NETWORK: '网络连接中断',
   NOT_AVAILABLE: '问答服务暂未上线',
   HTTP: '问答请求失败,请稍后重试',
