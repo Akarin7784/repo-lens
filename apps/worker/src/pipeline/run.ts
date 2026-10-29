@@ -43,6 +43,10 @@ import {
   type ChunkSourceFile,
   type LockKv,
   type Embedder,
+  EmbeddingBudgetExceeded,
+  EmbeddingError,
+  TaskBudgetMeter,
+  dashscopeModelCaps,
   type VectorStore,
 } from '@repolens/rag';
 import type { WorkerConfig } from '../config.js';
@@ -70,6 +74,13 @@ export interface PipelineDeps {
   /** embedding(T-214);与 vectorStore 都给了才跑向量化,否则跳过该阶段 */
   embedder?: Embedder;
   vectorStore?: VectorStore;
+  /** T-214c:外部提供方不可用的原因(无 key);给了就记 skipped,不调用 embedder */
+  embeddingSkipReason?: 'no-key';
+  /**
+   * T-214c:外部提供方按任务计量(每任务新建 TaskBudgetMeter);给了就用它代替 embedder 做文档向量化。
+   * 应返回 CachedEmbedder(MeteredEmbedder(...)),缓存命中不计费。
+   */
+  taskEmbedder?: (meter: TaskBudgetMeter) => Embedder;
   /** 同 (repo, commit) 向量化互斥锁(Redis);不传时不加锁(单测) */
   lockKv?: LockKv;
   /** 锁 key 前缀(测试隔离用) */
@@ -369,9 +380,35 @@ export async function runPipeline(
         },
       });
     }
-    if (!deps.embedder || !deps.vectorStore) {
+    const ds = config.embedding.dashscope;
+    stats = { ...stats, embeddingProvider: ds ? 'dashscope' : 'local' };
+    if (ds) stats = { ...stats, embeddingModel: ds.model, embeddingDim: ds.dim };
+    if (deps.embeddingSkipReason) {
+      stats = { ...stats, embeddingSkipReason: deps.embeddingSkipReason };
+      await progress('embedding', 85, '未配置 DASHSCOPE_API_KEY,跳过向量化');
+      await events.emit({
+        event: 'stage_error',
+        data: {
+          jobId,
+          stage: 'embedding',
+          message: 'EMBEDDING_PROVIDER=dashscope 但未配置 DASHSCOPE_API_KEY,向量化已跳过',
+        },
+      });
+    } else if (!deps.embedder || !deps.vectorStore) {
       await progress('embedding', 85, '未配置向量库,跳过向量化');
     } else {
+      const meter =
+        ds && deps.taskEmbedder
+          ? new TaskBudgetMeter(ds.taskBudgetCents, dashscopeModelCaps(ds.model)?.yuanPer1kTokens)
+          : null;
+      const meterStats = () =>
+        meter
+          ? {
+              embeddingCostCents: Math.round(meter.cents * 1000) / 1000,
+              embeddingTokens: meter.tokens,
+              embeddingTokenSource: meter.source,
+            }
+          : {};
       await progress('embedding', 85, '切块与向量化');
       try {
         const r = await runEmbedding(
@@ -385,19 +422,38 @@ export async function runPipeline(
               ? priorDigest
               : null,
           prepared,
+          meter && deps.taskEmbedder ? deps.taskEmbedder(meter) : undefined,
         );
         embeddingStatus = r.reused ? 'reused' : 'ready';
+        stats = { ...stats, ...meterStats() };
         stats = { ...stats, embeddingChunks: r.chunks };
         if (r.digest) stats = { ...stats, embeddingDigest: r.digest };
         await progress('embedding', 99, r.message);
       } catch (err) {
-        embeddingStatus = 'failed';
+        stats = { ...stats, ...meterStats() };
+        if (err instanceof EmbeddingBudgetExceeded) {
+          // 预算用尽:停止外部调用,不静默——skipped + 原因进 stats,另发 stage_error
+          embeddingStatus = 'skipped';
+          stats = { ...stats, embeddingSkipReason: 'budget' };
+        } else {
+          embeddingStatus = 'failed';
+          // EmbeddingError 只含分类与状态码,不含第三方响应体
+          if (err instanceof EmbeddingError)
+            stats = {
+              ...stats,
+              embeddingErrorKind: err.kind,
+              embeddingErrorStatus: err.status ?? null,
+            };
+        }
         await events.emit({
           event: 'stage_error',
           data: {
             jobId,
             stage: 'embedding',
-            message: `向量化失败,已跳过:${err instanceof Error ? err.message : String(err)}`,
+            message:
+              err instanceof EmbeddingBudgetExceeded
+                ? `embedding 预算(${ds?.taskBudgetCents ?? 0} 美分)用尽,已停止外部调用,向量化记为 skipped`
+                : `向量化失败,已跳过:${err instanceof Error ? err.message : String(err)}`,
           },
         });
       }
@@ -612,19 +668,29 @@ export async function runEmbedding(
   prevDigest: string | null = null,
   /** 已切好的块(runPipeline 写 code_chunk 时切过一次,这里复用) */
   prepared: PreparedChunks | null = null,
+  /** T-214c:按任务计量的 embedder(外部提供方);缺省用 deps.embedder */
+  taskEmbedder?: Embedder,
 ): Promise<{ chunks: number; reused: boolean; message: string; digest?: string }> {
   const { store, config } = deps;
+  const embedder = taskEmbedder ?? deps.embedder!;
+  // dashscope 单批最多 10 条(config 已取 min);local 沿用 EMBEDDING_BATCH_SIZE
+  const batchSize = config.embedding.dashscope?.batchSize ?? config.embedding.batchSize;
   const { repoId, commitSha } = data;
-  const { chunks, excluded } = prepared ?? (await prepareChunks(data, deps, root));
+  const prep = prepared ?? (await prepareChunks(data, deps, root));
+  const { excluded } = prep;
+  // T-214c:外部提供方不接受空串输入(整批 400),发送前过滤空白块;local 不过滤,digest 不变
+  const chunks = config.embedding.dashscope
+    ? prep.chunks.filter((c) => c.text.trim() !== '')
+    : prep.chunks;
   // 跨任务复用:优先取同 (repo, commit) 最近一个成功任务记录的 digest,其次本任务上次的 digest
   const doneDigest = (await store.latestDoneTaskForCommit(repoId, commitSha))?.stats
     .embeddingDigest;
   const baseline = typeof doneDigest === 'string' ? doneDigest : prevDigest;
-  const digest = chunksDigest(deps.embedder!, chunks);
+  const digest = chunksDigest(embedder, chunks);
   const index = (beforeWrite?: () => Promise<void>) =>
     indexChunks(
-      { repoId, commitSha, chunks, batchSize: config.embedding.batchSize, prevDigest: baseline },
-      deps.embedder!,
+      { repoId, commitSha, chunks, batchSize, prevDigest: baseline },
+      embedder,
       deps.vectorStore!,
       (done, total) =>
         progress('embedding', 85 + Math.floor((done / total) * 14), `向量化 ${done}/${total} 块`),

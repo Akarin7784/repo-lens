@@ -175,6 +175,11 @@ export interface HybridSearchInput {
   embeddingStatus: string | null | undefined;
   embedder?: Embedder | null;
   vectorStore?: VectorStore | null;
+  /**
+   * T-214c:task.stats.embeddingProvider(建索引时的提供方);缺省视为 local。
+   * 与当前 embedder.provider 不一致时向量不可比,降级 keyword-only(provider-mismatch)。
+   */
+  indexedProvider?: string | null;
   limit?: number;
   /** 每路候选数 */
   candidates?: number;
@@ -195,7 +200,10 @@ export async function hybridSearch(o: HybridSearchInput): Promise<RetrievalResul
   if (o.embeddingStatus !== 'ready' && o.embeddingStatus !== 'reused')
     degradedReason = `status:${o.embeddingStatus ?? 'none'}`;
   else if (!o.embedder || !o.vectorStore) degradedReason = 'no-vector-store';
+  else if ((o.indexedProvider ?? 'local') !== (o.embedder.provider ?? 'local'))
+    degradedReason = 'provider-mismatch';
   else {
+    // dashscope 的 embedQuery 自带 QUERY_CALL(单次 5 秒、最多重试 1 次);仍失败走下面的 vector-error
     try {
       const v = await o.embedder.embedQuery(o.rewritten);
       const hits = await o.vectorStore.search(o.repoId, o.commitSha, v, cand);

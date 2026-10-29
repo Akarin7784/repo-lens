@@ -36,6 +36,9 @@ export class CachedEmbedder implements Embedder {
     private readonly inner: Embedder,
     private readonly kv: EmbeddingKv,
   ) {}
+  get provider() {
+    return this.inner.provider;
+  }
   get model() {
     return this.inner.model;
   }
@@ -56,6 +59,7 @@ export class CachedEmbedder implements Embedder {
     await this.kv.setex(k, EMB_TTL_SEC, enc(v));
     return v;
   }
+  /** 每次调用(indexChunks 里即每一批)成功后立即写缓存:中途失败重跑时已成功的批直接命中,不重复请求 */
   async embedDocuments(texts: string[]) {
     if (!texts.length) return [];
     const keys = texts.map((t) => embKey(this.keyModel, 'passage', t));
