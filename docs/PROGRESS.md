@@ -114,13 +114,12 @@
 - 2026-10-29 15:2x:#50 合并(后端一揽子修复,提交 b3a1002)。我在最新提交 29ff9cb 上独立重跑 install(frozen lockfile)、lint、typecheck、build、test(共 358 个,真实 Redis 与 MariaDB)全过,`ci` 与 `smoke` 绿,与 main 无冲突。内容:LLM 超时真正取消请求(`AbortSignal.any`,清定时器,取消的调用只记一次失败、费用 0,迟到回复只记一次账);敏感规则补缺口(JSON `"_authToken"`、`.yarnrc.yml` 的 `npmAuthToken`、`app-secrets.json`,credentials 与 secrets 共用扩展名表);README 与 package.json 先 `lstat`(用指向 `/etc/passwd` 的符号链接探针验证不会被读取);40 位 SHA ref 仅在 GitHub 明确 404 时返回 REPO_NOT_FOUND(403、5xx、网络错误照常放行);worker 不再调用 `listSummaries`,改为按节点按输入哈希查询、优先当前 commit;价格段与 `pricing.ts` 一致,孤儿 `commit_sha=''` 行只文档化手动清理;ARCHITECTURE §6 写明滚动发布顺序(先迁移、停旧 worker、同时发新 api 与 worker)。后续项(非阻塞):孤儿行清理的 DELETE 应限定 `repo_id`;补 README 符号链接与超大 README 的 worker 测试;摘要复用是 N+1 查询(约 1500 节点 1500 次),可按层批量或加复合索引 `(repo_id, level, target_id, input_hash)`;fake 客户端不响应 signal,取消行为只在 DeepSeek 客户端和网关测试覆盖;`npmAuthToken: process.env.X` 的源码行会被误判敏感(只给规则摘要),写进文档。#51(前端标签与 #49 后续)待评审。
 
 ## 演示检查清单(第 4 周前逐项勾选)
-- [ ] 演示前抽查 hono 的在环节点:节点详情里环上的文件显示「在环中」,数量与状态栏环边数相符(`inCycle` 须与图投影同源,不依赖 `stats`)。
+- [ ] 演示前抽查 hono 的在环节点:节点详情里环上的文件显示「在环中」,数量与状态栏环边数相符(`inCycle` 须与图投影同源,不依赖 `stats`)。 具体抽查:`/nodes` 对 `src/helper/streaming/index.ts`、`src/helper/streaming/text.ts`、`src/jsx/dom/render.ts` 返回 true,`src/hono.ts` 为 false;ed1d5f7 应为 5 个环、12 个文件(CI smoke 的 `ci-smoke-cycles.mjs` 同样断言)。
 - [ ] 演示机内存至少 4 GB(本地 e5 embedding 峰值约 2.5 GB,见 D4 与 T-214);embedding 批大小可配置。
 - [x] summary 迁移 0001 在 MySQL 8.4 上的幂等与回填:CI smoke 已验证(8.4.13)。
 - [ ] 演示机拉代码后先在仓库根目录运行 `pnpm build`(或 `pnpm --filter @repolens/shared build`),避免 shared 旧构建导致错误码显示异常。
 - 演示前提前分析好 hono、zustand、zod、trpc,演示时只走「复用已有结果」的路径,现场不依赖新分析。
 - 演示环境把 `RATE_LIMIT_NEW_REPOS_PER_HOUR` 调高(默认 5),避免彩排几次后被限流;同时确认 `RATE_LIMIT_SUBMITS_PER_HOUR`(默认 60)够用。
-- [ ] 演示前抽查 hono 的在环节点:`/nodes` 对 `src/helper/streaming/index.ts`、`src/helper/streaming/text.ts`、`src/jsx/dom/render.ts` 返回 `inCycle: true`,`src/hono.ts` 为 false;ed1d5f7 应为 5 个环、12 个文件(inCycle 现由存储的边现场计算,不再读 `task.stats`,CI smoke 的 `ci-smoke-cycles.mjs` 也断言)。
 - 状态栏的节点数和边数口径要和画布一致,避免被现场对数字(见 2026-10-29 的 84 与 80 讨论)。
 - 暗色、Safari、Firefox、投影仪、大图性能还没验证,演示前在真实设备上过一遍。
 
