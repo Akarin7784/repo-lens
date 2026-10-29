@@ -4,7 +4,7 @@ import { Redis } from 'ioredis';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { readLlmConfig, createLlmClient } from './config.js';
 import { FakeLlm } from './fake.js';
-import { LlmGateway, cacheHash, type LlmKv } from './gateway.js';
+import { LlmGateway, cacheHash, errMsg, type LlmKv } from './gateway.js';
 import {
   DEFAULT_PRICES,
   costMicroUsd,
@@ -408,8 +408,30 @@ describe('complete() 记账失败(与流式路径对齐)', () => {
     ]);
     expect(await gw.spentToday()).toBe(r.costMicroUsd);
     expect(warns.map((w) => w.msg)).toEqual(['llm cache write failed']);
+    expect(Object.keys(warns[0]!.obj).sort()).toEqual(
+      ['purpose', 'model', 'repoId', 'taskId', 'sessionId', 'err'].sort(),
+    );
     expect(warns[0]!.obj).toMatchObject({ purpose: 'summary', err: 'redis set down' });
-    expect(JSON.stringify(warns[0]!.obj)).not.toContain('hello');
+    const logged = JSON.stringify(warns[0]!.obj);
+    expect(logged).not.toContain('hello');
+    expect(r.text.length).toBeGreaterThan(0);
+    expect(logged).not.toContain(r.text);
+  });
+
+  it('errMsg:sk- 形态(含打码回显、大小写)一律脱敏,普通文本不动', () => {
+    expect(errMsg(new Error('bad key sk-abcdEFGH1234 rejected'))).toBe('bad key *** rejected');
+    expect(errMsg('echo SK-ab****xyz')).toBe('echo ***');
+    expect(errMsg(new Error('task-sk-1 risk-free'))).toBe('task-sk-1 risk-free');
+  });
+
+  it('补行 warn 的 err 已脱敏(insert 错误里带 sk-)', async () => {
+    const { gw, warns } = setup();
+    const kv = (gw as unknown as { o: { kv: MemKv } }).o.kv;
+    kv.set = async () => {
+      throw new Error('auth sk-live1234abcd failed');
+    };
+    await gw.complete(req('hello'));
+    expect(warns[0]!.obj.err).toBe('auth *** failed');
   });
 
   it('缓存命中时写命中行抛错:只 warn,照常返回命中结果', async () => {
@@ -438,7 +460,9 @@ describe('complete() 记账失败(与流式路径对齐)', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ ok: false, costMicroUsd: 0 });
     expect(rows[0]!.tokensIn).toBeGreaterThan(0);
-    expect(warns.map((w) => w.msg)).toEqual(['llm usage insert failed after spend counted']);
+    expect(warns.map((w) => w.msg)).toEqual([
+      'llm usage insert failed (zero cost, no spend counted)',
+    ]);
   });
 
   for (const stage of ['expire', 'task-incrby'] as const) {

@@ -6,6 +6,7 @@ import {
   redisKeys,
   type LlmUsageInput,
 } from '@repolens/db';
+import { SK_PATTERN } from './deepseek.js';
 import { costMicroUsd, priceOf, type PriceTable } from './pricing.js';
 import {
   LlmError,
@@ -49,7 +50,9 @@ export interface LlmGatewayOptions {
 
 const CENT = 10_000; // micro-USD
 
-const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
+/** 日志用错误文本:统一把 `sk-…` 形态(含部分打码回显)替换成 `***`,与 deepseek.ts 同一正则 */
+export const errMsg = (e: unknown) =>
+  (e instanceof Error ? e.message : String(e)).replace(SK_PATTERN, '***');
 
 /** 缓存 key 的 hash:模型 + 影响输出的全部请求字段 */
 export function cacheHash(req: LlmCall): string {
@@ -333,7 +336,9 @@ export class LlmGateway {
           costMicroUsd: spent.cost,
           err: errMsg(cause),
         },
-        'llm usage insert failed after spend counted',
+        spent.cost > 0
+          ? 'llm usage insert failed after spend counted'
+          : 'llm usage insert failed (zero cost, no spend counted)',
       );
     try {
       await this.o.usage.insertLlmUsage({

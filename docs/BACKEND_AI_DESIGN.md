@@ -504,11 +504,11 @@ T-210 已实现的部分（不依赖 D1）：
 - 缓存内容损坏（非 JSON 或字段缺失/非法）按未命中处理，照常检查预算并调用，成功后覆盖。
 - 预算：Redis 计数 `llm:spend:day:{yyyyMMdd UTC}`（TTL 2d）与 `llm:spend:task:{taskId}`（TTL 7d），单位 micro-USD；调用前检查、调用后 INCRBY，并发时最多超出（并发数 − 1）次调用的花费。超限抛 `BUDGET_EXCEEDED`（scope = daily / task），不调用模型、不写 `llm_usage`。**`DAILY_LLM_BUDGET_CENTS=0` 表示禁止一切模型调用**（只允许缓存命中），`LLM_TASK_BUDGET_CENTS=0` 同理只作用于分析任务；日预算按 UTC 自然日分桶，过 UTC 零点（北京时间 08:00）自动恢复。预算变量在 api 和 worker 启动时由 `readLlmConfig` 校验，非法即启动失败。
 - 记账失败补行(`complete()` 与 `stream()` 同一口径,`gateway.ts` `failRowSafe`):`addSpend`(Redis 预算 INCRBY)与 `insertLlmUsage`(ok=1)都成功才算记过账;任一步抛错都包成 `LlmError('LLM_UNAVAILABLE', 'LLM 用量记账失败')`,`cause` 为原错误,并补一行 ok=0。
-  - `addSpend` 已成功、insert 失败:补行带真实 token 与 `cost_micro_usd`,另打一条 warn `llm usage insert failed after spend counted`(带 costMicroUsd,便于对账);`addSpend` 自己失败(预算未计):补行 cost 为 0。
+  - `addSpend` 已成功、insert 失败:补行带真实 token 与 `cost_micro_usd`,另打一条 warn `llm usage insert failed after spend counted`(带 costMicroUsd,便于对账;cost 为 0 时没有计入花费,措辞为 `llm usage insert failed (zero cost, no spend counted)`);`addSpend` 自己失败(预算未计):补行 cost 为 0。
   - 为什么补行带真实 cost 不会重复计预算:预算只读 Redis `llm:spend:day:*` / `llm:spend:task:*`(`gateway.ts` `spentToday`/`spentByTask`/`addSpend`,唯一的 INCRBY 写入点在 `addSpend`);`llm_usage` 只做审计。全仓库 `git grep` 查 `llm_usage|llmUsage|cost_micro_usd|incrby|llmSpend`(不含 docs/*.md 与测试):读 `llm_usage` 的只有 `packages/db/src/mysql-store.ts:192` 与 `memory-store.ts:132` 的 `llmUsageByTask`,调用方全部是测试;没有对账、重建预算、统计接口或脚本把它的 cost 累加回预算。以后如果加了这类汇总,这里要改回补行 cost=0、只在 warn 里带 cost。
   - 补行自己也失败(`failRowSafe` 内部 catch):只打 warn `llm usage failure row write failed`(带 costMicroUsd),不盖原错误、不让流式 `return()` 抛错;这次调用在 `llm_usage` 里**没有行**,花费只留在 Redis 预算计数与这条 warn 日志里。
   - 「已计入」以 `addSpend` 的 `mark.counted` 为准:日预算第一次 INCRBY 成功即置位(cost≤0 视为已计入);之后 expire 或任务预算 INCRBY 抛错时日预算已扣,补行照样带真实 cost(`complete()` 与 `stream()` 同口径)。
-  - 记账成功后写缓存(`kv.set`)失败、缓存命中时写命中行失败:都只打结构化 warn(`llm cache write failed` / `llm usage cache-hit row write failed`,只带归属、token、err.message,不含正文/key/IP),照常返回结果、不抛错,避免 summarize 重试导致再调模型再计费;命中行写失败时这次命中在 `llm_usage` 里没有行。
+  - 记账成功后写缓存(`kv.set`)失败、缓存命中时写命中行失败:都只打结构化 warn(`llm cache write failed` / `llm usage cache-hit row write failed`,只带归属、token、err.message,不含正文/key/IP;`err` 经 `errMsg` 统一按 deepseek.ts 的 `SK_PATTERN` 把 `sk-…` 替换成 `***`),照常返回结果、不抛错,避免 summarize 重试导致再调模型再计费;命中行写失败时这次命中在 `llm_usage` 里没有行。
 - 记账：每次调用写 `llm_usage`；费用按价格表（每百万 token 美元）换算成 micro-USD 并向上取整；不在价格表里的模型拒绝调用。模型失败写 `ok=0` 并抛 `LLM_UNAVAILABLE`，重试与规则降级由调用方（T-211，D6）负责。
 - `FakeLlm`：确定性输出、不联网、不需要 key；`LLM_PROVIDER` 默认 `fake`。
 

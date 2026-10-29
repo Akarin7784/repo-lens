@@ -277,7 +277,7 @@ volumes: { repos: {}, mysql: {}, qdrant: {}, caddy_data: {} }
 - **问答限流的 Redis 故障返回 500 `INTERNAL`**:`rl:chat` 计数(INCR + EXPIRE)出错不降级放行,走全局错误处理(apps/api/src/chat/route.ts:138;apps/api/src/app.ts:79–88)。
 - **429 `RATE_LIMITED` 的 details**:超小时次数为 `{ reason: 'rate_limit', retryAfterSec }`(到下个整点的秒数);并发满为 `{ reason: 'concurrency' }`,不带 retryAfterSec,并回退刚扣的计数,回退失败只打 warn(apps/api/src/chat/route.ts:138–150)。限流键的 IPv6 /64 归并见 §8。
 - **persistAssistant 不在超时竞态内**:`CHAT_STREAM_TIMEOUT_MS` 只中止上游生成;流结束后写 assistant 消息是普通 await,写库期间到时不会打断写库(apps/api/src/chat/route.ts:207–209、265–285、406)。可接受,已知。
-- **估算计费**:流式调用拿不到 usage 时网关按估算记账(`ok=1`),同时打一条含 `estimated` 的 warn;`llm_usage` 表没有 estimated 列,事后只能靠日志区分估算与真实用量(packages/agent/src/llm/gateway.ts:195–196、250–259)。
+- **估算计费**:流式调用拿不到 usage 时网关按估算记账(`ok=1`),同时打一条含 `estimated` 的 warn;`llm_usage` 表没有 estimated 列,事后只能靠日志区分估算与真实用量(packages/agent/src/llm/gateway.ts:213–214、268–279)。
 - **真实服务未跑过**:以上全部来自代码与本地 / CI 单元测试(fake provider、fake embedder);真实 DeepSeek 与真实 DashScope 从未调用过,超时、限流、估算在真实服务下的表现均**未验证**。
 
 ## 5. 延迟与降级(价格与延迟均未验证)
