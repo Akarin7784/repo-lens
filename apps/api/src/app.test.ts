@@ -657,6 +657,18 @@ describe.skipIf(!hasRedis)('路由(真实 Redis + 内存 Store)', () => {
       stats: { files: 5, modules: 3, edges: 7, embeddingStatus: 'failed' },
     });
     expect((await app.inject(`/api/repos/${repoId}`)).json().embeddingStatus).toBe('failed');
+    // P4:stats.embeddingProvider 透出;旧任务或非法值省略
+    expect('embeddingProvider' in r).toBe(false);
+    await store.updateTask(jobId, {
+      stats: { files: 5, modules: 3, edges: 7, embeddingProvider: 'dashscope' },
+    });
+    expect(
+      RepoStatusSchema.parse((await app.inject(`/api/repos/${repoId}`)).json()).embeddingProvider,
+    ).toBe('dashscope');
+    await store.updateTask(jobId, {
+      stats: { files: 5, modules: 3, edges: 7, embeddingProvider: 'bogus' as never },
+    });
+    expect('embeddingProvider' in (await app.inject(`/api/repos/${repoId}`)).json()).toBe(false);
     const old: Record<string, unknown> = { ...r };
     delete old.embeddingStatus;
     expect(RepoStatusSchema.parse(old).embeddingStatus).toBeNull();

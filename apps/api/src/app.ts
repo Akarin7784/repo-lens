@@ -13,6 +13,7 @@ import {
   type NodeDetail,
   type RepoStatus,
   sensitivePathRule,
+  EmbeddingProviderSchema,
 } from '@repolens/shared';
 import {
   GRAPH_CACHE_TTL_S,
@@ -244,6 +245,11 @@ export function buildApp(deps?: AppDeps): FastifyInstance {
       error: task.errorMsg,
       // 与 commitSha 同源:取最近已完成任务的向量化状态
       embeddingStatus: (done ?? task).stats.embeddingStatus ?? null,
+      // 同源:只透出合法取值,旧任务或异常值省略
+      ...(() => {
+        const p = EmbeddingProviderSchema.safeParse((done ?? task).stats.embeddingProvider);
+        return p.success ? { embeddingProvider: p.data } : {};
+      })(),
     };
     return res;
   });

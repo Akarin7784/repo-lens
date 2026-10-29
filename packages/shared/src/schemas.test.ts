@@ -367,6 +367,7 @@ describe('API DTO', () => {
     expect(ok({ ...done, sessionId: 7 })).toBe(true);
     for (const sessionId of [0, -1, 1.5, '7']) expect(ok({ ...done, sessionId })).toBe(false);
   });
+
   it('ChatRequest 收紧:未知字段、超长、空白字符串都拒绝', () => {
     // 未知字段(含旧草案里的 question)
     expect(ChatRequestSchema.safeParse({ message: 'q', question: 'q' }).success).toBe(false);
@@ -448,6 +449,12 @@ describe('RepoStatusSchema', () => {
     for (const v of ['ready', 'reused', 'skipped', 'failed'])
       expect(RepoStatusSchema.parse({ ...ok, embeddingStatus: v }).embeddingStatus).toBe(v);
     expect(RepoStatusSchema.safeParse({ ...ok, embeddingStatus: 'done' }).success).toBe(false);
+    // P4 只增不改:embeddingProvider 可选,旧响应没有时省略;只接受 local|dashscope
+    expect('embeddingProvider' in RepoStatusSchema.parse(ok)).toBe(false);
+    for (const v of ['local', 'dashscope'])
+      expect(RepoStatusSchema.parse({ ...ok, embeddingProvider: v }).embeddingProvider).toBe(v);
+    expect(RepoStatusSchema.safeParse({ ...ok, embeddingProvider: 'openai' }).success).toBe(false);
+    expect(RepoStatusSchema.safeParse({ ...ok, embeddingProvider: null }).success).toBe(false);
     expect(
       Object.keys(CreateRepoResponseSchema.shape).filter((k) => !(k in RepoStatusSchema.shape)),
     ).toEqual([]);

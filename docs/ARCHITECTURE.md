@@ -375,7 +375,7 @@ CREATE TABLE llm_usage (
 
 Qdrant collection `code_chunks`:命名向量 `dense`,384 维(multilingual-e5-small),cosine;point id = `code_chunk.qdrant_point_id`;payload `{repo_id, commit_sha, path, symbol, start_line, end_line, content_hash}`,**`repo_id` 作为 filter 字段**并建 payload index(`path` 同建)。重新分析时按 `repo_id`+`commit_sha` 过滤删除旧 points。规划中、尚未写入的 payload 字段:`node_id`、`kind`、`lang`、`chunk_type`(code|summary)与稀疏向量 `bm25`(T-214 第二部分定,只增不改;BACKEND_AI_DESIGN §5 同步此清单)。
 
-**向量化状态与降级(T-214)**:worker 把结果写入 `analysis_task.stats.embeddingStatus`(JSON 字段,无迁移),`GET /api/repos/:id` 以 `embeddingStatus` 透出(与 `commitSha` 同源,取最近已完成任务;旧任务为 `null`):
+**向量化状态与降级(T-214)**:worker 把结果写入 `analysis_task.stats.embeddingStatus`(JSON 字段,无迁移),`GET /api/repos/:id` 以 `embeddingStatus` 透出(与 `commitSha` 同源,取最近已完成任务;旧任务为 `null`);P4 起同源透出可选的 `embeddingProvider: "local" | "dashscope"`(来自 `stats.embeddingProvider`,旧任务省略):
 | 值 | 含义 |
 |---|---|
 | `ready` | 本次切块并写入 Qdrant |
