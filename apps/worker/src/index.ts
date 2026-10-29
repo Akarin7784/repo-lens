@@ -5,7 +5,11 @@ import { loadConfig } from './config.js';
 import { RedisEventSink } from './events.js';
 import { ANALYZE_QUEUE, processAnalyzeJob, type AnalyzeJobData } from './queue.js';
 
+// 配置(含 LLM 预算等)不合法时启动即失败
 const config = loadConfig();
+console.log(
+  `[worker] llm provider=${config.llm.provider} daily=${config.llm.dailyBudgetCents}¢ task=${config.llm.taskBudgetCents}¢`,
+);
 if (!config.databaseUrl) throw new Error('DATABASE_URL 未设置');
 // 迁移只由 API 执行;worker 等待 schema 就绪(有限次指数退避重试)
 await waitForSchema(config.databaseUrl, { label: 'worker' });

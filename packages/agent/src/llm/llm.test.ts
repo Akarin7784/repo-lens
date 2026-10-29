@@ -83,7 +83,7 @@ function suite(
     });
     afterAll(async () => cleanup?.());
 
-    const make = (o: { daily?: number; task?: number; fake?: FakeLlm } = {}) => {
+    const make = (o: { daily?: number; task?: number; fake?: FakeLlm; now?: () => Date } = {}) => {
       prefix = `rl-dev-t210:${randomUUID()}:`;
       const client = o.fake ?? new FakeLlm();
       const usage = new MemoryStore();
@@ -95,7 +95,7 @@ function suite(
         dailyBudgetCents: o.daily ?? 500,
         taskBudgetCents: o.task,
         keyPrefix: prefix,
-        now: () => new Date('2026-10-29T05:00:00Z'),
+        now: o.now ?? (() => new Date('2026-10-29T05:00:00Z')),
       });
       return { gw, client, usage };
     };
@@ -177,6 +177,62 @@ function suite(
       expect((await usage.llmUsageByTask(11)).map((r) => r.ok)).toEqual([false]);
       expect(await gw.spentToday()).toBe(0);
       expect(await kv.get(`${prefix}llm:${cacheHash(req('boom'))}`)).toBeNull();
+    });
+
+    it('缓存内容损坏时降级为未命中:照常调用模型并覆盖缓存', async () => {
+      const { gw, client, usage } = make();
+      const key = `${prefix}llm:${cacheHash(req('c'))}`;
+      for (const bad of [
+        '{not json',
+        '"str"',
+        'null',
+        '{"text":1}',
+        '{"text":"t","usage":{"tokensIn":-1,"tokensOut":0}}',
+      ]) {
+        await kv.set(key, bad, 'EX', 60);
+        const r = await gw.complete(req('c'));
+        expect(r.cacheHit).toBe(false);
+      }
+      expect(client.calls).toBe(5);
+      expect((await usage.llmUsageByTask(11)).every((u) => !u.cacheHit)).toBe(true);
+      // 最后一次成功调用已把缓存覆盖为合法内容
+      expect((await gw.complete(req('c'))).cacheHit).toBe(true);
+      expect(client.calls).toBe(5);
+    });
+
+    it('过 UTC 零点后日预算恢复(按 UTC 自然日换 key)', async () => {
+      let t = new Date('2026-10-29T23:59:59.000Z'); // 北京时间 10-30 07:59:59,仍属 UTC 10-29
+      const { gw, client } = make({ daily: 1, now: () => t });
+      const big = 'z'.repeat(4 * 11000);
+      await gw.complete(req(big));
+      await expect(gw.complete(req('after'))).rejects.toMatchObject({
+        code: 'BUDGET_EXCEEDED',
+        scope: 'daily',
+      });
+      t = new Date('2026-10-30T00:00:00.000Z');
+      expect(await gw.spentToday()).toBe(0);
+      await expect(gw.complete(req('after'))).resolves.toMatchObject({ cacheHit: false });
+      expect(client.calls).toBe(2);
+      // 前一天的计数仍在(TTL 2 天),不受影响
+      expect(Number(await kv.get(`${prefix}llm:spend:day:20261029`))).toBeGreaterThanOrEqual(
+        10_000,
+      );
+    });
+
+    it('dailyBudgetCents=0 表示禁止调用,只允许缓存命中', async () => {
+      const { gw, client } = make({ daily: 0 });
+      await expect(gw.complete(req('new'))).rejects.toMatchObject({
+        code: 'BUDGET_EXCEEDED',
+        scope: 'daily',
+      });
+      const cached = JSON.stringify({ text: 'old', usage: { tokensIn: 3, tokensOut: 2 } });
+      await kv.set(`${prefix}llm:${cacheHash(req('old'))}`, cached, 'EX', 60);
+      await expect(gw.complete(req('old'))).resolves.toMatchObject({
+        text: 'old',
+        cacheHit: true,
+        costMicroUsd: 0,
+      });
+      expect(client.calls).toBe(0);
     });
 
     it('未知模型没有价格,拒绝调用', async () => {

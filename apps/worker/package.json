@@ -11,6 +11,7 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
+    "@repolens/agent": "workspace:*",
     "@repolens/analyzer": "workspace:*",
     "@repolens/db": "workspace:*",
     "@repolens/shared": "workspace:*",
