@@ -8,7 +8,7 @@ import {
   type Answer,
   type AnswerAction,
 } from '../../lib/chat/answer';
-import { chatErrorText, RATE_LIMIT_COOLDOWN_S } from '../../lib/chat/errors';
+import { chatErrorText, retryCooldownSec } from '../../lib/chat/errors';
 import {
   buildChatRequest,
   ChatTransportError,
@@ -288,6 +288,13 @@ function AnswerNotes({ a, onRetry }: { a: Answer; onRetry: () => void }) {
           未生成回答:问答服务暂不可用或额度已用完,以下仅列出检索到的相关代码位置
         </span>,
       );
+    // 契约 v2:截断的回答已正常落库,只提示、不给重试
+    if (a.done.truncated === true)
+      notes.push(
+        <span key="trunc" className="rounded-full bg-panel px-2 py-0.5">
+          回答可能被截断
+        </span>,
+      );
     if (a.done.retrieval === 'keyword-only')
       notes.push(
         <span key="kw" className="rounded-full bg-panel px-2 py-0.5">
@@ -295,7 +302,7 @@ function AnswerNotes({ a, onRetry }: { a: Answer; onRetry: () => void }) {
         </span>,
       );
   }
-  let problem: { text: string; retry: boolean; cooldown?: boolean } | null = null;
+  let problem: { text: string; retry: boolean; cooldown?: number } | null = null;
   if (a.status === 'error' && a.error)
     problem = {
       // 流中途出错(如后端总时限超时):已显示的部分保留在本页,但后端不保存半条回答,刷新后不会恢复
@@ -304,7 +311,7 @@ function AnswerNotes({ a, onRetry }: { a: Answer; onRetry: () => void }) {
           ? `${chatErrorText(a.error)}。回答未完成,以上为中断前已输出的部分(刷新后不保留)`
           : chatErrorText(a.error),
       retry: a.error.retryable,
-      cooldown: a.error.code === 'RATE_LIMITED',
+      cooldown: retryCooldownSec(a.error),
     };
   else if (a.status === 'timeout') problem = { text: '回答超时,请重试', retry: true };
   else if (a.status === 'interrupted')
@@ -323,13 +330,13 @@ function AnswerNotes({ a, onRetry }: { a: Answer; onRetry: () => void }) {
           {problem.text}
         </span>
       )}
-      {problem?.retry && <RetryButton cooldown={!!problem.cooldown} onRetry={onRetry} />}
+      {problem?.retry && <RetryButton cooldown={problem.cooldown ?? 0} onRetry={onRetry} />}
     </div>
   );
 }
 
-function RetryButton({ cooldown, onRetry }: { cooldown: boolean; onRetry: () => void }) {
-  const [left, setLeft] = useState(cooldown ? RATE_LIMIT_COOLDOWN_S : 0);
+function RetryButton({ cooldown, onRetry }: { cooldown: number; onRetry: () => void }) {
+  const [left, setLeft] = useState(cooldown);
   useEffect(() => {
     if (left <= 0) return;
     const t = setTimeout(() => setLeft((s) => s - 1), 1000);

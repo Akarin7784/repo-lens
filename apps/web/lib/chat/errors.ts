@@ -12,14 +12,39 @@ export const CHAT_ERROR_TEXT: Record<string, string> = {
   BAD_RESPONSE: '服务返回的不是问答流,无法显示回答,请稍后重试',
 };
 
-/** RATE_LIMITED 的重试按钮倒计时(§6.1:10 秒后才可点) */
+/** RATE_LIMITED 的默认重试倒计时(秒):concurrency、缺 reason、未知 reason、rate_limit 未带 retryAfterSec 时用 */
 export const RATE_LIMIT_COOLDOWN_S = 10;
+/** retryAfterSec 上限:契约为 1–3600(距下一个 UTC 整点);超出按 3600 截断,防止异常值让按钮长期不可点 */
+export const RATE_LIMIT_MAX_COOLDOWN_S = 3600;
+
+/** 契约 v2:429 按 details.reason 细分;缺失或不认识的 reason 用通用 CHAT_ERROR_TEXT.RATE_LIMITED */
+export const RATE_LIMITED_REASON_TEXT: Record<string, string> = {
+  rate_limit: '本小时提问次数已用完,请稍后再试',
+  concurrency: '当前提问的人较多,请稍后再试',
+};
+
+/**
+ * RATE_LIMITED 的重试倒计时(秒);其他错误码返回 0(不倒计时)。
+ * 只有 rate_limit 使用 retryAfterSec;concurrency 按契约不带该字段,即使带了也忽略。
+ */
+export function retryCooldownSec(e: ChatErrorInfo): number {
+  if (e.code !== 'RATE_LIMITED') return 0;
+  if (e.reason === 'rate_limit' && e.retryAfterSec !== undefined)
+    return Math.min(e.retryAfterSec, RATE_LIMIT_MAX_COOLDOWN_S);
+  return RATE_LIMIT_COOLDOWN_S;
+}
 
 /**
  * 契约错误码和前端自有码用固定文案;其他码(开流前 ApiError 的 code)显示服务端 ApiError.message,
  * 没有 message 时用通用文案。不显示原始响应体。
  */
 export function chatErrorText(e: ChatErrorInfo): string {
+  if (
+    e.code === 'RATE_LIMITED' &&
+    e.reason !== undefined &&
+    Object.hasOwn(RATE_LIMITED_REASON_TEXT, e.reason)
+  )
+    return RATE_LIMITED_REASON_TEXT[e.reason]!;
   const fixed = CHAT_ERROR_TEXT[e.code];
   if (fixed && e.code !== 'HTTP') return fixed;
   return e.message ? `问答请求失败:${e.message}` : CHAT_ERROR_TEXT.HTTP!;

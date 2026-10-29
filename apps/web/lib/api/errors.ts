@@ -77,7 +77,7 @@ export function userMessageOf(e: unknown): string {
 
 export function looseError(
   body: unknown,
-): { code: ApiErrorCode; message: string; reason?: string } | null {
+): { code: ApiErrorCode; message: string; reason?: string; retryAfterSec?: number } | null {
   if (typeof body !== 'object' || body === null) return null;
   const err = (body as { error?: unknown }).error;
   if (typeof err !== 'object' || err === null) return null;
@@ -87,14 +87,20 @@ export function looseError(
     details?: unknown;
   };
   if (typeof code !== 'string' || !(code in ERROR_TEXT) || typeof message !== 'string') return null;
-  const reason =
+  const d =
     typeof details === 'object' && details !== null
-      ? (details as { reason?: unknown }).reason
-      : undefined;
+      ? (details as { reason?: unknown; retryAfterSec?: unknown })
+      : {};
+  const { reason, retryAfterSec } = d;
   return {
     code: code as ApiErrorCode,
     message,
     reason: typeof reason === 'string' ? reason : undefined,
+    // 契约 v2(429 rate_limit):正整数秒;其他形态(0、负数、小数、字符串、NaN)一律当作没有
+    retryAfterSec:
+      typeof retryAfterSec === 'number' && Number.isInteger(retryAfterSec) && retryAfterSec > 0
+        ? retryAfterSec
+        : undefined,
   };
 }
 

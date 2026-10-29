@@ -461,3 +461,107 @@ describe('<ChatPanel>(假流,未接真实后端)', () => {
     },
   );
 });
+
+describe('<ChatPanel> 契约 v2:done.truncated(T-235)', () => {
+  const done = (extra: Record<string, unknown>): FakeStep =>
+    ({
+      event: 'done',
+      data: { messageId: 1, droppedCitations: 0, usage: { in: 0, out: 0 }, ...extra },
+    }) as ChatEvent;
+  const tok: FakeStep = { event: 'token', data: { text: '部分回答' } } as ChatEvent;
+
+  it('truncated=true → 显示「回答可能被截断」,不给重试(回答已正常落库)', async () => {
+    render(
+      <ChatPanel repoId={1} transport={createFakeTransport([tok, done({ truncated: true })])} />,
+    );
+    ask();
+    await waitFor(() => expect(lastAnswer().dataset.status).toBe('done'));
+    expect(lastAnswer()).toHaveTextContent('回答可能被截断');
+    expect(within(lastAnswer()).queryByRole('button', { name: /重试/ })).toBeNull();
+    expect(within(lastAnswer()).queryByRole('alert')).toBeNull();
+  });
+
+  it.each([
+    ['缺省', {}],
+    ['false', { truncated: false }],
+  ])('truncated %s → 不显示截断提示', async (_n, extra) => {
+    render(<ChatPanel repoId={1} transport={createFakeTransport([tok, done(extra)])} />);
+    ask();
+    await waitFor(() => expect(lastAnswer().dataset.status).toBe('done'));
+    expect(lastAnswer()).not.toHaveTextContent('截断');
+  });
+});
+
+describe('<ChatPanel> 契约 v2:429 按 details.reason 细分(T-235)', () => {
+  const cases: Array<[string, Record<string, unknown> | undefined, RegExp, RegExp | null, string]> =
+    [
+      [
+        'rate_limit + retryAfterSec=30',
+        { reason: 'rate_limit', retryAfterSec: 30 },
+        /本小时提问次数已用完,请稍后再试/,
+        null,
+        '重试(30s)',
+      ],
+      [
+        'rate_limit 无 retryAfterSec → 兜底 10s',
+        { reason: 'rate_limit' },
+        /本小时提问次数已用完/,
+        null,
+        '重试(10s)',
+      ],
+      [
+        'rate_limit retryAfterSec 非正整数 → 兜底 10s',
+        { reason: 'rate_limit', retryAfterSec: '30' },
+        /本小时提问次数已用完/,
+        null,
+        '重试(10s)',
+      ],
+      [
+        'rate_limit retryAfterSec 超上限 → 截到 3600s',
+        { reason: 'rate_limit', retryAfterSec: 99999 },
+        /本小时提问次数已用完/,
+        null,
+        '重试(3600s)',
+      ],
+      [
+        'concurrency(即使带了 retryAfterSec 也不用)',
+        { reason: 'concurrency', retryAfterSec: 30 },
+        /当前提问的人较多,请稍后再试/,
+        /本小时/,
+        '重试(10s)',
+      ],
+      [
+        '未知 reason',
+        { reason: 'something_new', retryAfterSec: 30 },
+        /提问太频繁,请稍后再试/,
+        /本小时|提问的人较多/,
+        '重试(10s)',
+      ],
+      ['缺 details', undefined, /提问太频繁,请稍后再试/, /本小时|提问的人较多/, '重试(10s)'],
+    ];
+  it.each(cases)('%s', async (_n, details, text, notText, btnText) => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            error: { code: 'RATE_LIMITED', message: 'x', ...(details && { details }) },
+          }),
+          { status: 429, headers: { 'content-type': 'application/json' } },
+        ),
+    );
+    render(
+      <ChatPanel
+        repoId={1}
+        transport={createFetchTransport('http://api.test', fetchImpl as unknown as typeof fetch)}
+      />,
+    );
+    ask();
+    await waitFor(() => expect(lastAnswer().dataset.status).toBe('error'));
+    const alert = within(lastAnswer()).getByRole('alert');
+    expect(alert.textContent).toMatch(text);
+    if (notText) expect(alert.textContent).not.toMatch(notText);
+    expect(lastAnswer().textContent).not.toMatch(/NaN|undefined|null/);
+    expect(within(lastAnswer()).getByRole('button', { name: /重试/ })).toHaveTextContent(btnText);
+    expect(within(lastAnswer()).getByRole('button', { name: /重试/ })).toBeDisabled();
+  });
+});
