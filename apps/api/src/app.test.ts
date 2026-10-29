@@ -750,7 +750,26 @@ describe.skipIf(!hasRedis)('路由(真实 Redis + 内存 Store)', () => {
     const x = NodeDetailSchema.parse(
       (await app.inject(`/api/repos/${repoId}/nodes/x:react`)).json(),
     );
-    expect(x).toMatchObject({ kind: 'external', inDegree: 2 });
+    expect(x).toMatchObject({ kind: 'external', inDegree: 2, summary: null });
+    expect(m.summary).toBeNull();
+    // T-211:module 摘要存在 level 'dir' 下,文件摘要在 level 'file'
+    const sum = { inputHash: 'h', model: 'fake', tokensIn: 1, tokensOut: 1 };
+    await store.upsertSummary(repoId, {
+      ...sum,
+      level: 'dir',
+      targetId: 'm:src/a',
+      content: 'mod A',
+    });
+    await store.upsertSummary(repoId, {
+      ...sum,
+      level: 'file',
+      targetId: 'f:src/b/util.ts',
+      content: 'util',
+    });
+    expect((await app.inject(`/api/repos/${repoId}/nodes/m:src/a`)).json().summary).toBe('mod A');
+    expect((await app.inject(`/api/repos/${repoId}/nodes/f:src/b/util.ts`)).json().summary).toBe(
+      'util',
+    );
     expect((await app.inject(`/api/repos/${repoId}/nodes/f:nope.ts`)).statusCode).toBe(404);
     await app.close();
   });

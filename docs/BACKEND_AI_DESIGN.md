@@ -344,6 +344,16 @@ data: {"jobId":"12:a1b2c3d","status":"done","stats":{"files":412,"chunks":2900,"
 - 文件内容不变 → function/file 摘要的 hash 也不变；只有变化文件的祖先 dir 要重新摘要（一般只有几条）。
 - 跨仓库复用：同一个 `content_hash` 的文件（比如 vendored 代码）直接共用摘要。
 
+**W2 实现现状(T-211,与上表的差异)**
+- 不做 function 层:file 层输入改为路径、语言、行数、导出名、依赖,加截断后的源码(150 行或 6000 字,放在 `<code>` 里),输出 `{"summary"}` ≤ 600 字(`PROMPT_VERSION=1`)。
+- module 摘要存在 `summary.level='dir'`,targetId 为 `m:…`;repo 摘要的 targetId 为 `repo`。表里没有 commit 列,重新分析会覆盖旧行;节点详情返回最近一次写入的摘要。
+- 数量控制(D8):按 fanIn 取前 200 个文件走 LLM,其余文件用规则摘要。dir、module、repo 走 LLM;repo 用 chatModel,其余用 summaryModel。
+- 规则摘要:file 为路径、语言、行数、导出名;dir 为路径、文件数、行数、主要子项;repo 为名称、文件数、模块列表。model 记为 `rule`,同样按 input_hash 复用。
+- 复用:库里已有行的 input_hash 与本次一致时直接复用,不经过网关,所以同 commit 重跑不新增 llm_usage。
+- 失败(D6):LLM 不可用或 JSON 解析失败时,改写 user 消息重试 1 次(避开已缓存的坏响应),仍失败就用规则摘要。
+- 成本上限与降级:每个任务受 `LLM_TASK_BUDGET_CENTS`(默认 30¢)约束,全站受日预算约束。网关一抛 `BUDGET_EXCEEDED`,剩余节点全部改用规则摘要,已复用的 LLM 摘要保留。summarizing 阶段只发一次 `stage_error`,任务仍然 done。摘要阶段的意外异常同样只发一次 stage_error,然后跳过摘要。
+- 并发:进程内池,默认 4;尚未接独立的 summarize 队列和全局 limiter。跨仓库按 content_hash 复用尚未实现。
+
 ---
 
 ## 5. 代码 RAG
