@@ -3,7 +3,12 @@ import { request } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Redis } from 'ioredis';
-import { ApiErrorSchema, ChatEventSchema, type ChatEvent } from '@repolens/shared';
+import {
+  ApiErrorSchema,
+  ChatEventSchema,
+  onServiceUnavailable,
+  type ChatEvent,
+} from '@repolens/shared';
 import { MemoryStore, redisKeys, type CodeChunkRow, type TaskStats } from '@repolens/db';
 import {
   DEFAULT_PRICES,
@@ -54,7 +59,9 @@ async function redisUp() {
   }
 }
 const hasRedis = await redisUp();
-if (!hasRedis) console.warn(`[api chat] Redis 不可达(${REDIS_URL}),跳过问答路由测试`);
+// REQUIRE_DB_TESTS=1(CI)时不可达直接抛错,不允许静默跳过
+if (!hasRedis)
+  onServiceUnavailable('Redis', `[api chat] Redis 不可达(${REDIS_URL}),跳过问答路由测试`);
 
 const SHA = '2'.repeat(40);
 const IP_BASE = randomInt(0, 250 * 200);
