@@ -193,7 +193,7 @@ volumes: { repos: {}, mysql: {}, qdrant: {}, caddy_data: {} }
 | REDIS_URL | redis://redis:6379 | 密码暂缓(只在内部网络,不映射端口;读取方式未验证) |
 | LLM_PROVIDER | deepseek | 默认 fake |
 | DEEPSEEK_API_KEY | 环境文件注入 | 必填 |
-| DEEPSEEK_BASE_URL | https://api.deepseek.com | 默认 |
+| DEEPSEEK_BASE_URL | 留空(用代码内置官方地址) | 默认 |
 | DEEPSEEK_STREAM_FIRST_CHUNK_TIMEOUT_MS / DEEPSEEK_STREAM_IDLE_TIMEOUT_MS | 20000 / 20000 | 默认;问答流式首包与 chunk 间空闲超时(毫秒,1–60000,非法值启动报错);首包从发出请求开始计时(含建连与等待响应头),空闲计时在调用方消费慢、生成器停在 yield 时暂停;60 秒总时限在 yield 背压期间仍在走 |
 | LLM_CHAT_MODEL / LLM_SUMMARY_MODEL | deepseek-flash | 默认 |
 | EMBEDDING_PROVIDER | dashscope | 默认 local |
@@ -213,6 +213,63 @@ volumes: { repos: {}, mysql: {}, qdrant: {}, caddy_data: {} }
 | CLONE_TIMEOUT_MS / PARSE_* | 默认 | worker config.ts |
 | NEXT_PUBLIC_AGG_EDGE_OPACITY | 0.3(构建期) | 默认 |
 
+
+### 4.1 api / worker 环境变量(逐个按代码核对)
+上表是演示机取值;本表只列变量名、代码默认值、用途、是否必填,不含任何取值或密钥。核对口径:main `43bad5e` 中 `process.env` / 配置读取处(位置见「代码位置」列)。「启动失败」指非法值在读取配置时抛错,进程不起来;报错只列变量名,不回显值。
+
+| 变量 | 读取方 | 代码默认 | 用途 | 必填 | 代码位置 |
+|---|---|---|---|---|---|
+| DATABASE_URL | api / worker | 无(worker 为 null) | MySQL 连接串 | api 必填(未设置启动失败) | apps/api/src/index.ts:37;apps/worker/src/config.ts:28 |
+| REDIS_URL | api / worker | api `redis://127.0.0.1:6379`,worker `redis://localhost:6379` | 队列、限流、预算计数、缓存 | 否(compose 必须改成服务名) | apps/api/src/index.ts:41;apps/worker/src/config.ts:27 |
+| API_PORT | api | 4000 | 监听端口 | 否 | apps/api/src/index.ts:36 |
+| NODE_ENV | api | 无 | 为 `test` 时关闭日志 | 否 | apps/api/src/app.ts:75 |
+| GITHUB_TOKEN | api | 无 | GitHub API 只读令牌,提高限额 | 否 | apps/api/src/index.ts:85 |
+| MAX_REPO_MB | api / worker | 300 | 仓库体积上限 | 否 | apps/api/src/index.ts:86;apps/worker/src/config.ts:31 |
+| REPOS_DIR | api / worker | 系统临时目录下 `repolens-repos` | 仓库快照目录(api 只读) | 否(compose 两边须一致) | apps/api/src/index.ts:88;apps/worker/src/config.ts:29 |
+| RATE_LIMIT_NEW_REPOS_PER_HOUR | api | 5 | 每 IP 每小时新任务数 | 否;正整数,非法则启动失败 | apps/api/src/limits.ts:19 |
+| RATE_LIMIT_SUBMITS_PER_HOUR | api | 60 | 每 IP 每小时提交次数 | 否;同上 | apps/api/src/limits.ts:20 |
+| RATE_LIMIT_CHAT_PER_HOUR | api | 30 | 每 IP 每小时提问次数(键 `rl:chat:<ipKey>:<小时桶>`) | 否;同上 | apps/api/src/limits.ts:41 |
+| CHAT_MAX_CONCURRENT_STREAMS | api | 8 | 问答流全局并发(进程内计数,多实例各算各的) | 否;同上 | apps/api/src/limits.ts:42 |
+| CHAT_STREAM_TIMEOUT_MS | api | 90000 | 单次问答流总时限 | 否;同上 | apps/api/src/limits.ts:44 |
+| CHAT_USER_KEY_SECRET | api | 无 | 生成 `chat_session.user_key` 的密钥;去首尾空白后须 ≥32 字节,短于 32 字节启动失败;未设置时 user_key 存 null,启动日志打 warn | 否(建议设置) | apps/api/src/limits.ts:37–39;apps/api/src/index.ts:102–103 |
+| MAX_FILES | worker | 5000 | 单仓库文件数上限 | 否 | apps/worker/src/config.ts:30 |
+| CLONE_TIMEOUT_MS | worker | 120000 | clone 超时 | 否 | apps/worker/src/config.ts:32 |
+| PARSE_TIMEOUT_MS | worker | 5000 | 单文件解析超时 | 否 | apps/worker/src/config.ts:33 |
+| PARSE_CONCURRENCY | worker | 8 | 解析并发 | 否 | apps/worker/src/config.ts:34 |
+| WORKER_CONCURRENCY | worker | 2 | 任务并发 | 否 | apps/worker/src/config.ts:35 |
+| LLM_PROVIDER | api / worker | `fake` | `fake` 或 `deepseek` | 否 | packages/agent/src/llm/config.ts:53 |
+| DEEPSEEK_API_KEY | api / worker | 无 | DeepSeek 密钥(只记是否已设置,不进配置对象) | `LLM_PROVIDER=deepseek` 时必填,缺失启动失败 | packages/agent/src/llm/config.ts:73–74、:101 |
+| DEEPSEEK_BASE_URL | api / worker | 代码常量 `DEEPSEEK_DEFAULT_BASE_URL` | DeepSeek 接口地址,须 http(s) | 否 | packages/agent/src/llm/config.ts:75;packages/agent/src/llm/deepseek.ts:4 |
+| LLM_SUMMARY_MODEL / LLM_CHAT_MODEL | api / worker | 代码常量 `DEEPSEEK_DEFAULT_MODEL` | 摘要模型 / 问答模型;fake 下忽略 | 否 | packages/agent/src/llm/config.ts:80–81 |
+| DAILY_LLM_BUDGET_CENTS | api / worker | 500 | 全站每日 LLM 预算(美分,非负整数) | 否 | packages/agent/src/llm/config.ts:57 |
+| LLM_TASK_BUDGET_CENTS | api / worker | 30 | 单任务 LLM 预算(美分,非负整数) | 否 | packages/agent/src/llm/config.ts:58 |
+| DEEPSEEK_STREAM_FIRST_CHUNK_TIMEOUT_MS / DEEPSEEK_STREAM_IDLE_TIMEOUT_MS | api / worker | 20000 / 20000 | 流式首包 / 空闲超时(整数 1–60000;fake 下也校验) | 否 | packages/agent/src/llm/config.ts:60–61 |
+| EMBEDDING_PROVIDER | api / worker | `local` | `local` 或 `dashscope` | 否 | packages/rag/src/config.ts:63 |
+| EMBEDDER | api / worker | `fake` | local 下 `fake` 或 `onnx`;api 不加载 ONNX | 否 | packages/rag/src/config.ts:45 |
+| EMBEDDING_MODEL / EMBEDDING_MODEL_REVISION / EMBEDDING_MODEL_DIR | worker(onnx) | `Xenova/multilingual-e5-small` / 代码默认 / `/app/models` | 本地 ONNX 模型 | 否 | packages/rag/src/config.ts:46–51 |
+| EMBEDDING_BATCH_SIZE | worker | 16(1–256) | 批大小 | 否 | packages/rag/src/config.ts:52 |
+| EMBEDDING_THREADS / WORKER_CPUS | worker | 无 | ONNX 线程数(1–64)/ CPU 数 | 否 | packages/rag/src/config.ts:53–54 |
+| EMBEDDING_LOCK_TTL_SEC / EMBEDDING_LOCK_MAX_WAIT_SEC | worker | 300(≥60)/ 3600(≥1) | 同 commit 向量化锁 | 否 | packages/rag/src/config.ts:55、:59;packages/rag/src/lock.ts:15、:20 |
+| DASHSCOPE_API_KEY | api / worker | 无 | 百炼密钥 | dashscope 时实际必需;缺失不启动失败:worker 记 skipped 并 warn,api 无查询向量 → keyword-only | packages/rag/src/config.ts:64 |
+| DASHSCOPE_EMBEDDING_BASE_URL | api / worker | 代码内置官方地址常量 | 只允许 https 与白名单主机 | 否 | packages/rag/src/config.ts:65 |
+| DASHSCOPE_EMBEDDING_MODEL | api / worker | `DASHSCOPE_DEFAULT_MODEL` | embedding 模型 | 否 | packages/rag/src/config.ts:69 |
+| DASHSCOPE_EMBEDDING_DIM | api / worker | 模型能力表 defaultDim | 向量维度,按能力表校验 | 否 | packages/rag/src/config.ts:71;packages/rag/src/models.ts |
+| DASHSCOPE_EMBEDDING_TPM | worker | 模型能力表 defaultTpm(≥1000) | 进程内令牌桶 | 否 | packages/rag/src/config.ts:72 |
+| EMBEDDING_TASK_BUDGET_CENTS | worker | 50 | 单任务 embedding 预算;0 = 不调外部 embedding | 否 | packages/rag/src/config.ts:73 |
+| QDRANT_URL | api / worker | 无 | 向量库地址;未设置 = 无向量库,检索 keyword-only | 否(要混合检索则必填) | packages/rag/src/config.ts:77 |
+| QDRANT_API_KEY | api / worker | 无 | 向量库密钥 | 否 | packages/rag/src/config.ts:78 |
+| QDRANT_COLLECTION | api / worker | `code_chunks` | collection 前缀(实际名按 provider/模型/维度派生) | 否 | packages/rag/src/config.ts:79;apps/api/src/index.ts:77 |
+
+不由 api/worker 进程读取:`EMBEDDING_MODEL_DOWNLOAD`(worker 镜像构建参数,apps/worker/Dockerfile:15)、`MYSQL_ROOT_PASSWORD`(mysql 容器)、`NEXT_PUBLIC_AGG_EDGE_OPACITY`(web 构建期)。
+
+### 4.2 运行时口径(只写 main 已有行为)
+- **api 与 worker 的 DASHSCOPE_* / EMBEDDING_* / QDRANT_* 必须一致**(建议同一个环境文件)。两边都调 `readEmbeddingConfig`,collection 名按 provider/模型/维度派生(`qdrantCollectionFor`)。不一致时不报错,问答静默退化为只用关键词。检查:api 启动日志 `llm config loaded` 的 `chatRetrieval`(`hybrid` / `keyword-only`,apps/api/src/index.ts:104–111);注意它只说明 api 是否构造了向量库,两边模型/维度不一致时仍可能是 `hybrid`,要再看问答 `done.retrieval` 是否为 `keyword-only`。
+- **问答限流的 Redis 故障返回 500 `INTERNAL`**:`rl:chat` 计数(INCR + EXPIRE)出错不降级放行,走全局错误处理(apps/api/src/chat/route.ts:138;apps/api/src/app.ts:79–88)。
+- **429 `RATE_LIMITED` 的 details**:超小时次数为 `{ reason: 'rate_limit', retryAfterSec }`(到下个整点的秒数);并发满为 `{ reason: 'concurrency' }`,不带 retryAfterSec,并回退刚扣的计数,回退失败只打 warn(apps/api/src/chat/route.ts:138–150)。限流键的 IPv6 /64 归并见 §8。
+- **persistAssistant 不在超时竞态内**:`CHAT_STREAM_TIMEOUT_MS` 只中止上游生成;流结束后写 assistant 消息是普通 await,写库期间到时不会打断写库(apps/api/src/chat/route.ts:207–209、265–285、406)。可接受,已知。
+- **估算计费**:流式调用拿不到 usage 时网关按估算记账(`ok=1`),同时打一条含 `estimated` 的 warn;`llm_usage` 表没有 estimated 列,事后只能靠日志区分估算与真实用量(packages/agent/src/llm/gateway.ts:194–195、263)。
+- **真实服务未跑过**:以上全部来自代码与本地 / CI 单元测试(fake provider、fake embedder);真实 DeepSeek 与真实 DashScope 从未调用过,超时、限流、估算在真实服务下的表现均**未验证**。
+
 ## 5. 延迟与降级(价格与延迟均未验证)
 - 香港机访问北京站百炼接口有跨境链路,延迟**未验证**。
 - 查询路径:query 向量化 5 s 超时、重试 1 次;Retry-After > 2 s 直接失败;失败或 provider/模型/维度不匹配 → 只用关键词检索(`done.retrieval='keyword-only'`,P4 接路由后才会真正设置)。最坏约 11 s(Retry-After ≤ 2 s 时 ≤ 12 s)。
@@ -231,7 +288,7 @@ curl -so /dev/null -w "size=%{size_download} t=%{time_total}\n" -H 'Accept-Encod
 ## 6. 公开网址防护:现状与缺口
 | 项 | 现状 |
 |---|---|
-| 按 IP 限流 | 已实现:新仓库 5/小时、提交 60/小时(Redis,`trustProxy:true`)。**缺口**:trustProxy 全信任,需确认 Caddy 覆盖 X-Forwarded-For 而非追加(否则可伪造);问答接口限流未实现(P4 待做) |
+| 按 IP 限流 | 已实现:新仓库 5/小时、提交 60/小时(Redis,`trustProxy:true`)。**缺口**:trustProxy 全信任,需确认 Caddy 覆盖 X-Forwarded-For 而非追加(否则可伪造);问答限流已实现(`RATE_LIMIT_CHAT_PER_HOUR`、`CHAT_MAX_CONCURRENT_STREAMS`,见 §4.1/§4.2) |
 | 任务并发上限 | 部分:`WORKER_CONCURRENCY`;无全局排队长度上限(缺口) |
 | DeepSeek 每日硬上限 | 已有 `DAILY_LLM_BUDGET_CENTS`(全站 UTC 自然日),超限关闭新分析、问答降级 |
 | 百炼每日硬上限 | **缺口**:只有单任务 `EMBEDDING_TASK_BUDGET_CENTS`,查询路径不受任务预算约束,无全站每日上限 |
