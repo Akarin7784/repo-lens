@@ -123,6 +123,95 @@ describe('<AnalysisWorkspace>', () => {
     );
   });
 
+  it('T-234:带 jobId 时 done 后补查失败 → 显示「提供方未知」,不当 local', async () => {
+    const api = fakeApi({
+      getRepoStatus: vi.fn(async () => {
+        throw new ApiRequestError('INTERNAL', 'boom', 500);
+      }),
+    });
+    render(
+      <AnalysisWorkspace repoId={1} jobId={jobId} api={api} eventSource={(u) => new FakeES(u)} />,
+    );
+    act(() => FakeES.last!.emit('graph_ready', { jobId, repoId: 1, graphUrl: '/g' }));
+    act(() => FakeES.last!.emit('done', { jobId, status: 'done' }));
+    await waitFor(() => expect(api.getRepoStatus).toHaveBeenCalled());
+    await act(async () => {});
+    const el = screen.getByTestId('chat-disclosure');
+    expect(el).toHaveTextContent(PROVIDER_DISCLOSURE.unknown);
+    expect(el).not.toHaveTextContent(PROVIDER_DISCLOSURE.local);
+  });
+
+  it.each(['pending', 'rejected'] as const)(
+    'T-234:切换 repoId(新请求 %s)→ 不沿用旧仓库的 dashscope,也不显示 local,只显示未知',
+    async (mode) => {
+      const getRepoStatus = vi.fn(async (id: number) => {
+        if (id === 1)
+          return {
+            repoId: 1,
+            jobId,
+            status: 'done',
+            stage: 'done',
+            progress: 100,
+            embeddingProvider: 'dashscope',
+          };
+        if (mode === 'pending') return new Promise(() => {});
+        throw new ApiRequestError('INTERNAL', 'boom', 500);
+      });
+      const api = fakeApi({
+        getRepoStatus: getRepoStatus as unknown as ApiClient['getRepoStatus'],
+      });
+      const { rerender } = render(
+        <AnalysisWorkspace repoId={1} api={api} eventSource={(u) => new FakeES(u)} />,
+      );
+      await waitFor(() =>
+        expect(screen.getByTestId('chat-disclosure')).toHaveTextContent(
+          PROVIDER_DISCLOSURE.dashscope,
+        ),
+      );
+      rerender(<AnalysisWorkspace repoId={2} api={api} eventSource={(u) => new FakeES(u)} />);
+      await waitFor(() => expect(getRepoStatus).toHaveBeenCalledWith(2));
+      await act(async () => {});
+      // 页面任何位置都不得出现旧仓库的 dashscope 或 local 文案
+      expect(document.body).not.toHaveTextContent(PROVIDER_DISCLOSURE.dashscope);
+      expect(document.body).not.toHaveTextContent(PROVIDER_DISCLOSURE.local);
+      if (mode === 'pending')
+        // 新请求未返回:面板仍挂载(进度状态沿用),披露须回落为未知
+        expect(screen.getByTestId('chat-disclosure')).toHaveTextContent(
+          PROVIDER_DISCLOSURE.unknown,
+        );
+      // rejected:工作区显示错误、问答面板不渲染,上面的 body 断言已覆盖
+    },
+  );
+
+  it('T-234:竞态 —— 旧 repoId 的状态请求晚于切换返回,不得覆盖新仓库(仍显示未知)', async () => {
+    let resolveOld!: (v: unknown) => void;
+    const getRepoStatus = vi.fn((id: number) =>
+      id === 1 ? new Promise((r) => (resolveOld = r)) : new Promise(() => {}),
+    );
+    const api = fakeApi({ getRepoStatus: getRepoStatus as unknown as ApiClient['getRepoStatus'] });
+    const { rerender } = render(
+      <AnalysisWorkspace repoId={1} jobId={jobId} api={api} eventSource={(u) => new FakeES(u)} />,
+    );
+    act(() => FakeES.last!.emit('graph_ready', { jobId, repoId: 1, graphUrl: '/g' }));
+    act(() => FakeES.last!.emit('done', { jobId, status: 'done' }));
+    await waitFor(() => expect(getRepoStatus).toHaveBeenCalledWith(1));
+    rerender(
+      <AnalysisWorkspace repoId={2} jobId={jobId} api={api} eventSource={(u) => new FakeES(u)} />,
+    );
+    await waitFor(() => expect(getRepoStatus).toHaveBeenCalledWith(2));
+    await act(async () => {
+      resolveOld({
+        repoId: 1,
+        jobId,
+        status: 'done',
+        stage: 'done',
+        progress: 100,
+        embeddingProvider: 'dashscope',
+      });
+    });
+    expect(screen.getByTestId('chat-disclosure')).toHaveTextContent(PROVIDER_DISCLOSURE.unknown);
+  });
+
   it('非正整数 repo id → 后端 400 BAD_REQUEST → 中文提示', async () => {
     const api = fakeApi({
       getRepoStatus: vi.fn(async () => {

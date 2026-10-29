@@ -56,6 +56,8 @@ export function AnalysisWorkspace({
 
   // 没有 jobId:用 GET /api/repos/:id 判断已完成、进行中还是失败
   useEffect(() => {
+    // 换仓库先清掉上一个仓库的提供方:新请求返回前或失败时显示「未知」,不沿用旧值
+    setEmbeddingProvider(undefined);
     if (jobId) return;
     let alive = true;
     api
@@ -96,7 +98,8 @@ export function AnalysisWorkspace({
     Promise.resolve()
       .then(() => api.getRepoStatus(repoId))
       .then((s) => alive && setEmbeddingProvider(s?.embeddingProvider))
-      .catch(() => undefined);
+      // 补查失败 → 未知(不设 local、不留旧值);alive 防止旧 repoId 的晚到结果覆盖新仓库
+      .catch(() => alive && setEmbeddingProvider(undefined));
     return () => {
       alive = false;
     };
