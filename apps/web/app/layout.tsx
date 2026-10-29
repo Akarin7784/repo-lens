@@ -5,7 +5,7 @@ import { THEME_BOOT_SCRIPT } from '../components/theme/theme';
 import './globals.css';
 
 // 字体随仓库自托管(T-225):构建和运行都不访问外网。文件来自 fontsource 的可变字体 latin 子集(OFL,见 ./fonts/LICENSES.md)。
-// 中文不再加载网页字体,走系统字体回退(见 globals.css 的 --font-noto-serif-sc)。
+// 中文不再加载网页字体,走系统字体回退(见 globals.css 的 --font-cjk-fallback)。
 const serif = localFont({
   src: './fonts/source-serif-4-latin-wght-normal.woff2',
   weight: '200 900',

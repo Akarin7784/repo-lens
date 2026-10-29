@@ -464,7 +464,7 @@ type GraphData = { nodes: GraphNode[] /* ≤300，id 唯一 */; edges: GraphEdge
 
 温暖的米白纸感、深炭灰文字、陶土色强调、衬线标题、大留白、克制的动效。**不使用 Claude/Anthropic 的名称、logo、星芒图形或其任何商标素材，产品使用自己的名称（RepoLens）。**
 
-- **字体**（`next/font/local` 自托管，T-225）：标题 Source Serif 4（中文走系统衬线回退：Noto Serif CJK SC / Source Han Serif SC / Noto Serif SC / Songti SC，不再加载中文网页字体）；正文与 UI 用 Inter（回退 system-ui、PingFang SC）；代码用 JetBrains Mono。三个字体都是 fontsource 的 OFL 可变字体 latin 子集（wght 轴），放在 `apps/web/app/fonts/`，共 139,596 字节，来源和许可见 `apps/web/app/fonts/LICENSES.md`。构建和运行都不访问外网；latin 以外的字符（例如 `→`）由系统字体显示。
+- **字体**（`next/font/local` 自托管，T-225）：标题 Source Serif 4，正文与 UI 用 Inter，代码用 JetBrains Mono。**中文回退**（T-225b，架构师裁定）：不打包中文网页字体，三组字体栈都在西文字体后面接同一组系统无衬线字体 `--font-cjk-fallback`：`"PingFang SC"`（Mac）→ `"Microsoft YaHei"`（Windows）→ `"Noto Sans CJK SC"`（Linux），最后是通用族（衬线栈和 UI 栈是 `sans-serif`，代码栈是 `monospace`）。拉丁字符走衬线，中文自动落到无衬线。这组字体只在 `apps/web/app/globals.css` 定义一次，`cjk-fallback.test.ts` 会检查名称和顺序。中文正文、问答回答区和 UI 控件都用这条规则（问答回答区目前还没有实现，实现时直接用 `--font-sans` 或 `--font-serif`，不要另写字体栈）。目前只在 Linux（Noto Sans CJK SC）上截图看过；Windows 微软雅黑和 Mac 苹方的效果未验证。三个字体都是 fontsource 的 OFL 可变字体 latin 子集（wght 轴），放在 `apps/web/app/fonts/`，共 139,596 字节，来源和许可见 `apps/web/app/fonts/LICENSES.md`。构建和运行都不访问外网；latin 以外的字符（例如 `→`）由系统字体显示。
 - **圆角**：卡片 12px，按钮/输入框 10px，标签全圆 999px，首页大输入框 16px。阴影 `0 1px 2px rgba(31,30,29,.06)`，浮层 `0 8px 24px rgba(31,30,29,.08)`。
 - **动效**：200–300 ms ease-out；展开子节点时节点位置 300 ms 过渡；「正在思考…」用三点呼吸动画；`prefers-reduced-motion` 时关闭过渡。
 
@@ -568,7 +568,8 @@ zustand（秒出图）和 zod（默认 module 层、按需下钻）不在 3 分�
 - [ ] 跑一遍 hono 的固定问题，确认 citation 能高亮、droppedCitations 提示正常显示。
 - [ ] 设置中的「缩放自动收起」保持关闭；确认渲染器为 React Flow（没有误切到 Cytoscape）。
 - [ ] Cursor 中已配置 MCP server（stdio），`ask_repo` 用 hono 的 repoId 跑通一次。
-- [ ] 断网构建与运行：字体已自托管（T-225），`next build` 和页面运行都不需要外网；演示机上断开外网，确认可以构建、页面可以打开、字体正常（中文标题使用演示机系统里的衬线字体，提前看一眼效果）。
+- [ ] Windows/Mac 中文字体实机看一次（未验证，T-225b）：演示机定下来后，在实机上打开首页、节点详情和含中文摘要的节点（例如 hono 的 `vite.config.ts`），确认中文显示为微软雅黑或苹方，再把截图补到这里。不要用 Linux 截图代替（Linux 的对照截图在 `docs/assets/T-225b/`）。
+- [ ] 断网构建与运行：字体已自托管（T-225），`next build` 和页面运行都不需要外网；演示机上断开外网，确认可以构建、页面可以打开、字体正常（中文使用演示机系统里的无衬线字体：Mac 是 PingFang SC，Windows 是 Microsoft YaHei，Linux 是 Noto Sans CJK SC，即 `--font-cjk-fallback`，见 T-225b；提前看一眼效果）。
 - [ ] 演示前一天在演示机上完整实跑一遍（含 Cursor 的 MCP 调用），并确认主流程录屏和 MCP 录屏都在本地可播放。
 - [ ] 投屏验收：在投影仪/低亮度显示器上实测一遍，按第 8 章「投屏验收」逐项检查。
 
@@ -634,6 +635,24 @@ zustand（秒出图）和 zod（默认 module 层、按需下钻）不在 3 分�
 3. 按当前文件只加载需要的语言,减少首次 chunk。
 
 演示时可以优先展示中小文件。
+
+### 9.1.2 `/files` 行号参数(契约已定(架构师),尚未实现,T-226)
+
+> **契约已定(架构师),尚未实现。** 这是 shared 契约变更,将在 W3 引用联动开工时,由后端和前端在同一个 PR 里修改 `packages/shared` 和两端实现。本 PR 只写文档,没有改 shared,也没有改代码。
+
+**规则**:
+- 参数是 `?line=N&endLine=M`,行号从 1 开始,两端都包含(闭区间 `[N, M]`)。只给 `line` 时,`endLine = line`。不给 `line` 时,不做行定位,行为与现在一致。
+- 接口仍然返回**完整文件内容**,服务端不按行号切片。响应新增 `range: { start, end }`,是按文件实际行数截断后的值。
+- **越界按截断处理,不报错**:`line` 或 `endLine` 超过文件总行数时,截到最后一行,以 `range` 为准。
+- `line` 不是正整数(0、负数、小数、空串、非数字),或 `endLine` 小于 `line`:返回 **400 BAD_REQUEST**。`endLine` 不是正整数时同样返回 400。
+- **前端展示上限**:2,000 行的上限必须包含 `range.end`。目标行超过 2,000 行时,把展示上限放宽到 `range.end + 50` 行,并保留「仅显示前 N 行」的提示(N 是放宽后实际显示的行数)。
+
+**和现状的差异(实现时要处理)**:
+- 现在的契约是 `?path=&start=&end=`,shared 的 `FileQuerySchema` 用了 `.strict()`,所以现在传 `line` 会返回 400。
+- 后端现在按 `start/end` 切片,不传 `end` 时最多返回 `FILE_MAX_LINES` 行,并标记 `hasMore`;`start` 越界时返回 400。这和上面「返回完整内容、越界截断」的规则不同,要在 W3 的那个 PR 里一起改。
+- 前端目前只传 `path`,**没有实现行号跳转和区间高亮**。
+
+本节没有对应的测试,也没有运行过任何相关测试。
 
 ## 10. 4 周前端任务拆分
 
