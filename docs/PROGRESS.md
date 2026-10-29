@@ -182,7 +182,8 @@
 - 2026-10-29:合并 #99(ee58785,前端):`answer.ts` 的 `done.messageId` 改为可选,为后端放宽 shared 做前置。已核对:diff 仅 answer.ts 与一条类型层测试,web 内无读取 messageId 处,CI 与 smoke 绿。未验证:shared 仍要求该字段,无运行时用例,未测端到端。下一步:后端单独开 PR 放宽 shared。
 - 2026-10-29:合并 #102(e354a6c):shared 的 `done.messageId` 改为可选(写 assistant 消息失败时不带),ARCHITECTURE/BACKEND_AI_DESIGN 同步;前端 #99 已按可选处理。已核对:diff 四个文件,CI 与 smoke 绿。未验证:API 尚未发 chat done 事件,无端到端覆盖。
 - 2026-10-29:合并 #101(0b875ea,P4-b):检索比较索引与查询的 embedding provider/model/dim(`embeddingMismatch`);TaskStats 声明 embeddingModel/embeddingDim。已核对:worker 写的是不带前缀的 model,比较时去掉 `dashscope:` 前缀;旧 dashscope 任务缺字段会 keyword-only(需重索引);local 缺字段仍视为一致。CI 与 smoke 绿。未验证:未用真实百炼跑过;作者报突变与串行全量通过(我未独立复跑)。
-- 2026-10-29:合并 #103(30f3453):`docs/EMBEDDING_TUNING.md` 入库(规则节 hash `e2c1a8d7…0920`;结论选 A=`qwen3.7-text-embedding`,差距在噪声范围内;批大小 20 为搜索引用,base_url 未验证)并新增第七节冻结后预分析/演示检查清单(stats 含 embeddingStatus/provider/model/dim,演示看 done.retrieval)。仍**不是**检索已验收,须等 v3。#104(默认模型冻结)待修:最新提交把 docs/DEPLOY.md 清空,需恢复。
+- 2026-10-29:合并 #103(30f3453):`docs/EMBEDDING_TUNING.md` 入库(规则节 hash `e2c1a8d7…0920`;结论选 A=`qwen3.7-text-embedding`,差距在噪声范围内;批大小 20 为搜索引用,base_url 未验证)并新增第七节冻结后预分析/演示检查清单(stats 含 embeddingStatus/provider/model/dim,演示看 done.retrieval)。仍**不是**检索已验收,须等 v3。
+- 2026-10-29:合并 #104(c5ca9ef):dashscope 默认模型改为 `qwen3.7-text-embedding`(默认 provider 仍 local,dim 1024);DEPLOY.md「冻结待做」改为代码默认已是该模型。中途一次修复提交把 DEPLOY.md 误清空,已发现并恢复,合并后核对为 311 行、净改 4 行。embedding 模型冻结完成;下一步预分析(冻结后重跑 demo-prep)再 v3 一次。仍**不是**检索已验收。
 
 ## 演示检查清单(第 4 周前逐项勾选)
 - [ ] 演示前抽查 hono 的 `embeddingStatus` 为 `ready`(或 `reused`)。
