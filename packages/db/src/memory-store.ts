@@ -1,5 +1,7 @@
 import type {
   GraphInput,
+  LlmUsageInput,
+  LlmUsageRow,
   RepoRow,
   Store,
   StoredEdge,
@@ -17,7 +19,21 @@ export class MemoryStore implements Store {
   private repos = new Map<number, RepoRow>();
   private tasks = new Map<string, TaskRow>();
   private graphs = new Map<string, { g: StoredGraph; symbols: Map<number, SymbolInput[]> }>();
-  private seq = { repo: 0, task: 0, file: 0 };
+  private seq = { repo: 0, task: 0, file: 0, usage: 0 };
+  private usage: LlmUsageRow[] = [];
+
+  async insertLlmUsage(row: LlmUsageInput) {
+    this.usage.push({
+      repoId: null,
+      taskId: null,
+      sessionId: null,
+      ...row,
+      id: ++this.seq.usage,
+    });
+  }
+  async llmUsageByTask(taskId: number) {
+    return this.usage.filter((u) => u.taskId === taskId).map((u) => ({ ...u }));
+  }
 
   async upsertRepo(input: { url: string; owner: string; name: string }): Promise<RepoRow> {
     for (const r of this.repos.values()) if (r.url === input.url) return { ...r };

@@ -127,6 +127,10 @@ export interface Store {
   }): Promise<{ task: TaskRow; created: boolean }>;
   getTask(jobId: string): Promise<TaskRow | null>;
   latestTask(repoId: number): Promise<TaskRow | null>;
+  /** 写一条 llm_usage(每次 LLM 调用一条,含缓存命中与失败;T-210) */
+  insertLlmUsage(row: LlmUsageInput): Promise<void>;
+  /** 某任务的 llm_usage,按 id 升序 */
+  llmUsageByTask(taskId: number): Promise<LlmUsageRow[]>;
   /** 最近一个已完成(stage = done)的任务 */
   latestDoneTask(repoId: number): Promise<TaskRow | null>;
   /** 最近一个图已入库(stage ≥ graph_ready 且未失败,或 done)的任务 */
@@ -139,4 +143,23 @@ export interface Store {
   /** 文件的导出符号名 */
   exportsOf(fileRowId: number): Promise<string[]>;
   close(): Promise<void>;
+}
+
+export const LLM_PURPOSES = ['summary', 'embed', 'chat', 'rerank', 'verify'] as const;
+export type LlmPurpose = (typeof LLM_PURPOSES)[number];
+export interface LlmUsageInput {
+  repoId?: number | null;
+  taskId?: number | null;
+  sessionId?: number | null;
+  purpose: LlmPurpose;
+  model: string;
+  tokensIn: number;
+  tokensOut: number;
+  /** 费用,单位百万分之一美元(1 美分 = 10000) */
+  costMicroUsd: number;
+  cacheHit: boolean;
+  ok: boolean;
+}
+export interface LlmUsageRow extends LlmUsageInput {
+  id: number;
 }
