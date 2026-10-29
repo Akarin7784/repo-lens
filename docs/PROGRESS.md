@@ -6,7 +6,7 @@
 | 周 | 目标 | 状态 |
 |---|---|---|
 | W1 | TS 解析与基础图:脚手架、clone 与文件树、`TypeScriptAnalyzer`、依赖图 JSON、前端出图、任务与 SSE 进度 | 已完成(2026-10-29,收尾小项见「后续项」) |
-| W2 | 分层摘要、节点详情、Qdrant 索引 | 未开始 |
+| W2 | 分层摘要、节点详情、Qdrant 索引(任务拆分见 [`WEEK2_PLAN.md`](WEEK2_PLAN.md)) | 进行中 |
 | W3 | 代码 RAG 问答、引用校验、图上高亮联动 | 未开始 |
 | W4 | MCP 服务、预解析示例仓库、演示脚本与兜底视频、README | 未开始 |
 
@@ -71,3 +71,4 @@
 - 2026-10-29 13:3x:#24(提交 9e9b3ba)、#25(提交 2409353)、#26(提交 3c7d529)合并,main 上三次提交的 `ci` 与 `smoke` 都是 success。复验在各自最新提交上串行跑 install、lint、typecheck、build、test 全过(api 53、shared 24、web 61、analyzer 32、worker 16、db 9),三个依次叠到 main 也无冲突。#24:`GET /api/repos/:id` 返回 `repo` 和 `commitSha`,`commitSha` 优先取最近一次已完成任务的 commit,没有已完成任务才取最新任务的。#25:只有仓库地址不合法才用 `INVALID_REPO_URL`,缺 `repoUrl` 和其他校验错误用 `BAD_REQUEST`,框架 4xx 保留 400、413、415 原状态码、错误体 code 统一 `BAD_REQUEST`。#26:`RATE_LIMIT_NEW_REPOS_PER_HOUR`(默认 5)与 `RATE_LIMIT_SUBMITS_PER_HOUR`(默认 60)都由环境变量配置,被拒绝或出错的提交不计 5 次,复用已有结果不计 5 次但计 60 次,超过 60 次返回 429 且不建任务,非法值使 api 启动失败。已知小问题(非阻塞):`limits.ts` 与 `.env.example` 注释里把路由写成 `POST /api/analyze`(实际是 `POST /api/repos`);退回计数时按当前时间重算 key,请求跨整点时会少算一次;超过 5 次后计数值继续上涨(有意)。**第 1 周完成**:从粘贴 GitHub 地址到交互式依赖图的链路在 CI 的真实 MySQL 8.4 + Redis + worker 上走通,前端读真实接口,聚合边、环边、首屏自动下探都已落地。未完成与未验证见「后续项」和「演示检查清单」。下一步:第 2 周(分层摘要、节点详情、Qdrant 索引、环边改读 `inCycle`、状态栏口径),任务拆分交给架构师。
 - 2026-10-29 13:4x:#31 合并(提交 730a731)。状态栏改为「当前显示 N 节点 / M 条边」,数字严格等于画布上画出的节点和边;hono `d:src` 的 84 条边 = 80 条内部边 + 4 条来自 `d:perf-measures` 和 `d:runtime-tests` 的边界聚合边,展开后 `m:.` 层的 2 条聚合边不再渲染,此口径已写入 `FRONTEND_DESIGN.md`。我在最新提交 42d5681 上独立重跑 lint、typecheck、build、test 全过(web 61),`ci` 与 `smoke` 绿。仍待前端:环边改读 `edge.inCycle`,`suggestedFocus` 回调竞态、文件类型判断和失败停止测试三个小问题。
 - 2026-10-29 13:5x:#32 合并(提交 63955d5)。前端环边只读 `edge.inCycle === true`(原始边和聚合边同一规则),状态栏「环边 K」数画出的 inCycle 边;`suggestedFocus` 自动展开补了三处:自动请求返回后若用户已手动操作则丢弃结果(成功与失败都一样,不更新状态也不报错)、只处理 `m:` 与 `d:` 节点、失败即停止。我在最新提交 3a1b593 上独立串行重跑 install、lint、typecheck、build、test(不用缓存)全过,与 main 试合并无冲突,`ci` 与 `smoke` 绿。清理项(非阻塞):`toFlow.ts:21` 注释仍写「meta.cycles 的某个环上」,`state.ts` 里 `cycles` 的收集与 `mergeCycles` 现在是死代码,「迟到结果被丢弃」只测了成功分支。第 1 周遗留的前端项到此全部关闭,下一步等 `docs/WEEK2_PLAN.md`。
+- 2026-10-29 14:0x:#33 合并(提交 d3c2df5),第 2 周开始。`docs/WEEK2_PLAN.md` 由架构师拆分:范围以 `ARCHITECTURE.md` §7 为准,加上「切块写入 Qdrant」只建索引,检索、`/chat`、引用校验留第 3 周;后端主线 T-210(LLM 客户端、记账、预算熔断、`FakeLlm`)→ T-211(分层摘要)→ T-212(`/nodes` 真实摘要)→ T-213(`/files` 代码预览)→ T-214(Qdrant 写入),前端主线 T-220(聚合边调淡与 ×N 阈值)→ T-221(悬停预览)→ T-222(节点详情)→ T-223(代码预览)→ T-224(路径搜索),T-225 的 weight≥k 开关可选;第一天先清第 1 周遗留 T-201 到 T-205。关键路径 T-210 → T-211 → T-212 → T-222。需要 Eva 拍板:D1 LLM 供应商与 key(涉及费用),D5 源码快照保留策略(默认保留最近 10 个 commit,LRU 清理)。我的任务 T-205:演示环境调高 `RATE_LIMIT_NEW_REPOS_PER_HOUR`(建议 50)并预先分析 hono、zustand、zod、trpc,但我的电脑上没有 Docker 和 MySQL,只有 Redis,这一步需要一台能跑 compose 的环境,待确认放在哪里;trpc 能否分析成功第 1 周没测过。
