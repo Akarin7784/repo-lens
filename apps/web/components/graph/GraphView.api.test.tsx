@@ -88,4 +88,74 @@ describe('<GraphView> 真实接口:聚合边、边界节点、截断提示', () 
     await waitFor(() => expect(status()).toHaveTextContent('4 个节点 · 2 条边'));
     expect(src.calls).toEqual([null, 'm:a']);
   });
+
+  const dir = (id: string, parentId: string): GraphNode =>
+    ({ id, type: 'dir', parentId, label: id.slice(2), path: id.slice(2) }) as GraphNode;
+  function focusSource(focus?: string) {
+    const calls: (string | null)[] = [];
+    const src: GraphSource = {
+      repoLabel: 't/t',
+      loadChildren: vi.fn(async (p: string | null) => {
+        calls.push(p);
+        if (p === null) {
+          const s = slice(null, [mod('m:a'), mod('m:b')], []);
+          return focus ? { ...s, meta: { ...s.meta, suggestedFocus: focus } } : s;
+        }
+        if (p === 'm:a') return slice('m:a', [dir('d:a/src', 'm:a'), file('a/r.ts', 'm:a')], []);
+        return slice(
+          p,
+          [file('a/src/x.ts', 'd:a/src'), file('a/src/y.ts', 'd:a/src')],
+          [agg('f:a/src/x.ts', 'f:a/src/y.ts', 1)],
+        );
+      }),
+    };
+    return { src, calls };
+  }
+
+  it('suggestedFocus:首次加载沿 parentId 链逐层请求并展开;手动折叠后不再自动展开', async () => {
+    const { src, calls } = focusSource('d:a/src');
+    const engine = await createInlineEngine();
+    render(
+      <div style={{ width: 1000, height: 700 }}>
+        <GraphView source={src} owner="t" repo="t" engine={engine} />
+      </div>,
+    );
+    const status = () => screen.getByRole('status');
+    // m:a、m:b、d:a/src、a/r.ts、x、y = 6 个节点;根层 module 作为面包屑保留
+    await waitFor(() => expect(status()).toHaveTextContent('6 个节点 · 1 条边'));
+    expect(calls).toEqual([null, 'm:a', 'd:a/src']);
+    expect(screen.getByTestId('node-m:b')).toBeInTheDocument();
+
+    fireEvent.click(await screen.findByRole('button', { name: '收起 a/src' }));
+    await waitFor(() => expect(status()).toHaveTextContent('4 个节点 · 0 条边'));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(status()).toHaveTextContent('4 个节点');
+    expect(screen.getByRole('button', { name: '展开 a/src' })).toBeInTheDocument();
+  });
+
+  it('没有 suggestedFocus:首屏只有根层,不做任何兜底请求', async () => {
+    const { src, calls } = focusSource();
+    const engine = await createInlineEngine();
+    render(
+      <div style={{ width: 1000, height: 700 }}>
+        <GraphView source={src} owner="t" repo="t" engine={engine} />
+      </div>,
+    );
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('2 个节点 · 0 条边'));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(calls).toEqual([null]);
+  });
+
+  it('suggestedFocus 不在任何根层容器路径下:不请求,停在根层', async () => {
+    const { src, calls } = focusSource('d:zzz');
+    const engine = await createInlineEngine();
+    render(
+      <div style={{ width: 1000, height: 700 }}>
+        <GraphView source={src} owner="t" repo="t" engine={engine} />
+      </div>,
+    );
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('2 个节点'));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(calls).toEqual([null]);
+  });
 });
