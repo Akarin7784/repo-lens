@@ -224,7 +224,11 @@ export function buildApp(deps?: AppDeps): FastifyInstance {
     return id;
   };
 
-  if (deps.chat) registerChatRoute(app, { store, hit, chat: deps.chat, repoIdOf });
+  /** 回退一次 hit;同样带 EXPIRE NX,防止 key 恰好过期后 DECR 建出一个没有 TTL 的 -1 */
+  async function unhit(key: string) {
+    await redis.multi().decr(key).expire(key, RATE_LIMIT_TTL_S, 'NX').exec();
+  }
+  if (deps.chat) registerChatRoute(app, { store, hit, unhit, chat: deps.chat, repoIdOf });
 
   app.get<{ Params: { id: string } }>('/api/repos/:id', async (req) => {
     const repoId = repoIdOf(req.params.id);

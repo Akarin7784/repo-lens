@@ -275,7 +275,8 @@ type ChatEvent =
       droppedCitations: number;
       fallback?: "retrieval";                    // 预算/服务不可用时只给检索结果，没有生成回答
       retrieval?: "hybrid" | "keyword-only";     // keyword-only → 显示「已降级为关键词检索」
-      usage: { in: number; out: number } } }
+      usage: { in: number; out: number };
+      truncated?: boolean } }                    // 契约 v2:仅 finish_reason:length 时为 true,否则省略;回答照常落库
   | { event: "error"; data: { code: ChatErrorCode; message: string; retryable: boolean } };  // 替代 done，之后流立即结束
 
 const CLIENT_TIMEOUT_MS = 20_000;   // 前端兜底：20 秒内既没有 token，也没有 done/error
@@ -321,7 +322,7 @@ async function chat(repoId: number, req: ChatRequest, signal: AbortSignal) {
 | `LLM_UNAVAILABLE` | 模型服务暂时不可用 | 通常有 | 示例仓库可展示检索片段或缓存答案 |
 | `BUDGET_EXCEEDED` | 今日额度已用完，明天再试 | 通常没有 | 禁用输入框，并显示原因 |
 | `REPO_NOT_READY` | 仓库还在分析中（摘要/索引未完成） | 有 | 顶栏小进度条高亮，完成后提示可以提问 |
-| `RATE_LIMITED` | 提问太频繁，请稍后再试（429 没有 retryAfterSec，并发满也没有 details.reason，统一用此文案，契约补齐后再细分） | 有，倒计时 10 秒后才可点 | — |
+| `RATE_LIMITED` | 提问太频繁，请稍后再试（契约 v2 起 429 的 `error.details` 可选带 `{reason: 'rate_limit' | 'concurrency', retryAfterSec?}`:rate_limit 带距下一 UTC 整点的秒数,concurrency 不带;前端细分文案另做,未读这些字段时仍统一用此文案） | 有，倒计时 10 秒后才可点 | — |
 
 是否显示重试按钮一律以 `retryable` 为准，表里只是常见情况。
 

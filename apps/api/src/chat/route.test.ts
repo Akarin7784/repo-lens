@@ -35,6 +35,7 @@ import { prepareSnippet } from './chunk-guard.js';
 import {
   questionHash,
   resolveRewrite,
+  secondsToNextHour,
   userKeyOf,
   type ChatDeps,
   type ChatMetrics,
@@ -170,6 +171,28 @@ class HangLlm implements LlmClient {
     });
   }
 }
+
+/** 吐完正文后以 finish_reason:length 结束(usage 带 truncated) */
+class TruncLlm implements LlmClient {
+  readonly provider = 'fake';
+  async call(): Promise<never> {
+    throw new Error('not used');
+  }
+  async *stream(): AsyncGenerator<LlmStreamEvent> {
+    yield { type: 'text', text: 'parseConfig 解析到一半' };
+    yield { type: 'usage', usage: { tokensIn: 3, tokensOut: 2 }, truncated: true };
+  }
+}
+
+describe('secondsToNextHour(429 rate_limit 的 retryAfterSec)', () => {
+  it('距下一个 UTC 整点的秒数,向上取整,范围 1–3600', () => {
+    expect(secondsToNextHour(new Date('2026-10-30T01:00:00.000Z'))).toBe(3600);
+    expect(secondsToNextHour(new Date('2026-10-30T01:59:59.001Z'))).toBe(1);
+    expect(secondsToNextHour(new Date('2026-10-30T01:30:00.000Z'))).toBe(1800);
+    expect(secondsToNextHour(new Date('2026-10-30T01:30:00.500Z'))).toBe(1800);
+    expect(secondsToNextHour(new Date('2026-10-30T01:29:59.500Z'))).toBe(1801);
+  });
+});
 
 describe('readChatLimits', () => {
   it('CHAT_STREAM_TIMEOUT_MS 默认 90000,可配置,非法值报错', () => {
@@ -434,18 +457,83 @@ describe.skipIf(!hasRedis)(
       await app.close();
     });
 
+    it('finish_reason:length → done.truncated:true,回答照常落库;正常结束不带 truncated', async () => {
+      const { repoId } = await seed();
+      const app = make({ gateway: gatewayOf(new TruncLlm()) });
+      const evs = parseSse((await post(app, repoId, { message: 'parseConfig' })).body);
+      const last = evs.at(-1)!;
+      expect(last.event).toBe('done');
+      expect(ChatEventSchema.parse(last)).toEqual(last);
+      const d = last.data as { truncated?: boolean; sessionId: number; messageId?: number };
+      expect(d.truncated).toBe(true);
+      const msgs = await store.listChatMessages(d.sessionId);
+      expect(msgs.map((m) => m.role)).toEqual(['user', 'assistant']);
+      expect(msgs[1]!.id).toBe(d.messageId);
+      expect(msgs[1]!.content).toContain('解析到一半');
+      const app2 = make({ gateway: gatewayOf(new FakeLlm()) });
+      const d2 = parseSse((await post(app2, repoId, { message: 'parseConfig' })).body).at(-1)!;
+      expect(d2.event).toBe('done');
+      expect(d2.data).not.toHaveProperty('truncated');
+      await app.close();
+      await app2.close();
+    });
+
+    it('rate_limit 429:details={reason:rate_limit, retryAfterSec=距下一整点秒数}', async () => {
+      const now = new Date('2026-10-30T03:45:10.200Z');
+      const app = make({ gateway: gatewayOf(new FakeLlm()), perHour: 1, now: () => now });
+      const ip = nextIp();
+      expect((await post(app, 999, { message: 'x' }, ip)).statusCode).toBe(404);
+      const r = await post(app, 999, { message: 'x' }, ip);
+      expect(r.statusCode).toBe(429);
+      const e = ApiErrorSchema.parse(r.json()).error;
+      expect(e.code).toBe('RATE_LIMITED');
+      expect(e.details).toEqual({ reason: 'rate_limit', retryAfterSec: 890 });
+      await redis.del(redisKeys.chatLimitIp(ipKey(ip), now));
+      await app.close();
+    });
+
     it('并发上限:占满后 429,流结束后释放', async () => {
       const { repoId } = await seed();
       const slow = new SlowLlm('slow answer text', 30);
       const app = make({ gateway: gatewayOf(slow), maxStreams: 1 });
       const first = post(app, repoId, { message: 'parseConfig' });
       await vi.waitFor(() => expect(slow.streams).toBe(1));
-      const second = await post(app, repoId, { message: 'parseConfig' });
+      const ip = nextIp();
+      const second = await post(app, repoId, { message: 'parseConfig' }, ip);
       expect(second.statusCode).toBe(429);
-      expect(second.json().error.code).toBe('RATE_LIMITED');
+      const e = ApiErrorSchema.parse(second.json()).error;
+      expect(e.code).toBe('RATE_LIMITED');
+      // concurrency 不给 retryAfterSec
+      expect(e.details).toEqual({ reason: 'concurrency' });
+      // 刚扣的 rl:chat 计数已回退
+      expect(Number(await redis.get(redisKeys.chatLimitIp(ipKey(ip))))).toBe(0);
+      expect(await redis.ttl(redisKeys.chatLimitIp(ipKey(ip)))).toBeGreaterThan(0);
       expect((await first).statusCode).toBe(200);
       expect(metrics.activeStreams).toBe(0);
       expect((await post(app, repoId, { message: 'parseConfig' })).statusCode).toBe(200);
+      await app.close();
+    });
+
+    it('并发被拒时回退失败:只打 warn 日志,仍返回 429 concurrency', async () => {
+      const { repoId } = await seed();
+      const slow = new SlowLlm('slow answer text', 30);
+      const app = make({
+        gateway: gatewayOf(slow),
+        maxStreams: 1,
+        unhit: async () => {
+          throw new Error('redis down');
+        },
+      });
+      const first = post(app, repoId, { message: 'parseConfig' });
+      await vi.waitFor(() => expect(slow.streams).toBe(1));
+      const ip = nextIp();
+      const second = await post(app, repoId, { message: 'parseConfig' }, ip);
+      expect(second.statusCode).toBe(429);
+      expect(ApiErrorSchema.parse(second.json()).error.details).toEqual({ reason: 'concurrency' });
+      expect(logs.join('')).toContain('chat rate-limit rollback failed');
+      // 回退失败:计数保持已扣的 1
+      expect(Number(await redis.get(redisKeys.chatLimitIp(ipKey(ip))))).toBe(1);
+      expect((await first).statusCode).toBe(200);
       await app.close();
     });
 
