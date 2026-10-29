@@ -2,6 +2,7 @@ export const PACKAGE_NAME = '@repolens/agent';
 export * from './llm/types.js';
 export * from './llm/pricing.js';
 export { FakeLlm, estimateTokens } from './llm/fake.js';
+export { estimateTextTokens, estimateUsage } from './llm/estimate.js';
 export {
   LlmGateway,
   cacheHash,

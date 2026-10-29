@@ -1,3 +1,4 @@
+import { estimateUsage } from './estimate.js';
 import type { LlmCall, LlmCallResult, LlmClient, LlmStreamEvent, LlmUsage } from './types.js';
 
 export const DEEPSEEK_DEFAULT_BASE_URL = 'https://api.deepseek.com';
@@ -25,6 +26,9 @@ export class LlmStreamError extends Error {
 }
 
 /** 首包 / 相邻 chunk 空闲超时默认值 */
+/** 通用 OpenAI 风格 key 形态,含部分打码回显(`sk-ab****xyz`) */
+const SK_PATTERN = /sk-[A-Za-z0-9*._-]+/g;
+
 export const DEEPSEEK_STREAM_IDLE_DEFAULT_MS = 20_000;
 const TOTAL_DEFAULT_MS = 60_000;
 
@@ -113,9 +117,12 @@ export class DeepSeekClient implements LlmClient {
     });
   }
 
-  /** 服务端报错文案可能回显请求头;先抹掉 key 再截断,原始响应体不进错误信息 */
+  /**
+   * 服务端报错文案可能回显请求头;先抹掉 key 再截断,原始响应体不进错误信息。
+   * 除本 key 原文外,通用 `sk-…` 形态(含部分打码的回显如 `sk-ab****xyz`)也一律替换成 `***`。
+   */
   private redact(msg: string) {
-    return msg.split(this.#apiKey).join('***').slice(0, 200);
+    return msg.split(this.#apiKey).join('***').replace(SK_PATTERN, '***').slice(0, 200);
   }
 
   private httpError(status: number, raw: string) {
@@ -168,7 +175,11 @@ export class DeepSeekClient implements LlmClient {
    * 流式:POST stream:true + stream_options.include_usage:true,解析 SSE。
    * - 只把 `delta.content` 作为 text 事件发出;`reasoning_content`(思考内容)不发、不计入正文。
    * - 用量取 include_usage 的最后一个 chunk(`choices: []` + `usage`),在 `[DONE]` 时作为最后一个事件发出。
-   *   没收到 usage 就 `[DONE]`:不发 usage 事件,由网关按「没给 usage 就结束」记 ok=0、报 LLM_UNAVAILABLE。
+   *   没收到 usage 就 `[DONE]`:
+   *   - 收到过 `finish_reason: "stop"`(且有 [DONE]):按字数上界估算 usage(estimateUsage,公式见 estimate.ts),
+   *     usage 事件带 `estimated: true`;
+   *   - 没有 stop(只有 `length`、或没有任何 finish_reason):不发 usage 事件,
+   *     由网关按「没给 usage 就结束」记 ok=0、报 LLM_UNAVAILABLE。缺 [DONE] 见下方 ended-early。
    * - `finish_reason: "length"`:正文到此为止,usage 事件带 `truncated: true` 向上报告(不静默截断)。
    * - 格式错误的 SSE 行:`data:` 内容不是 JSON(且不是 `[DONE]`)时抛 LlmStreamError('bad-sse'),
    *   网关包成 LLM_UNAVAILABLE;注释行(`: keep-alive`)和 `event:`/`id:`/`retry:` 等非 data 字段按 SSE 规范忽略。
@@ -230,13 +241,19 @@ export class DeepSeekClient implements LlmClient {
       let data: string[] = [];
       let usage: LlmUsage | null = null;
       let truncated = false;
+      let stopped = false;
+      let full = '';
       // 处理一个完整事件的 data;返回 true 表示收到 [DONE]
       const onEvent = function* (
         this: DeepSeekClient,
         payload: string,
       ): Generator<LlmStreamEvent, boolean> {
         if (payload === '[DONE]') {
+          // 之后直接 return 进 finally,不需要重新计时
+          clearTimeout(timer);
           if (usage) yield { type: 'usage', usage, ...(truncated ? { truncated: true } : {}) };
+          else if (stopped)
+            yield { type: 'usage', usage: estimateUsage(req.messages, full), estimated: true };
           return true;
         }
         let c: StreamChunk;
@@ -253,8 +270,15 @@ export class DeepSeekClient implements LlmClient {
         }
         const ch = c.choices?.[0];
         const t = ch?.delta?.content;
-        if (typeof t === 'string' && t) yield { type: 'text', text: t };
+        if (typeof t === 'string' && t) {
+          full += t;
+          // 停在 yield 时是调用方在消费(背压),不是上游空闲:暂停空闲计时,恢复后重新计时
+          clearTimeout(timer);
+          yield { type: 'text', text: t };
+          arm();
+        }
         if (ch?.finish_reason === 'length') truncated = true;
+        if (ch?.finish_reason === 'stop') stopped = true;
         const u = mapUsage(c.usage);
         if (u) usage = u;
         return false;
@@ -277,6 +301,8 @@ export class DeepSeekClient implements LlmClient {
             if (data.length === 0) continue;
             const payload = data.join('\n');
             data = [];
+            // SSE 规范:data 缓冲为空串(只有一个空的 `data:` 行)时不派发事件;也不算 data 事件、不重置计时
+            if (payload === '') continue;
             gotData = true;
             arm();
             if (yield* onEvent.call(this, payload)) return;
@@ -296,6 +322,8 @@ export class DeepSeekClient implements LlmClient {
       }
     } finally {
       clearTimeout(timer);
+      // reader.cancel 与 own.abort 有重叠:cancel 只释放本地读端(且 fetch 被 abort 后它本身会失败);
+      // 真正关闭上游连接的是 own.abort()(abort 掉 fetch)。两者都保留,任一路径都能收尾。
       if (reader) void reader.cancel().catch(() => {});
       own.abort();
     }

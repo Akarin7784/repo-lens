@@ -1,11 +1,12 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { MemoryStore } from '@repolens/db';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readLlmConfig } from './config.js';
 import { DeepSeekClient, LlmStreamError } from './deepseek.js';
 import { LlmGateway } from './gateway.js';
 import { MemoryLlmKv } from './memory-kv.js';
+import { estimateTextTokens, estimateUsage } from './estimate.js';
 import { DEFAULT_PRICES, costMicroUsd } from './pricing.js';
 import { LlmError, type LlmCall, type LlmStreamEvent } from './types.js';
 
@@ -128,8 +129,7 @@ describe('DeepSeekClient.stream(本地假 SSE 服务)', () => {
     handler = script([delta('a'), usageChunk(), DONE, delta('不该出现')], { end: false });
     const evs = await collect(client().stream(call()));
     expect(texts(evs)).toBe('a');
-    await sleep(50);
-    expect(last.closedEarly).toBe(true);
+    await vi.waitFor(() => expect(last.closedEarly).toBe(true));
   });
 
   it('reasoning_content 不当作 token 发出', async () => {
@@ -205,6 +205,48 @@ describe('DeepSeekClient.stream(本地假 SSE 服务)', () => {
     expect(err.message).not.toContain(KEY);
   });
 
+  it('通用 sk-… 形态(别的 key、部分打码回显 sk-ab****xyz)也替换成 ***', async () => {
+    handler = script([
+      chunk({ error: { message: 'key sk-ab****xyz rejected; also sk-Other_key.9 and done' } }),
+    ]);
+    const err = await failure(collect(client().stream(call())));
+    expect((err as LlmStreamError).reason).toBe('upstream-error');
+    expect(err.message).toContain('key *** rejected; also *** and done');
+    expect(err.message).not.toMatch(/sk-/);
+  });
+
+  it('非 2xx 的部分打码 key 回显也被抹掉', async () => {
+    handler = (_rq, rs) => {
+      rs.writeHead(401, { 'content-type': 'application/json' });
+      rs.end(JSON.stringify({ error: { message: 'Incorrect API key provided: sk-ab****xyz' } }));
+    };
+    const err = await failure(collect(client().stream(call())));
+    expect(err.message).toContain('***');
+    expect(err.message).not.toMatch(/sk-/);
+  });
+
+  it('空的 data: 事件按 SSE 规范不派发(不当坏行),前后事件照常', async () => {
+    handler = script([delta('a'), 'data:\n\n', 'data: \n\n', delta('b'), usageChunk(), DONE]);
+    const evs = await collect(client().stream(call()));
+    expect(texts(evs)).toBe('ab');
+    expect(evs.at(-1)?.type).toBe('usage');
+  });
+
+  it('背压:调用方停在 yield 超过空闲时限,不误报 idle-timeout', async () => {
+    // gapMs 让每个事件单独到达,恢复后必须再 read()
+    handler = script([delta('a'), delta('b'), delta('c'), usageChunk(), DONE], { gapMs: 20 });
+    const it = client({ idleTimeoutMs: 100 }).stream(call());
+    const got: LlmStreamEvent[] = [];
+    for (;;) {
+      const r = await it.next();
+      if (r.done) break;
+      got.push(r.value);
+      await sleep(300); // 调用方慢消费,远超 idleTimeoutMs
+    }
+    expect(texts(got)).toBe('abc');
+    expect(got.at(-1)?.type).toBe('usage');
+  });
+
   it('非 2xx:LlmHttpError 带状态码,不含 key', async () => {
     handler = (_rq, rs) => {
       rs.writeHead(401, { 'content-type': 'application/json' });
@@ -246,8 +288,7 @@ describe('DeepSeekClient.stream(本地假 SSE 服务)', () => {
     const err = await failure(collect(client({ firstChunkTimeoutMs: 150 }).stream(call())));
     expect((err as LlmStreamError).reason).toBe('first-chunk-timeout');
     expect(Date.now() - t0).toBeLessThan(400);
-    await sleep(50);
-    expect(last.closedEarly).toBe(true);
+    await vi.waitFor(() => expect(last.closedEarly).toBe(true));
   });
 
   it('响应头都不来也按首包超时', async () => {
@@ -269,8 +310,7 @@ describe('DeepSeekClient.stream(本地假 SSE 服务)', () => {
     );
     expect((err as LlmStreamError).reason).toBe('idle-timeout');
     expect(got).toEqual(['a']);
-    await sleep(50);
-    expect(last.closedEarly).toBe(true);
+    await vi.waitFor(() => expect(last.closedEarly).toBe(true));
   });
 
   it('总时限 timeoutMs:持续有 data 也会在总时限到达时中止', async () => {
@@ -299,8 +339,7 @@ describe('DeepSeekClient.stream(本地假 SSE 服务)', () => {
       })(),
     );
     expect(err).toBe(reason);
-    await sleep(50);
-    expect(last.closedEarly).toBe(true);
+    await vi.waitFor(() => expect(last.closedEarly).toBe(true));
   });
 
   it('调用方 it.return()(route 的 finally):cancel reader,上游连接被关闭', async () => {
@@ -311,8 +350,7 @@ describe('DeepSeekClient.stream(本地假 SSE 服务)', () => {
     const it = client().stream(call());
     expect((await it.next()).value).toEqual({ type: 'text', text: '.' });
     await it.return(undefined);
-    await sleep(50);
-    expect(last.closedEarly).toBe(true);
+    await vi.waitFor(() => expect(last.closedEarly).toBe(true));
   });
 
   it('错误信息与客户端序列化里都没有 key', async () => {
@@ -326,6 +364,7 @@ describe('DeepSeekClient.stream(本地假 SSE 服务)', () => {
 
 describe('网关 → DeepSeekClient.stream → llm_usage', () => {
   function gw() {
+    const warns: { obj: object; msg: string }[] = [];
     const usage = new MemoryStore();
     const g = new LlmGateway({
       client: client(),
@@ -333,6 +372,7 @@ describe('网关 → DeepSeekClient.stream → llm_usage', () => {
       usage,
       prices: DEFAULT_PRICES,
       dailyBudgetCents: 500,
+      log: { warn: (obj, msg) => warns.push({ obj, msg }) },
     });
     const rows = () =>
       (
@@ -340,7 +380,7 @@ describe('网关 → DeepSeekClient.stream → llm_usage', () => {
           usage: { ok: boolean; tokensIn: number; tokensOut: number; costMicroUsd: number }[];
         }
       ).usage;
-    return { g, rows };
+    return { g, rows, warns };
   }
   const greq = { ...call(), purpose: 'chat' as const, repoId: 1, sessionId: 2 };
 
@@ -368,19 +408,100 @@ describe('网关 → DeepSeekClient.stream → llm_usage', () => {
     expect(rows()[0]).toMatchObject({ ok: true, tokensOut: 200 });
   });
 
-  it('usage 缺失([DONE] 前没有 include_usage chunk):按现有口径记 ok=0、0 token,抛 LLM_UNAVAILABLE', async () => {
-    handler = script([delta('ok'), finish('stop'), DONE]);
-    const { g, rows } = gw();
-    const err = await failure(
-      (async () => {
-        for await (const _ of g.stream(greq)) void _;
-      })(),
-    );
-    expect(err).toBeInstanceOf(LlmError);
-    expect((err as LlmError).code).toBe('LLM_UNAVAILABLE');
+  const drain = (s: AsyncGenerator<unknown, unknown>) =>
+    (async () => {
+      let r = await s.next();
+      while (!r.done) r = await s.next();
+      return r.value as import('./types.js').LlmResult;
+    })();
+  const ok0 = expect.objectContaining({ ok: false, tokensIn: 0, tokensOut: 0, costMicroUsd: 0 });
+
+  it('stop + [DONE] 但缺 usage:按字数上界估算,记 ok=1,打 estimated 告警,不报错', async () => {
+    handler = script([delta('你好'), delta(' world'), finish('stop'), DONE]);
+    const { g, rows, warns } = gw();
+    const r = await drain(g.stream(greq));
+    // 输入:'hi' 2 字符 + 每条 4 = 6;输出:'你好 world' 8 字符
+    expect(estimateUsage(greq.messages, '你好 world')).toEqual({
+      tokensIn: 6,
+      tokensOut: 8,
+      cachedTokensIn: 0,
+    });
+    const cost = costMicroUsd(DEFAULT_PRICES['deepseek-flash']!, 6, 8, 0);
+    expect(r).toMatchObject({ text: '你好 world', usageEstimated: true, costMicroUsd: cost });
+    expect(r.usage).toEqual({ tokensIn: 6, tokensOut: 8, cachedTokensIn: 0 });
     expect(rows()).toEqual([
-      expect.objectContaining({ ok: false, tokensIn: 0, tokensOut: 0, costMicroUsd: 0 }),
+      expect.objectContaining({ ok: true, tokensIn: 6, tokensOut: 8, costMicroUsd: cost }),
     ]);
+    expect(warns).toHaveLength(1);
+    expect(warns[0]!.msg).toContain('estimated');
+    expect(warns[0]!.obj).toMatchObject({ estimated: true, sessionId: 2, tokensOut: 8 });
+  });
+
+  it('估算是上界:不少于真实 token(中英文、代码)', () => {
+    for (const t of ['中文回答一段', 'const x = 1;', 'hello world, plain english'])
+      expect(estimateTextTokens(t)).toBeGreaterThanOrEqual(Math.ceil(t.length * 0.6));
+    expect(estimateTextTokens('')).toBe(0);
+  });
+
+  it('length + 缺 usage:不估算,记 ok=0,抛 LLM_UNAVAILABLE', async () => {
+    handler = script([delta('半'), finish('length'), DONE]);
+    const { g, rows, warns } = gw();
+    const err = (await failure(drain(g.stream(greq)))) as LlmError;
+    expect(err.code).toBe('LLM_UNAVAILABLE');
+    expect(rows()).toEqual([ok0]);
+    expect(warns).toEqual([]);
+  });
+
+  it('没有任何 finish_reason + 缺 usage:记 ok=0,抛 LLM_UNAVAILABLE', async () => {
+    handler = script([delta('ok'), DONE]);
+    const { g, rows } = gw();
+    const err = (await failure(drain(g.stream(greq)))) as LlmError;
+    expect(err.code).toBe('LLM_UNAVAILABLE');
+    expect(rows()).toEqual([ok0]);
+  });
+
+  it('stop 但缺 [DONE](EOF):不估算,记 ok=0,cause 为 ended-early', async () => {
+    handler = script([delta('ok'), finish('stop')]);
+    const { g, rows } = gw();
+    const err = (await failure(drain(g.stream(greq)))) as LlmError;
+    expect(err.code).toBe('LLM_UNAVAILABLE');
+    expect((err.cause as LlmStreamError).reason).toBe('ended-early');
+    expect(rows()).toEqual([ok0]);
+  });
+
+  it('调用方在 yield 处 it.return():补记恰好一行 ok=0,上游连接被关闭', async () => {
+    handler = script(
+      Array.from({ length: 50 }, () => delta('.')),
+      { gapMs: 20, end: false },
+    );
+    const { g, rows } = gw();
+    const s = g.stream(greq);
+    expect((await s.next()).value).toEqual({ text: '.' });
+    await s.return(undefined as never);
+    expect(rows()).toEqual([ok0]);
+    await vi.waitFor(() => expect(last.closedEarly).toBe(true));
+    // 再次 return / next 不会再写
+    await s.return(undefined as never);
+    expect((await s.next()).done).toBe(true);
+    expect(rows()).toHaveLength(1);
+  });
+
+  it('正常结束且已记账后再 it.return():不追加第二行', async () => {
+    handler = script([delta('ok'), usageChunk(), DONE]);
+    const { g, rows } = gw();
+    const s = g.stream(greq);
+    await drain(s);
+    await s.return(undefined as never);
+    expect(rows()).toEqual([expect.objectContaining({ ok: true, tokensIn: 1000 })]);
+  });
+
+  it('失败已记 ok=0 后再 it.return():不追加第二行', async () => {
+    handler = script([delta('ok'), DONE]);
+    const { g, rows } = gw();
+    const s = g.stream(greq);
+    await failure(drain(s));
+    await s.return(undefined as never);
+    expect(rows()).toEqual([ok0]);
   });
 
   it('坏 SSE 行在网关层是 LLM_UNAVAILABLE(cause 为 bad-sse)', async () => {
