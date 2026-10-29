@@ -1,7 +1,8 @@
+import { inspect } from 'node:util';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { MemoryStore } from '@repolens/db';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { LLM_CACHE_TTL_S, MemoryStore } from '@repolens/db';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BreakerClient, CircuitOpenError } from './breaker.js';
 import { createLlmClient, readLlmConfig } from './config.js';
 import { DeepSeekClient, LlmHttpError } from './deepseek.js';
@@ -15,7 +16,9 @@ class MemoryKv {
   async get(k: string) {
     return this.m.get(k) || null;
   }
-  async set(k: string, v: string) {
+  sets: unknown[][] = [];
+  async set(k: string, v: string, ...rest: unknown[]) {
+    this.sets.push([k, v, ...rest]);
     this.m.set(k, v);
     return 'OK';
   }
@@ -237,5 +240,58 @@ describe('按真实 usage 记账(deepseek-flash,高峰价)', () => {
     expect(r).toMatchObject({ costMicroUsd: 364, cacheHit: false });
     const rows = await usage.llmUsageByTask(7);
     expect(rows[0]).toMatchObject({ tokensIn: 1000, tokensOut: 200, costMicroUsd: 364, ok: true });
+    // 响应缓存:key 只含请求哈希,值只有响应文本与 token 数(不存提示词),带 TTL
+    const cached = kv.sets.filter(([k]) => String(k).startsWith('llm:') && String(k).length === 68);
+    expect(cached).toHaveLength(1);
+    const [ck, cv, ex, ttl] = cached[0]!;
+    expect(String(ck)).toMatch(/^llm:[0-9a-f]{64}$/);
+    expect(JSON.parse(String(cv))).toEqual({
+      text: '{"summary":"x"}',
+      usage: { tokensIn: 1000, tokensOut: 200 },
+    });
+    expect(String(cv)).not.toContain('hi json');
+    expect([ex, ttl]).toEqual(['EX', LLM_CACHE_TTL_S]);
+  });
+
+  it.each([
+    [401, { error: { message: `Authentication Fails: Bearer ${KEY}`, type: 'auth' } }],
+    [500, `internal error, authorization: Bearer ${KEY}`],
+  ])('HTTP %i:错误信息、日志输出、llm_usage、缓存里都没有 key', async (status, body) => {
+    reply = { status, body };
+    const env = { LLM_PROVIDER: 'deepseek', DEEPSEEK_API_KEY: KEY, DEEPSEEK_BASE_URL: base };
+    const kv = new MemoryKv();
+    const usage = new MemoryStore();
+    const gw = new LlmGateway({
+      client: createLlmClient(readLlmConfig(env), { env, kv }),
+      kv,
+      usage,
+      prices: DEFAULT_PRICES,
+      dailyBudgetCents: 500,
+      taskBudgetCents: 30,
+    });
+    const logged: string[] = [];
+    const spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map((m) =>
+      vi.spyOn(console, m).mockImplementation((...a: unknown[]) => void logged.push(inspect(a))),
+    );
+    try {
+      const err = await gw
+        .complete({ ...call, purpose: 'summary', repoId: 1, taskId: 8 })
+        .catch((e: unknown) => e);
+      expect(err).toMatchObject({ code: 'LLM_UNAVAILABLE' });
+      // 模拟日志:按 pino/console 的方式完整展开错误(含 cause 链与所有字段)
+      console.error(err);
+      expect(last.auth).toBe(`Bearer ${KEY}`); // 请求确实带了 key
+      const errText = inspect(err, { depth: 10, showHidden: true }) + JSON.stringify(err);
+      expect(errText).toContain(String(status));
+      expect(errText).not.toContain(KEY);
+      expect(logged.join('\n')).not.toContain(KEY);
+      const rows = await usage.llmUsageByTask(8);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ ok: false, costMicroUsd: 0 });
+      expect(JSON.stringify(rows)).not.toContain(KEY);
+      expect(JSON.stringify([...kv.m])).not.toContain(KEY);
+    } finally {
+      for (const s of spies) s.mockRestore();
+    }
   });
 });

@@ -67,10 +67,9 @@ export class DeepSeekClient implements LlmClient {
       } catch {
         /* 非 JSON 响应 */
       }
-      throw new LlmHttpError(
-        res.status,
-        `DeepSeek HTTP ${res.status}${msg ? `: ${msg.slice(0, 200)}` : ''}`,
-      );
+      // 服务端报错文案可能回显请求头;先抹掉 key 再截断,原始响应体不进错误信息
+      msg = msg.split(this.#apiKey).join('***').slice(0, 200);
+      throw new LlmHttpError(res.status, `DeepSeek HTTP ${res.status}${msg ? `: ${msg}` : ''}`);
     }
     let data: ChatResponse;
     try {

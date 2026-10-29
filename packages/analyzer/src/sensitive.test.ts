@@ -33,4 +33,40 @@ describe('敏感文件 → 不产出 embedding 切块', () => {
     expect(by.get('src/index.ts')?.chunks.length).toBeGreaterThan(0);
     expect(r.graph.nodes.some((n) => n.id === 'f:src/aws.ts')).toBe(true);
   });
+
+  it('假 key 正好落在切块边界(跨两个切块 / 夹在切块之间)也按整份原始内容排除', async () => {
+    // PEM 头在函数 a 的最后一行、正文和尾在函数 b;AKIA 在两个函数之间的注释行,不属于任何切块
+    const src = (pemHead: string, aws: string) =>
+      [
+        'export function a() {',
+        `  return \`x\n${pemHead}\`;`,
+        '}',
+        `// deploy id: ${aws}`,
+        'export function b() {',
+        '  return `MIIFAKEFAKEFAKE\n-----END PRIVATE KEY-----`;',
+        '}',
+        '',
+      ].join('\n');
+    const head = '-----BEGIN PRIVATE KEY-----';
+    const root = mkdtempSync(join(tmpdir(), 'rl-sens-edge-'));
+    writeFileSync(join(root, 'tsconfig.json'), '{}');
+    mkdirSync(join(root, 'src'));
+    writeFileSync(join(root, 'src/pem.ts'), src(head, 'none'));
+    writeFileSync(join(root, 'src/aws.ts'), src('none', FAKE_AWS));
+    // 同样行布局、去掉 key 的对照文件:确认切块边界确实把 key 切开或漏掉
+    writeFileSync(join(root, 'src/twin.ts'), src('x'.repeat(head.length), 'x'.repeat(20)));
+    const r = await analyzeRepo({ root, files: scanSourceFiles(root) });
+    const by = new Map(r.parsed.map((p) => [p.path, p]));
+    const twin = by.get('src/twin.ts')!;
+    expect(twin.sensitive).toBeUndefined();
+    const inChunk = (line: number) =>
+      twin.chunks.filter((c) => c.startLine <= line && line <= c.endLine);
+    // 第 3 行(PEM 头)和第 8 行(PEM 尾)分属不同切块;第 5 行(AKIA)不在任何切块里
+    expect(inChunk(3)).toHaveLength(1);
+    expect(inChunk(8)).toHaveLength(1);
+    expect(inChunk(3)[0]).not.toEqual(inChunk(8)[0]);
+    expect(inChunk(5)).toHaveLength(0);
+    expect(by.get('src/pem.ts')).toMatchObject({ sensitive: 'private-key-block', chunks: [] });
+    expect(by.get('src/aws.ts')).toMatchObject({ sensitive: 'aws-access-key-id', chunks: [] });
+  });
 });
