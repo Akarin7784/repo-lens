@@ -314,27 +314,54 @@ describe.skipIf(!hasRedis)('路由(真实 Redis + 内存 Store)', () => {
     return { repoId: repo.id, jobId };
   }
 
-  it('GET /api/repos/:id 的 repo/commitSha 与 POST 响应一致,commitSha 取最近任务', async () => {
-    const app = make();
-    const created = await post(app, 'https://github.com/Acme/Widget');
-    expect(created.statusCode).toBe(202);
-    const c = created.json();
-    const r1 = RepoStatusSchema.parse((await app.inject(`/api/repos/${c.repoId}`)).json());
-    expect({ repo: r1.repo, commitSha: r1.commitSha, jobId: r1.jobId }).toEqual({
-      repo: c.repo,
-      commitSha: c.commitSha,
-      jobId: c.jobId,
-    });
-    expect(r1.repo).toBe('Acme/Widget');
-    // 同仓库新 commit:返回最近任务的 commit
+  describe('GET /api/repos/:id 的 repo 与 commitSha', () => {
     const SHA2 = 'b'.repeat(40);
-    git.sha = SHA2;
-    const c2 = (await post(app, 'https://github.com/Acme/Widget')).json();
-    git.sha = SHA;
-    const r2 = RepoStatusSchema.parse((await app.inject(`/api/repos/${c.repoId}`)).json());
-    expect(r2.commitSha).toBe(SHA2);
-    expect(r2.jobId).toBe(c2.jobId);
-    await app.close();
+    const detail = async (app: ReturnType<typeof make>, id: number) =>
+      RepoStatusSchema.parse((await app.inject(`/api/repos/${id}`)).json());
+
+    it('没有已完成任务:取最新任务的 commit,与 POST 响应一致', async () => {
+      const app = make();
+      const created = await post(app, 'https://github.com/Acme/NoDone');
+      expect(created.statusCode).toBe(202);
+      const c = created.json();
+      const r = await detail(app, c.repoId);
+      expect({ repo: r.repo, commitSha: r.commitSha, jobId: r.jobId, status: r.status }).toEqual({
+        repo: 'Acme/NoDone',
+        commitSha: c.commitSha,
+        jobId: c.jobId,
+        status: 'queued',
+      });
+      // 还是没有 done:新 commit 的任务成为最新,commitSha 跟着它走
+      git.sha = SHA2;
+      const c2 = (await post(app, 'https://github.com/Acme/NoDone')).json();
+      git.sha = SHA;
+      const r2 = await detail(app, c.repoId);
+      expect([r2.commitSha, r2.jobId]).toEqual([SHA2, c2.jobId]);
+      await app.close();
+    });
+
+    it('有已完成任务:取 done 任务的 commit', async () => {
+      const app = make();
+      const c = (await post(app, 'https://github.com/Acme/Done')).json();
+      await store.updateTask(c.jobId, { stage: 'done', progress: 100 });
+      const r = await detail(app, c.repoId);
+      expect([r.commitSha, r.status, r.jobId]).toEqual([SHA, 'done', c.jobId]);
+      await app.close();
+    });
+
+    it('重新分析期间有更新的 running 任务:commitSha 仍是 done 任务的,状态与 jobId 是最新任务的', async () => {
+      const app = make();
+      const c = (await post(app, 'https://github.com/Acme/Rerun')).json();
+      await store.updateTask(c.jobId, { stage: 'done', progress: 100 });
+      git.sha = SHA2;
+      const c2 = (await post(app, 'https://github.com/Acme/Rerun')).json();
+      git.sha = SHA;
+      expect(c2.commitSha).toBe(SHA2);
+      await store.updateTask(c2.jobId, { stage: 'parsing', progress: 30 });
+      const r = await detail(app, c.repoId);
+      expect([r.commitSha, r.jobId, r.status]).toEqual([SHA, c2.jobId, 'running']);
+      await app.close();
+    });
   });
 
   it('GET /api/repos/:id 状态', async () => {

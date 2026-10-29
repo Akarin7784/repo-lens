@@ -127,6 +127,8 @@ export interface Store {
   }): Promise<{ task: TaskRow; created: boolean }>;
   getTask(jobId: string): Promise<TaskRow | null>;
   latestTask(repoId: number): Promise<TaskRow | null>;
+  /** 最近一个已完成(stage = done)的任务 */
+  latestDoneTask(repoId: number): Promise<TaskRow | null>;
   /** 最近一个图已入库(stage ≥ graph_ready 且未失败,或 done)的任务 */
   latestGraphTask(repoId: number): Promise<TaskRow | null>;
   updateTask(jobId: string, patch: TaskPatch): Promise<void>;

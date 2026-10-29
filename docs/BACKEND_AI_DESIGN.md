@@ -32,6 +32,7 @@ flowchart LR
 | 接口 | 约定 |
 |---|---|
 | `POST /api/repos` | 入参 `{url, ref?}`，返回 `{repoId, jobId}` |
+| `GET /api/repos/:id` | 仓库状态 `{repoId, jobId, repo, commitSha, status, stage, progress, stats, error}`;`repo` 为 `owner/name`;`commitSha` 优先取最近一次已完成(done)任务的 commit(重新分析期间仍指向可看的那版图),没有 done 任务时取最新任务的;`jobId`/`status`/`stage`/`progress` 始终是最新任务的(T-003g) |
 | `GET /api/jobs/:id/events` | SSE，推送任务进度（格式见 §3） |
 | `GET /api/repos/:id/graph` | 返回 `{nodes, edges, meta}`；节点分 `module → dir → file` 三层，带 `parentId`；`?parentId=` 懒加载，单次 ≤ 300 节点 |
 | `POST /api/repos/:id/chat` | SSE 流，事件只有三种：`token` / `citation` / `done`；`citation` = `{path,startLine,endLine,nodeId}`，**后端校验通过后才下发** |
