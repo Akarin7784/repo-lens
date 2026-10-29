@@ -41,9 +41,12 @@ export interface LlmCallResult {
  * 没有 `usage` 就结束的流视为上游中途断流。
  * `truncated: true` 表示输出因 max_tokens 被截断(OpenAI 兼容的 finish_reason: "length"),
  * 正文到此为止但流本身正常结束;不给或 false 表示正常结束。
+ * `estimated: true` 表示服务商没给 usage、但流以 finish_reason:"stop" + [DONE] 正常结束,
+ * usage 由客户端按字数估算(上界,见 estimate.ts);网关照常记 ok=1 并打 estimated 告警日志。
  */
 export type LlmStreamEvent =
-  { type: 'text'; text: string } | { type: 'usage'; usage: LlmUsage; truncated?: boolean };
+  | { type: 'text'; text: string }
+  | { type: 'usage'; usage: LlmUsage; truncated?: boolean; estimated?: boolean };
 
 /** 底层模型客户端:FakeLlm(默认)与 DeepSeekClient(OpenAI 兼容) */
 export interface LlmClient {
@@ -71,6 +74,8 @@ export interface LlmResult extends LlmCallResult {
   cacheHit: boolean;
   /** 仅 LlmGateway.stream:输出因 max_tokens 被截断(finish_reason: length)时为 true */
   truncated?: boolean;
+  /** 仅 LlmGateway.stream:usage 为按字数估算(服务商没给 usage)时为 true */
+  usageEstimated?: boolean;
 }
 
 /** LlmGateway.stream 的正文增量 */

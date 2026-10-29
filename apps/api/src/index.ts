@@ -60,6 +60,8 @@ const gateway = new LlmGateway({
   prices: DEFAULT_PRICES,
   dailyBudgetCents: llm.dailyBudgetCents,
   taskBudgetCents: llm.taskBudgetCents,
+  // app 在下面创建;告警只在请求期间触发,那时 app 已初始化
+  log: { warn: (obj, msg) => app.log.warn(obj, msg) },
 });
 // 查询向量:百炼(有 key)或 fake;本地 ONNX 不在 api 里加载(峰值约 2.5 GB),此时检索 keyword-only
 const ds = emb.dashscope;
