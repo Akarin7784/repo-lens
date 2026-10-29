@@ -281,6 +281,96 @@ describe.skipIf(!hasRedis)('路由(真实 Redis + 内存 Store)', () => {
     await app.close();
   });
 
+  it('被拒绝/出错的提交不计入 5 次新任务限额', async () => {
+    const app = make();
+    const ip = nextIp();
+    const k = redisKeys.rateLimitIp(ip);
+    await redis.del(k, redisKeys.submitLimitIp(ip));
+    // 地址非法、仓库不存在、过大、语言不支持:各 3 次,共 12 次,都不计入新任务
+    for (let i = 0; i < 3; i++) {
+      expect((await post(app, 'https://gitlab.com/a/b', ip)).statusCode).toBe(400);
+      git.sha = null;
+      expect((await post(app, `https://github.com/a/missing${i}`, ip)).statusCode).toBe(404);
+      git.sha = SHA;
+      git.info = { sizeKb: 10_000_000, language: 'TypeScript' };
+      expect((await post(app, `https://github.com/a/big${i}`, ip)).statusCode).toBe(413);
+      git.info = { sizeKb: 100, language: 'Go' };
+      expect((await post(app, `https://github.com/a/go${i}`, ip)).statusCode).toBe(422);
+      git.info = { sizeKb: 100, language: 'TypeScript' };
+    }
+    expect(await redis.get(k)).toBeNull();
+    // 入队出错(500):已计数的 1 次被退还
+    const bad = buildApp({
+      store,
+      redis,
+      git,
+      logger: false,
+      queue: {
+        enqueue: async () => Promise.reject(new Error('redis down')),
+        removeFailed: async () => {},
+      },
+    });
+    expect((await post(bad, 'https://github.com/a/err', ip)).statusCode).toBe(500);
+    await bad.close();
+    expect(await redis.get(k)).toBe('0');
+    // 之后仍可建 5 个新任务,第 6 个 429
+    for (let i = 0; i < 5; i++)
+      expect((await post(app, `https://github.com/a/ok${i}`, ip)).statusCode).toBe(202);
+    expect((await post(app, 'https://github.com/a/ok6', ip)).statusCode).toBe(429);
+    expect(await redis.get(redisKeys.submitLimitIp(ip))).toBe('19');
+    await app.close();
+  });
+
+  it('宽松总量计数:同一来源每小时第 61 次提交 429(含被拒绝的),且 TTL 为 1 小时', async () => {
+    const app = make();
+    const ip = nextIp();
+    const sk = redisKeys.submitLimitIp(ip);
+    await redis.del(sk, redisKeys.rateLimitIp(ip));
+    for (let i = 0; i < 60; i++)
+      expect((await post(app, 'https://gitlab.com/a/b', ip)).statusCode).toBe(400);
+    const r = await post(app, 'https://github.com/a/fine', ip);
+    expect(r.statusCode).toBe(429);
+    expect(r.json().error.code).toBe('RATE_LIMITED');
+    expect(await redis.ttl(sk)).toBeGreaterThan(3500);
+    // 被总量拦下的请求不建任务、不占新任务名额
+    expect(jobs).toHaveLength(0);
+    expect(await redis.get(redisKeys.rateLimitIp(ip))).toBeNull();
+    // 另一来源不受影响
+    expect((await post(app, 'https://github.com/a/fine')).statusCode).toBe(202);
+    await app.close();
+  });
+
+  it('两个上限可配置;复用不计新仓库额度但计总量', async () => {
+    const app = buildApp({
+      store,
+      redis,
+      queue,
+      git,
+      logger: false,
+      rateLimitPerHour: 1,
+      submitLimitPerHour: 4,
+    });
+    const ip = nextIp();
+    const [ik, sk] = [redisKeys.rateLimitIp(ip), redisKeys.submitLimitIp(ip)];
+    await redis.del(sk, ik);
+    expect((await post(app, 'https://github.com/a/c1', ip)).statusCode).toBe(202);
+    // 复用:新仓库额度(1)已满也仍然 200,且不再增加 rl:ip,但 rl:sub 照计
+    expect((await post(app, 'https://github.com/a/c1', ip)).statusCode).toBe(200);
+    expect((await post(app, 'https://github.com/a/c1', ip)).statusCode).toBe(200);
+    expect(await redis.get(ik)).toBe('1');
+    expect(await redis.get(sk)).toBe('3');
+    // 第 2 个新仓库超出 rateLimitPerHour=1
+    const r1 = await post(app, 'https://github.com/a/c2', ip);
+    expect(r1.statusCode).toBe(429);
+    expect(r1.json().error.code).toBe('RATE_LIMITED');
+    // 第 5 次请求超出 submitLimitPerHour=4,复用也被拦
+    const r2 = await post(app, 'https://github.com/a/c1', ip);
+    expect(r2.statusCode).toBe(429);
+    expect(r2.json().error.code).toBe('RATE_LIMITED');
+    expect(await redis.get(sk)).toBe('5');
+    await app.close();
+  });
+
   async function seedGraph() {
     const repo = await store.upsertRepo({ url: 'https://github.com/o/g', owner: 'o', name: 'g' });
     const jobId = publicJobId(repo.id, SHA);

@@ -225,7 +225,8 @@ CREATE TABLE llm_usage (
 | 图缓存 | `graph:v{N}:{repoId}:{commitSha}:{parentId|root}`(N=投影版本,改投影逻辑时递增) | String(JSON, gzip)，TTL 7d |
 | LLM 响应缓存 | `llm:{sha256(model+prompt)}` | String，TTL 30d |
 | Embedding 缓存 | `emb:{model}:{contentHash}` | String(base64 float32)，TTL 30d |
-| 限流 | `rl:ip:{ip}:{yyyyMMddHH}` | INCR，TTL 1h;**只计真正入队的提交**(新任务或 failed 重试);同仓库同 commit 已有 done/queued/running 任务时直接复用,不计数(T-003d)。超限返回 429 `RATE_LIMITED`,不建任务 |
+| 限流 | `rl:ip:{ip}:{yyyyMMddHH}` | INCR，TTL 1h;**只计真正入队的提交**(新任务或 failed 重试);同仓库同 commit 已有 done/queued/running 任务时直接复用,不计数(T-003d);被拒绝或出错的提交也不计。每来源每小时上限默认 5,环境变量 `RATE_LIMIT_NEW_REPOS_PER_HOUR`。超限返回 429 `RATE_LIMITED`,不建任务 |
+| 提交总量(宽松) | `rl:sub:{ip}:{yyyyMMddHH}` | INCR,TTL 1h;`POST /api/repos` 的**每一次**提交都计(包括被拒绝的 400/404/413/422、出错的 500、复用的 200,T-003f),同一来源每小时上限默认 60,环境变量 `RATE_LIMIT_SUBMITS_PER_HOUR`(复用不占新仓库额度,但计入这里,是便宜的防刷兜底),超限返回 429 `RATE_LIMITED`。这个检查在请求最前面做,被它拦下的请求不建任务,也不占新任务名额。被拒绝的提交不进入新任务计数;已计数但最终没有入队的提交(并发下别人先建了未失败任务,或建任务/入队抛错)会 DECR 退还 1 次 |
 | 预算 | `budget:day:{yyyyMMdd}`、`budget:repo:{repoId}` | INCRBY(微美元) |
 | 熔断状态 | `cb:llm:{provider}` | Hash {state, failCount, openedAt} |
 
@@ -263,8 +264,9 @@ sequenceDiagram
   participant W as Worker
   participant R as Redis Stream
   C->>A: POST /api/repos {url}
+  A->>A: 先计提交总量(rl:sub,默认 60/h,任何提交都计)
   A->>A: 校验URL / ls-remote 取 commit / 查已有任务
-  A->>A: 仅当需要入队(新任务或 failed 重试)时限流计数
+  A->>A: 仅当需要入队(新任务或 failed 重试)时计 rl:ip(默认 5/h)
   A->>Q: add('analyze', {repoId, commit}, {jobId: repoId+':'+commit})
   A-->>C: {repoId, jobId}
   C->>A: GET /api/jobs/:id/events (SSE)
@@ -445,7 +447,7 @@ flowchart TD
 | 批处理 | function 摘要一批 10–20 个；embedding 一次请求 64 条 |
 | 削量 | 只摘导出的和 ≥8 行的函数；测试、示例目录（`__tests__`、`*.spec.ts`）只建 chunk，不做摘要 |
 | 预算 | 单仓库分析预算 $0.50（演示仓库不限）；单次问答输入 ≤ 8k / 输出 ≤ 800 tokens；全站每日 $5；超了预算就跳过 summarize，只做 embed |
-| 限流 | 匿名用户每 IP 每小时 3 个新仓库、30 次问答；BullMQ `limiter: {max: 20, duration: 1000}` 控制对 LLM 的 QPS |
+| 限流 | 匿名用户每 IP 每小时 5 个新仓库(`RATE_LIMIT_NEW_REPOS_PER_HOUR`)、POST 总量 60 次(`RATE_LIMIT_SUBMITS_PER_HOUR`)、30 次问答；BullMQ `limiter: {max: 20, duration: 1000}` 控制对 LLM 的 QPS |
 | 统计 | 每次调用写 `llm_usage`（token 数来自响应里的 `usage` 字段）；`done` 事件带 costUsd；后台做按天/按用途的成本看板 |
 
 **统一 LLM 网关**（`lib/llm.ts`）：所有调用都经过它，负责缓存 → 预算检查 → 熔断 → 调用 → 记账，备用 provider 按顺序切换（见 §10.4）。

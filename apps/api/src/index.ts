@@ -3,6 +3,7 @@ import { Redis } from 'ioredis';
 import { MysqlStore, queueJobId, runMigrations } from '@repolens/db';
 import { buildApp, type AnalyzeJobData, type JobQueue } from './app.js';
 import { createGitHost } from './githost.js';
+import { readSubmitLimits } from './limits.js';
 
 const ANALYZE_QUEUE = 'analyze';
 /** 与 worker 的 ANALYZE_JOB_OPTS 一致 */
@@ -13,6 +14,8 @@ const JOB_OPTS = {
   removeOnFail: { age: 7 * 24 * 3600 },
 };
 
+// 限额配置不合法时启动即失败
+const limits = readSubmitLimits(process.env);
 const port = Number(process.env.API_PORT ?? 4000);
 const dbUrl = process.env.DATABASE_URL;
 if (!dbUrl) throw new Error('DATABASE_URL 未设置');
@@ -37,6 +40,7 @@ const app = buildApp({
   queue,
   git: createGitHost({ githubToken: process.env.GITHUB_TOKEN }),
   maxRepoMb: Number(process.env.MAX_REPO_MB ?? 300),
+  ...limits,
 });
 app.listen({ port, host: '0.0.0.0' }).catch((err: unknown) => {
   app.log.error(err);

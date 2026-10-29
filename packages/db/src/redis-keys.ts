@@ -33,6 +33,8 @@ export const redisKeys = {
   graphPattern: (repoId: number, commit: string, version = GRAPH_PROJECTION_VERSION) =>
     `graph:v${version}:${repoId}:${commit}:*`,
   rateLimitIp: (ip: string, d = new Date()) => `rl:ip:${ip}:${hourBucket(d)}`,
+  /** 宽松总量计数:所有 POST /api/repos 提交 */
+  submitLimitIp: (ip: string, d = new Date()) => `rl:sub:${ip}:${hourBucket(d)}`,
 } as const;
 
 /** 对外 jobId = `${repoId}:${commit}`;BullMQ 5 禁止自定义 id 含单个 ':',队列内用 '-' */
