@@ -167,6 +167,34 @@ describe.skipIf(!hasRedis)('路由(真实 Redis + 内存 Store)', () => {
     await app.close();
   });
 
+  it.each([
+    ['缺 repoUrl', { ref: 'main' }],
+    ['空对象', {}],
+    ['ref 为空串', { repoUrl: 'https://github.com/a/b', ref: '' }],
+    ['ref 非字符串', { repoUrl: 'https://github.com/a/b', ref: 1 }],
+    ['未知结构', [1, 2]],
+  ])('400 BAD_REQUEST(非仓库地址的校验错误): %s', async (_n, payload) => {
+    const app = make();
+    const r = await app.inject({ method: 'POST', url: '/api/repos', payload });
+    expect(r.statusCode).toBe(400);
+    expect(r.json().error.code).toBe('BAD_REQUEST');
+    await app.close();
+  });
+
+  it('repoUrl 非字符串仍是 INVALID_REPO_URL;非法 JSON 是 BAD_REQUEST', async () => {
+    const app = make();
+    const r1 = await app.inject({ method: 'POST', url: '/api/repos', payload: { repoUrl: 42 } });
+    expect([r1.statusCode, r1.json().error.code]).toEqual([400, 'INVALID_REPO_URL']);
+    const r2 = await app.inject({
+      method: 'POST',
+      url: '/api/repos',
+      headers: { 'content-type': 'application/json' },
+      payload: '{bad json',
+    });
+    expect([r2.statusCode, r2.json().error.code]).toEqual([400, 'BAD_REQUEST']);
+    await app.close();
+  });
+
   it('404 / 413 / 422', async () => {
     const app = make();
     git.sha = null;
