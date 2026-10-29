@@ -89,6 +89,11 @@
 - 评审:干净环境 323 个测试全过,CI 绿;探针确认 secrets.json 排除、secrets.ts 无密钥正常分析、含假 key 排除。
 - 非阻塞后续:超时用 `Promise.race`,未通过 AbortSignal 真正中止请求(晚到响应仍记账,单文件最多可能记两次);BACKEND_AI_DESIGN 价格段(约 480 行)未同步;规则小缺口(package.json 的 `"_authToken":` JSON 写法、`.yarnrc.yml` npmAuthToken、`app-secrets.json`、credentials/secrets 扩展名列表不一致);大 README 先整份读入再判断体积;shared 里 `Buffer` 将来前端用需换 `TextEncoder`。
 
+### 2026-10-29 合并 #45(私有仓库拒绝 REPO_NOT_PUBLIC,见 main 提交记录)
+- `repoInfo` 返回 `private: true` 时在建仓库/任务/入队/占新仓库额度之前返回 422 `REPO_NOT_PUBLIC`("只支持公开仓库");`repoInfo` 403/5xx/网络错误都不当作私有,404 仍是 `REPO_NOT_FOUND`。错误码进 `packages/shared`,web 文案表、ARCHITECTURE 错误码表、BACKEND_AI_DESIGN 同步。
+- 评审:在含 #46 的最新 main 上试合并无冲突,325 测试全过;变异检查(删掉返回 422 的那行)新用例失败;9 个临时补测(限流、非 JSON、缺字段、SHA ref 等)全过。
+- 非阻塞后续:提交页提示"只接受公开仓库"与错误文案"只支持公开仓库"措辞统一(前端);已有漏洞:ref 为 40 位 SHA 且无 token 时跳过 ls-remote,私有或不存在的仓库会照常建任务并扣额度,到 clone 才失败,可在 `repoInfo` 明确 404 时拒绝(403 限流不能拒);文档细节:ARCHITECTURE 错误码表后缺空行,BACKEND_AI_DESIGN 约 533 行"先 git ls-remote 检查公开仓库"是旧说法。
+
 ## 演示检查清单(第 4 周前逐项勾选)
 - 演示前提前分析好 hono、zustand、zod、trpc,演示时只走「复用已有结果」的路径,现场不依赖新分析。
 - 演示环境把 `RATE_LIMIT_NEW_REPOS_PER_HOUR` 调高(默认 5),避免彩排几次后被限流;同时确认 `RATE_LIMIT_SUBMITS_PER_HOUR`(默认 60)够用。
