@@ -1,4 +1,5 @@
 'use client';
+import { MAX_NODES_PER_RESPONSE } from '@repolens/shared';
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import {
   Background,
@@ -10,6 +11,7 @@ import {
   useReactFlow,
 } from '@xyflow/react';
 import {
+  activeLayerEdges,
   aggregateEdges,
   countChildren,
   cycleEdgeKeys,
@@ -17,6 +19,7 @@ import {
   makeVisibility,
   SliceTooLargeError,
 } from '../../lib/graph/hierarchy';
+import { userMessageOf } from '../../lib/api/errors';
 import { graphReducer, initialGraphState } from '../../lib/graph/state';
 import type { GraphSource } from '../../lib/graph/source';
 import { toFlow, type RepoFlowEdge, type RepoFlowNode } from '../../lib/graph/toFlow';
@@ -34,6 +37,8 @@ import { ToggleContext } from './ToggleContext';
 
 export type GraphViewProps = {
   source: GraphSource;
+  /** 根层加载完成(含耗时)后回调,用于页头显示 commit 等信息 */
+  onRootLoaded?: (info: { commitSha: string; nodes: number; ms: number }) => void;
   owner: string;
   repo: string;
   /** 测试时注入同步布局引擎;默认走 web worker 里的 elkjs */
@@ -44,7 +49,7 @@ const defaultEdgeOptions = {
   markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: 'var(--edge)' },
 };
 
-function Inner({ source, owner, repo, engine }: GraphViewProps) {
+function Inner({ source, owner, repo, engine, onRootLoaded }: GraphViewProps) {
   const [state, dispatch] = useReducer(graphReducer, initialGraphState);
   const [flow, setFlow] = useState<{ nodes: RepoFlowNode[]; edges: RepoFlowEdge[] }>({
     nodes: [],
@@ -57,15 +62,32 @@ function Inner({ source, owner, repo, engine }: GraphViewProps) {
   const layoutFile = useRef<LayoutFile | null>(null);
   const { fitView } = useReactFlow();
 
+  const onRootRef = useRef(onRootLoaded);
+  onRootRef.current = onRootLoaded;
+
   useEffect(() => {
     let alive = true;
-    Promise.all([source.loadChildren(null), loadLayoutFile(owner, repo, source.commitSha)]).then(
-      ([slice, file]) => {
+    const t0 = performance.now();
+    source
+      .loadChildren(null)
+      .then(async (slice) => {
+        const ms = Math.round(performance.now() - t0);
+        const file = await loadLayoutFile(owner, repo, slice.meta.commitSha);
         if (!alive) return;
         layoutFile.current = file;
-        dispatch({ type: 'init', nodes: slice.nodes, edges: source.rawEdges() });
-      },
-    );
+        onRootRef.current?.({ commitSha: slice.meta.commitSha, nodes: slice.nodes.length, ms });
+        dispatch({
+          type: 'init',
+          nodes: slice.nodes,
+          // fixture 给全量原始边;真实接口用本层返回的边
+          edges: source.rawEdges ? source.rawEdges() : slice.edges,
+          cycles: slice.meta.cycles,
+          layered: !source.rawEdges,
+          truncated: slice.truncated,
+        });
+        if (slice.nodes.length === 0) setStatus('这个仓库没有可展示的模块');
+      })
+      .catch((e: unknown) => alive && setError(`加载依赖图失败:${userMessageOf(e)}`));
     return () => {
       alive = false;
     };
@@ -78,9 +100,18 @@ function Inner({ source, owner, repo, engine }: GraphViewProps) {
       if (!state.loaded.has(id)) {
         try {
           const slice = await source.loadChildren(id);
-          dispatch({ type: 'childrenLoaded', parentId: id, nodes: slice.nodes });
+          dispatch({
+            type: 'childrenLoaded',
+            parentId: id,
+            nodes: slice.nodes,
+            ...(source.rawEdges ? {} : { edges: slice.edges }),
+            cycles: slice.meta.cycles,
+            truncated: slice.truncated,
+          });
         } catch (e) {
-          setError(e instanceof SliceTooLargeError ? e.message : `加载 ${id} 失败`);
+          setError(
+            e instanceof SliceTooLargeError ? e.message : `加载 ${id} 失败:${userMessageOf(e)}`,
+          );
           return;
         }
       }
@@ -92,8 +123,15 @@ function Inner({ source, owner, repo, engine }: GraphViewProps) {
   const derived = useMemo(() => {
     const vis = makeVisibility(state.nodes, state.expanded, source.parentOf);
     const visible = state.nodes.filter((n) => vis.isVisible(n.id));
-    let edges = aggregateEdges(state.edges, vis.visibleAncestor);
-    const cycleKeys = cycleEdgeKeys(state.edges, source.cycles?.() ?? [], vis.visibleAncestor);
+    const live = source.rawEdges
+      ? state.edges
+      : activeLayerEdges(state.edges, state.edgeLayer, state.expanded, vis.isVisible);
+    let edges = aggregateEdges(live, vis.visibleAncestor);
+    const cycleKeys = cycleEdgeKeys(live, state.cycles, vis.visibleAncestor);
+    // 截断提示:只看当前可见的层(根层 + 已展开且可见的容器)
+    const truncatedLayers = [...state.truncated].filter(
+      (p) => p === '' || (state.expanded.has(p) && vis.isVisible(p)),
+    );
     let nodes = visible;
     if (state.includeExternal) {
       const files = state.nodes.filter((n) => n.type === 'file');
@@ -101,8 +139,17 @@ function Inner({ source, owner, repo, engine }: GraphViewProps) {
       nodes = [...visible, ...ext.nodes];
       edges = [...edges, ...ext.edges];
     }
-    return { nodes, edges, cycleKeys };
-  }, [state.nodes, state.edges, state.expanded, state.includeExternal, source]);
+    return { nodes, edges, cycleKeys, truncatedLayers };
+  }, [
+    state.nodes,
+    state.edges,
+    state.edgeLayer,
+    state.truncated,
+    state.cycles,
+    state.expanded,
+    state.includeExternal,
+    source,
+  ]);
 
   useEffect(() => {
     if (derived.nodes.length === 0) return;
@@ -198,6 +245,18 @@ function Inner({ source, owner, repo, engine }: GraphViewProps) {
           <Controls showInteractive={false} position="bottom-right" />
         </ReactFlow>
         <Legend />
+        {derived.truncatedLayers.length > 0 && (
+          <div
+            role="note"
+            data-testid="truncated-notice"
+            className="absolute left-3 top-3 z-10 max-w-[420px] rounded-control border border-line bg-panel px-3 py-1.5 text-[12px] text-fg shadow-soft"
+          >
+            {derived.truncatedLayers
+              .map((p) => (p === '' ? '顶层' : `「${p.replace(/^[a-z]:/, '')}」`))
+              .join('、')}
+            的子节点超过 {MAX_NODES_PER_RESPONSE} 个,只显示了前 {MAX_NODES_PER_RESPONSE} 个。
+          </div>
+        )}
         <div
           role="status"
           className="absolute bottom-3 left-3 z-10 rounded-full border border-line bg-panel px-3 py-1 text-[12px] text-muted"
@@ -259,6 +318,26 @@ function Legend() {
           <span className="rounded-full bg-accent-strong px-1 text-[10px] leading-4 text-on-accent">
             ↻
           </span>
+        </span>
+      </div>
+      <div className={row}>
+        <svg width="36" height="8" aria-hidden>
+          <line
+            x1="0"
+            y1="4"
+            x2="36"
+            y2="4"
+            stroke="var(--edge)"
+            strokeWidth="5"
+            strokeOpacity="0.75"
+          />
+        </svg>
+        <span className="inline-flex items-center gap-1">
+          聚合边(越粗越多)
+          <span className="rounded-full border border-line bg-panel px-1.5 text-[10px] text-muted">
+            ×N
+          </span>
+          聚合次数
         </span>
       </div>
     </div>
