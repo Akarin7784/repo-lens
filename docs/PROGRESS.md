@@ -83,6 +83,12 @@
 - 评审:干净环境全过(297 测试),与 main、#43 试合并无冲突。非阻塞:id 写死,复用时改 `useId()`;未实际渲染截图。
 - #43 评审结果:需修改(`?node=` 深链接到未展开节点会被 `suggestedFocus` 覆盖,跳转失败),已反馈前端。
 
+### 2026-10-29 合并 #46(安全与稳定性加固,c2971e2)
+- 敏感规则补充:`credentials`/`secrets`(仅无扩展名或 json/yaml/yml/toml/env/ini/txt,`secrets.ts` 由内容规则决定)、`sk_test_`/`rk_test_`、`_authToken=`、`npm_`+36 位、JWT;新增 `exclusionRule`(敏感 > 超过 500KB > 二进制),analyzer 与 worker 共用;敏感文件不再持久化 symbols,`/nodes` 返回空 exports。
+- 熔断半开再失败立即重开;价格注释改官方中文页、统一 6.67 元/美元;单文件摘要超时和 dir/module 提示词长度上限;api 测试限流 key 隔离。
+- 评审:干净环境 323 个测试全过,CI 绿;探针确认 secrets.json 排除、secrets.ts 无密钥正常分析、含假 key 排除。
+- 非阻塞后续:超时用 `Promise.race`,未通过 AbortSignal 真正中止请求(晚到响应仍记账,单文件最多可能记两次);BACKEND_AI_DESIGN 价格段(约 480 行)未同步;规则小缺口(package.json 的 `"_authToken":` JSON 写法、`.yarnrc.yml` npmAuthToken、`app-secrets.json`、credentials/secrets 扩展名列表不一致);大 README 先整份读入再判断体积;shared 里 `Buffer` 将来前端用需换 `TextEncoder`。
+
 ## 演示检查清单(第 4 周前逐项勾选)
 - 演示前提前分析好 hono、zustand、zod、trpc,演示时只走「复用已有结果」的路径,现场不依赖新分析。
 - 演示环境把 `RATE_LIMIT_NEW_REPOS_PER_HOUR` 调高(默认 5),避免彩排几次后被限流;同时确认 `RATE_LIMIT_SUBMITS_PER_HOUR`(默认 60)够用。
