@@ -499,7 +499,7 @@ volumes: { repos: {}, mysql: {}, qdrant: {} }
 | `QDRANT_COLLECTION` | `code_chunks` | 向量 collection 名 |
 | `EMBEDDING_PROVIDER` | `local` | T-214c:`local`(现有 fake/onnx,行为与 digest 不变)\| `dashscope`(阿里云百炼 OpenAI 兼容 `/embeddings`) |
 | `DASHSCOPE_API_KEY` | (空) | 仅 dashscope 读取;缺失时向量化记 `skipped` 并告警;绝不打印 |
-| `DASHSCOPE_EMBEDDING_BASE_URL` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | 北京地域(key 为北京地域);只允许 https 且主机为 `dashscope.aliyuncs.com` / `dashscope-intl.aliyuncs.com`,其他值读配置时报错(只报变量名) |
+| `DASHSCOPE_EMBEDDING_BASE_URL` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | 北京地域(key 为北京地域);只允许 https 且主机为 `dashscope.aliyuncs.com` / `dashscope-intl.aliyuncs.com` 或业务空间域名(整串匹配 `^[a-z0-9-]+\.[a-z0-9-]+\.maas\.aliyuncs\.com$`),不允许端口、用户名、IP;其他值读配置时报错(只报变量名) |
 | `DASHSCOPE_EMBEDDING_MODEL` / `DASHSCOPE_EMBEDDING_DIM` | `text-embedding-v3` / `1024` | 维度只允许 1024/768/512/256/128/64 |
 | `DASHSCOPE_EMBEDDING_TPM` | `1000000` | 进程内令牌桶每分钟 token;官方北京 v3 TPM 1.2M,留余量;**只对单 worker 有效**,多 worker 靠 429 退避兜底,演示只开一个 worker |
 | `EMBEDDING_TASK_BUDGET_CENTS` | `50` | 单任务外部 embedding 预算,与 `LLM_TASK_BUDGET_CENTS` 独立;依据见 BACKEND_AI_DESIGN T-214c |

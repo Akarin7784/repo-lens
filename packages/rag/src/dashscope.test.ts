@@ -307,10 +307,23 @@ describe('EMBEDDING_PROVIDER 配置', () => {
     expect(ds('https://dashscope-intl.aliyuncs.com/compatible-mode/v1').dashscope!.baseUrl).toBe(
       'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
     );
+    expect(
+      ds('https://abc123.cn-beijing.maas.aliyuncs.com/compatible-mode/v1').dashscope!.baseUrl,
+    ).toBe('https://abc123.cn-beijing.maas.aliyuncs.com/compatible-mode/v1');
     for (const bad of [
       'http://dashscope.aliyuncs.com/compatible-mode/v1',
+      'http://abc123.cn-beijing.maas.aliyuncs.com/compatible-mode/v1',
       'https://evil-proxy.example.com/v1',
       'https://dashscope.aliyuncs.com.evil.example/v1',
+      'https://evil.com/.maas.aliyuncs.com',
+      'https://x.maas.aliyuncs.com.evil.com/v1',
+      'https://evil@abc123.cn-beijing.maas.aliyuncs.com/v1',
+      'https://u:p@dashscope.aliyuncs.com/compatible-mode/v1',
+      'https://abc123.cn-beijing.maas.aliyuncs.com:8443/v1',
+      'https://dashscope.aliyuncs.com:443x/v1',
+      'https://47.93.1.2/compatible-mode/v1',
+      'https://[::1]/v1',
+      'https://a.b.c.maas.aliyuncs.com/v1',
     ]) {
       let msg = '';
       try {
@@ -321,6 +334,7 @@ describe('EMBEDDING_PROVIDER 配置', () => {
       expect(msg).toContain('DASHSCOPE_EMBEDDING_BASE_URL');
       expect(msg).not.toContain(bad);
       expect(msg).not.toContain('evil');
+      expect(msg).not.toContain('maas');
     }
   });
   it('非法配置报错只含变量名,不回显 key', () => {

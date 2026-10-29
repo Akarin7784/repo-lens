@@ -11,12 +11,22 @@ export const DEFAULT_EMBEDDING_MODEL_REVISION = '761b726dd34fb83930e26aab4e9ac38
 export const DASHSCOPE_DEFAULT_BASE_URL = 'https://dashscope.aliyuncs.com/compatible-mode/v1';
 export const DASHSCOPE_DEFAULT_MODEL = 'text-embedding-v3';
 export const DASHSCOPE_DEFAULT_DIM = 1024;
-/** 只允许 https + 官方主机(北京 / 国际);其余在读配置时报错(只报变量名) */
+/**
+ * 只允许 https + 官方主机(北京 / 国际)或百炼业务空间专属域名 `<空间>.<地域>.maas.aliyuncs.com`
+ * (整串锚定);不允许端口、用户名/密码、IP。其余在读配置时报错(只报变量名)。路径不限制。
+ */
 export const DASHSCOPE_ALLOWED_HOSTS = ['dashscope.aliyuncs.com', 'dashscope-intl.aliyuncs.com'];
+export const DASHSCOPE_MAAS_HOST_RE = /^[a-z0-9-]+\.[a-z0-9-]+\.maas\.aliyuncs\.com$/;
 export function isAllowedDashscopeBaseUrl(u: string): boolean {
   try {
     const url = new URL(u);
-    return url.protocol === 'https:' && DASHSCOPE_ALLOWED_HOSTS.includes(url.hostname);
+    return (
+      url.protocol === 'https:' &&
+      url.username === '' &&
+      url.password === '' &&
+      url.port === '' &&
+      (DASHSCOPE_ALLOWED_HOSTS.includes(url.hostname) || DASHSCOPE_MAAS_HOST_RE.test(url.hostname))
+    );
   } catch {
     return false;
   }
