@@ -117,6 +117,7 @@
 - [ ] 演示机拉代码后先在仓库根目录运行 `pnpm build`(或 `pnpm --filter @repolens/shared build`),避免 shared 旧构建导致错误码显示异常。
 - 演示前提前分析好 hono、zustand、zod、trpc,演示时只走「复用已有结果」的路径,现场不依赖新分析。
 - 演示环境把 `RATE_LIMIT_NEW_REPOS_PER_HOUR` 调高(默认 5),避免彩排几次后被限流;同时确认 `RATE_LIMIT_SUBMITS_PER_HOUR`(默认 60)够用。
+- [ ] 演示前抽查 hono 的在环节点:`/nodes` 对 `src/helper/streaming/index.ts`、`src/helper/streaming/text.ts`、`src/jsx/dom/render.ts` 返回 `inCycle: true`,`src/hono.ts` 为 false;ed1d5f7 应为 5 个环、12 个文件(inCycle 现由存储的边现场计算,不再读 `task.stats`,CI smoke 的 `ci-smoke-cycles.mjs` 也断言)。
 - 状态栏的节点数和边数口径要和画布一致,避免被现场对数字(见 2026-10-29 的 84 与 80 讨论)。
 - 暗色、Safari、Firefox、投影仪、大图性能还没验证,演示前在真实设备上过一遍。
 

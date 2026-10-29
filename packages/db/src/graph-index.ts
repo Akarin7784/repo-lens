@@ -1,5 +1,5 @@
 import { posix } from 'node:path';
-import { dirId, fileId, moduleId, type GraphNode } from '@repolens/shared';
+import { dirId, fileId, findCycles, moduleId, type GraphNode } from '@repolens/shared';
 import type { StoredGraph } from './store.js';
 
 /** 由 file 行重建 module → dir → file 全量树(与 analyzer buildGraph 同规则) */
@@ -53,6 +53,27 @@ export class GraphIndex {
     }
     for (const n of this.nodes.values())
       if (n.type !== 'file') n.weight = this.fileCount.get(n.id) ?? 0;
+  }
+
+  private _cycles?: string[][];
+  /**
+   * 文件级强连通分量(≥2 个文件或自引用;type-only 边不参与),由已存储的边现场计算,
+   * 与分析器 graph.cycles 同口径。/graph 投影与 /nodes inCycle 都用它,不依赖 task.stats
+   * (stats 只做展示统计,重跑/复用已入库图时可能为空)。
+   */
+  get cycles(): string[][] {
+    if (!this._cycles) {
+      const adj = new Map<string, Set<string>>();
+      for (const e of this.g.edges) {
+        if (e.kind === 'type-only') continue;
+        if (!this.nodes.has(e.srcId) || !this.nodes.has(e.dstId)) continue;
+        if (!adj.has(e.srcId)) adj.set(e.srcId, new Set());
+        adj.get(e.srcId)!.add(e.dstId);
+      }
+      const files = [...this.nodes.values()].filter((n) => n.type === 'file').map((n) => n.id);
+      this._cycles = findCycles(files, adj);
+    }
+    return this._cycles;
   }
 
   private add(n: GraphNode) {

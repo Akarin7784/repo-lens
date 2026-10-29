@@ -273,7 +273,7 @@ export function buildApp(deps?: AppDeps): FastifyInstance {
       commitSha: task.commitSha,
       parentId,
       includeExternal: ext,
-      cycles: task.stats.cycles,
+      cycles: ix.cycles,
     });
     if (!p) throw new HttpError('REPO_NOT_FOUND', `节点 ${parentId} 不存在或不可展开`);
     const json = JSON.stringify(GraphDataSchema.parse(p.graph));
@@ -292,7 +292,7 @@ export function buildApp(deps?: AppDeps): FastifyInstance {
     if (!NodeIdSchema.safeParse(nodeId).success)
       throw new HttpError('BAD_REQUEST', '节点 id 格式无效');
     const { ix, task } = await loadIndex(repoId);
-    const d = nodeDetail(ix, nodeId, task.stats.cycles);
+    const d = nodeDetail(ix, nodeId, ix.cycles);
     if (!d) throw new HttpError('REPO_NOT_FOUND', '节点不存在');
     let exports: string[] = [];
     if (d.kind === 'file') {

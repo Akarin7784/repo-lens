@@ -286,7 +286,7 @@ export function projectGraphWithInfo(
 /** 节点详情(不含 exports,由调用方补) */
 /**
  * 节点详情(不含 exports / summary 来源,由 app 补)。
- * inCycle 口径:cycles 为分析器给的 SCC 成员集合(task.stats.cycles,即投影 meta.cycles 的来源)。
+ * inCycle 口径:cycles 为分析器给的 SCC 成员集合(GraphIndex.cycles,由已存储的边现场计算,与 /graph 投影同源)。
  * file 节点在某个集合里为 true;module/dir 节点其下任一文件在某个集合里为 true;external 恒为 false。
  */
 export function nodeDetail(

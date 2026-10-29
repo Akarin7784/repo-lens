@@ -12,9 +12,9 @@ export const LLM_SPEND_TASK_TTL_S = 7 * 24 * 3600;
  * 图投影版本号,写进图缓存 key(graph:v{N}:...)。
  * **改投影逻辑(apps/api/src/projection.ts 的节点/边/截断规则)时必须递增**,
  * 旧版本 key 不再命中、随 TTL 自然过期,不依赖部署后手动清缓存。
- * v1 = #10(无版本前缀);v2 = #12 跨子树聚合边 + 边界节点;v3 = meta.cycles 按 SCC 成员集合投影;v4 = #21 根层 meta.suggestedFocus;v5 = 边的 inCycle(T-003h)。
+ * v1 = #10(无版本前缀);v2 = #12 跨子树聚合边 + 边界节点;v3 = meta.cycles 按 SCC 成员集合投影;v4 = #21 根层 meta.suggestedFocus;v5 = 边的 inCycle(T-003h);v6 = cycles 改由存储的边现场计算(不再读 task.stats)。
  */
-export const GRAPH_PROJECTION_VERSION = 5;
+export const GRAPH_PROJECTION_VERSION = 6;
 
 const pad = (n: number) => String(n).padStart(2, '0');
 /** UTC 的 yyyyMMddHH(限流按自然小时分桶) */
