@@ -284,7 +284,17 @@ export function projectGraphWithInfo(
 }
 
 /** 节点详情(不含 exports,由调用方补) */
-export function nodeDetail(ix: GraphIndex, id: string): Omit<NodeDetail, 'exports'> | null {
+/**
+ * 节点详情(不含 exports / summary 来源,由 app 补)。
+ * inCycle 口径:cycles 为分析器给的 SCC 成员集合(task.stats.cycles,即投影 meta.cycles 的来源)。
+ * file 节点在某个集合里为 true;module/dir 节点其下任一文件在某个集合里为 true;external 恒为 false。
+ */
+export function nodeDetail(
+  ix: GraphIndex,
+  id: string,
+  cycles: string[][] = [],
+): Omit<NodeDetail, 'exports' | 'summarySource'> | null {
+  const members = new Set(cycles.flat());
   if (id.startsWith('x:')) {
     const pkg = id.slice(2);
     const users = [...ix.nodes.values()]
@@ -301,6 +311,7 @@ export function nodeDetail(ix: GraphIndex, id: string): Omit<NodeDetail, 'export
       inDegree: users.length,
       outDegree: 0,
       topDependents: users.slice(0, 10) as never,
+      inCycle: false,
     };
   }
   const n = ix.nodes.get(id);
@@ -327,5 +338,6 @@ export function nodeDetail(ix: GraphIndex, id: string): Omit<NodeDetail, 'export
     inDegree: inFrom.size,
     outDegree: outTo.size,
     topDependents: top as never,
+    inCycle: [...inside].some((f) => members.has(f)),
   };
 }

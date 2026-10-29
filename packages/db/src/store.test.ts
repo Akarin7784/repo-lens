@@ -65,27 +65,45 @@ function suite(name: string, make: () => Promise<Store>, enabled = true) {
     });
     afterAll(async () => s?.close());
 
-    it('summary 按 (repo, level, targetId) upsert 与读回(T-211)', async () => {
+    it('summary 按 (repo, level, targetId, commitSha) upsert 与读回,commit 间隔离(T-211c)', async () => {
       const r = await s.upsertRepo({ url: 'https://github.com/o/sum', owner: 'o', name: 'sum' });
+      const A = 'a'.repeat(40);
+      const B = 'b'.repeat(40);
       const row = {
         level: 'dir' as const,
         targetId: 'm:src',
         inputHash: 'a'.repeat(64),
         model: 'fake',
+        source: 'llm' as const,
         content: '第一版',
         tokensIn: 3,
         tokensOut: 2,
       };
-      await s.upsertSummary(r.id, row);
-      await s.upsertSummary(r.id, { ...row, inputHash: 'b'.repeat(64), content: '第二版' });
-      await s.upsertSummary(r.id, { ...row, level: 'file', targetId: 'f:src/a.ts', content: 'f' });
-      expect(await s.getSummary(r.id, 'dir', 'm:src')).toBe('第二版');
-      expect(await s.getSummary(r.id, 'dir', 'm:none')).toBeNull();
+      await s.upsertSummary(r.id, A, row);
+      await s.upsertSummary(r.id, A, { ...row, inputHash: 'b'.repeat(64), content: '第二版' });
+      await s.upsertSummary(r.id, A, {
+        ...row,
+        level: 'file',
+        targetId: 'f:src/a.ts',
+        content: 'f',
+      });
+      await s.upsertSummary(r.id, B, { ...row, model: 'rule', source: 'rule', content: 'B 版' });
+      expect(await s.getSummary(r.id, A, 'dir', 'm:src')).toEqual({
+        content: '第二版',
+        source: 'llm',
+      });
+      expect(await s.getSummary(r.id, B, 'dir', 'm:src')).toEqual({
+        content: 'B 版',
+        source: 'rule',
+      });
+      expect(await s.getSummary(r.id, B, 'file', 'f:src/a.ts')).toBeNull();
+      expect(await s.getSummary(r.id, A, 'dir', 'm:none')).toBeNull();
       const all = await s.listSummaries(r.id);
-      expect(all).toHaveLength(2);
-      expect(all.find((x) => x.targetId === 'm:src')).toMatchObject({
+      expect(all).toHaveLength(3);
+      expect(all.find((x) => x.targetId === 'm:src' && x.commitSha === A)).toMatchObject({
         inputHash: 'b'.repeat(64),
         model: 'fake',
+        source: 'llm',
       });
     });
 

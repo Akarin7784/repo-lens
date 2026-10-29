@@ -121,6 +121,7 @@ function setup(
     taskBudgetCents: o.taskCents ?? 30,
   });
   const db = new Map<string, SummaryRow>();
+  const saved: SummaryRow[] = [];
   const run = () =>
     summarizeRepo(
       {
@@ -140,10 +141,13 @@ function setup(
         maxLlmFiles: o.maxLlmFiles,
         fileTimeoutMs: o.fileTimeoutMs,
         concurrency: 2,
-        save: async (r) => void db.set(summaryKey(r.level, r.targetId), r),
+        save: async (r) => {
+          saved.push(r);
+          db.set(summaryKey(r.level, r.targetId), r);
+        },
       },
     );
-  return { run, db, usage, client, kv, tree };
+  return { run, db, saved, usage, client, kv, tree };
 }
 const usageCount = async (u: MemoryStore) => (await u.llmUsageByTask(7)).length;
 
@@ -202,6 +206,26 @@ describe('summarizeRepo', () => {
     expect(db.get(summaryKey('file', 'f:src/middleware/a.ts'))?.model).toBe('fake'); // fanIn 2
     expect(db.get(summaryKey('file', 'f:src/index.ts'))?.model).toBe(RULE_MODEL);
     expect(db.get(summaryKey('file', 'f:src/middleware/b.ts'))?.model).toBe(RULE_MODEL);
+    // T-211c:正常 LLM 摘要 source=llm,规则摘要 source=rule
+    expect(db.get(summaryKey('file', 'f:src/middleware/a.ts'))?.source).toBe('llm');
+    expect(db.get(summaryKey('file', 'f:src/index.ts'))?.source).toBe('rule');
+  });
+
+  it('T-211c 复用:输入哈希相同则为当前 commit 再写一份,内容与 source 保持原样', async () => {
+    const { run, db, saved, client } = setup({ maxLlmFiles: 1 });
+    await run();
+    const before = new Map([...db].map(([k, v]) => [k, { content: v.content, source: v.source }]));
+    expect(new Set([...before.values()].map((v) => v.source))).toEqual(new Set(['llm', 'rule']));
+    const calls = (client as FakeLlm).calls;
+    saved.length = 0;
+    const r2 = await run();
+    expect(r2.reused).toBe(r2.total);
+    expect((client as FakeLlm).calls).toBe(calls);
+    expect(saved).toHaveLength(r2.total);
+    for (const row of saved)
+      expect({ content: row.content, source: row.source }).toEqual(
+        before.get(summaryKey(row.level, row.targetId)),
+      );
   });
 
   it('预算熔断:剩余节点改用规则摘要,任务仍完成', async () => {
@@ -215,6 +239,9 @@ describe('summarizeRepo', () => {
     expect(r.budget!.degraded).toBeGreaterThan(0);
     expect(db.size).toBe(r.total);
     expect([...db.values()].some((x) => x.model === RULE_MODEL)).toBe(true);
+    // T-211c:熔断降级的行 source=rule,未降级的仍为 llm
+    for (const x of db.values()) expect(x.source).toBe(x.model === RULE_MODEL ? 'rule' : 'llm');
+    expect([...db.values()].some((x) => x.source === 'rule')).toBe(true);
   });
 
   it('解析失败重试 1 次后成功', async () => {
@@ -244,6 +271,7 @@ describe('summarizeRepo', () => {
     expect(r.failed).toBe(r.total);
     expect(client.calls).toBe(r.total * 2);
     for (const row of db.values()) expect(row.model).toBe(RULE_MODEL);
+    for (const row of db.values()) expect(row.source).toBe('rule');
     // 规则摘要也按 hash 复用;LLM 恢复后再跑会升级为 LLM 摘要
   });
 

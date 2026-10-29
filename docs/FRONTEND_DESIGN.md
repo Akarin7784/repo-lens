@@ -240,11 +240,13 @@ interface NodeDetail {
   kind: "module" | "file" | "external";
   path: string;
   summary: string | null;             // null 表示摘要还没生成，显示骨架屏
+  summarySource: "llm" | "rule" | null; // T-211c:摘要来源;summary 为 null 时为 null
   exports: string[];
   loc: number;
   inDegree: number;
   outDegree: number;
   topDependents: string[];            // nodeId 列表
+  inCycle: boolean;                   // T-211c:在某个 SCC 成员集合中(module 看其下文件)
 }
 ```
 

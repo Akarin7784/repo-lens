@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { GraphIndex, SummaryLevel, SummaryRow } from '@repolens/db';
+import type { GraphIndex, SummaryLevel, SummaryRow, SummarySource } from '@repolens/db';
 import type { LlmGateway } from '../llm/gateway.js';
 import { LlmError, type LlmMessage } from '../llm/types.js';
 import {
@@ -58,7 +58,10 @@ export interface SummarizeInput {
   files: Map<string, SummaryFileInput>;
   readme: string | null;
   packageJson: string | null;
-  /** 已有摘要,key = `${level}|${targetId}` */
+  /**
+   * 已有摘要(可跨 commit),key = `${level}|${targetId}`,
+   * 或 `${level}|${targetId}#${inputHash}`(同一节点多个 commit 各有一份时按哈希精确命中)
+   */
   existing: Map<string, SummaryRow>;
 }
 
@@ -93,6 +96,9 @@ export interface SummarizeResult {
   budget: { scope: 'daily' | 'task'; degraded: number } | null;
 }
 
+/** 旧行没有 source 时按模型名推断 */
+export const sourceOfModel = (model: string): SummarySource =>
+  model === RULE_MODEL ? 'rule' : 'llm';
 export const summaryKey = (level: SummaryLevel, targetId: string) => `${level}|${targetId}`;
 const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
 export const inputHash = (level: SummaryLevel, model: string, input: string) =>
@@ -207,16 +213,25 @@ export async function summarizeRepo(
     rule: () => string,
     timeoutMs?: number,
   ) => {
-    const prev = inp.existing.get(summaryKey(level, targetId));
+    const key = summaryKey(level, targetId);
+    const prevWith = (hash: string) => {
+      const p = inp.existing.get(`${key}#${hash}`) ?? inp.existing.get(key);
+      return p && p.inputHash === hash ? p : null;
+    };
     const llmHash = inputHash(level, model, llmInput);
     const ruleHash = inputHash(level, RULE_MODEL, ruleInput);
     let row: SummaryRow | null = null;
-    if (prev && prev.inputHash === (mode === 'llm' ? llmHash : ruleHash)) {
+    // 复用:输入哈希相同就沿用旧行(内容与来源都保持),并为当前 commit 写一份
+    const reuse = async (prev: SummaryRow) => {
       res.reused++;
+      const keep: SummaryRow = { ...prev, source: prev.source ?? sourceOfModel(prev.model) };
+      delete keep.commitSha; // 写到当前 commit,由 save 决定
+      await deps.save(keep);
       content.set(targetId, prev.content);
       await tick();
-      return;
-    }
+    };
+    const hit = prevWith(mode === 'llm' ? llmHash : ruleHash);
+    if (hit) return reuse(hit);
     if (mode === 'llm') {
       const out = await callLlm(model, messages(), timeoutMs);
       if (out) {
@@ -226,6 +241,7 @@ export async function summarizeRepo(
           targetId,
           inputHash: llmHash,
           model,
+          source: 'llm',
           content: out.text,
           tokensIn: out.tokensIn,
           tokensOut: out.tokensOut,
@@ -235,18 +251,15 @@ export async function summarizeRepo(
       }
     }
     if (!row) {
-      if (prev && prev.inputHash === ruleHash) {
-        res.reused++;
-        content.set(targetId, prev.content);
-        await tick();
-        return;
-      }
+      const ruleHit = prevWith(ruleHash);
+      if (ruleHit) return reuse(ruleHit);
       res.rule++;
       row = {
         level,
         targetId,
         inputHash: ruleHash,
         model: RULE_MODEL,
+        source: 'rule',
         content: rule(),
         tokensIn: 0,
         tokensOut: 0,
