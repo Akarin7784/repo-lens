@@ -107,8 +107,9 @@ export function ChatPanel({ repoId, transport, onCitationClick, contextNodeIds }
   );
 
   const ask = (question: string) => {
-    const q = question.trim();
-    if (!q || q.length > CHAT_MESSAGE_MAX) return;
+    // 问题是否合法只看 buildChatRequest(shared ChatRequestSchema:trim 后 1–CHAT_MESSAGE_MAX),不在面板里另写一份
+    const q = buildChatRequest(question)?.message;
+    if (!q) return;
     const id = nextId.current++;
     setMsgs((ms) => [...ms, { id, question: q, answer: initialAnswer }]);
     void run(id, q);
@@ -167,7 +168,7 @@ export function ChatPanel({ repoId, transport, onCitationClick, contextNodeIds }
           <div className="flex flex-col gap-1">
             <button
               type="submit"
-              disabled={budgetOut || !input.trim() || input.trim().length > CHAT_MESSAGE_MAX}
+              disabled={budgetOut || !buildChatRequest(input)}
               className="rounded-control bg-accent-strong px-3 py-2 text-[13px] text-on-accent disabled:opacity-50"
             >
               发送
@@ -285,7 +286,11 @@ function AnswerNotes({ a, onRetry }: { a: Answer; onRetry: () => void }) {
   let problem: { text: string; retry: boolean; cooldown?: boolean } | null = null;
   if (a.status === 'error' && a.error)
     problem = {
-      text: chatErrorText(a.error),
+      // 流中途出错(如后端总时限超时):已显示的部分保留在本页,但后端不保存半条回答,刷新后不会恢复
+      text:
+        a.segments.length > 0
+          ? `${chatErrorText(a.error)}。回答未完成,以上为中断前已输出的部分(刷新后不保留)`
+          : chatErrorText(a.error),
       retry: a.error.retryable,
       cooldown: a.error.code === 'RATE_LIMITED',
     };

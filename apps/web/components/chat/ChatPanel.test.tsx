@@ -2,6 +2,7 @@ import type { ChatEvent } from '@repolens/shared';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createFakeTransport, DEMO_SCRIPT, type FakeStep } from '../../dev/fakeChatStream';
+import { createFetchTransport } from '../../lib/chat/transport';
 import { ChatPanel, CLIENT_TIMEOUT_MS } from './ChatPanel';
 
 function ask(q = '【假数据】示例问题') {
@@ -330,4 +331,112 @@ describe('<ChatPanel>(假流,未接真实后端)', () => {
     expect(within(lastAnswer()).getAllByRole('button', { name: /src\/2\.ts/ })).toHaveLength(3);
     expect(lastAnswer().textContent).not.toContain('[[');
   });
+
+  /** 与 apps/api/src/chat/route.ts(#108)一致的事件顺序:tool(rewrite) → tool(retrieve) → token/citation → error 替代 done */
+  const midStreamError = (retryable: boolean): FakeStep[] => [
+    { event: 'tool', data: { name: 'rewrite', args: {} } },
+    { event: 'tool', data: { name: 'retrieve', args: { k: 8 } } },
+    { event: 'token', data: { text: '已输出的前半段' } },
+    {
+      event: 'citation',
+      data: { id: 1, path: 'src/a.ts', startLine: 1, endLine: 3, nodeId: 'f:src/a.ts' },
+    },
+    {
+      event: 'error',
+      data: { code: 'LLM_UNAVAILABLE', message: '回答超时,请重试', retryable },
+    },
+  ];
+
+  it('流中途 error(retryable=true):保留部分回答与引用,标明未完成且刷新后不保留,给重试', async () => {
+    render(<ChatPanel repoId={1} transport={createFakeTransport(midStreamError(true))} />);
+    ask();
+    await waitFor(() => expect(lastAnswer().dataset.status).toBe('error'));
+    const a = lastAnswer();
+    expect(a).toHaveTextContent('已输出的前半段');
+    expect(within(a).getByRole('list', { name: '引用' })).toHaveTextContent('src/a.ts:1–3');
+    expect(within(a).getByRole('alert')).toHaveTextContent('模型服务暂时不可用');
+    expect(within(a).getByRole('alert')).toHaveTextContent('回答未完成');
+    expect(within(a).getByRole('alert')).toHaveTextContent('刷新后不保留');
+    expect(within(a).getByRole('button', { name: '重试' })).toBeEnabled();
+  });
+
+  it('流中途 error(retryable=false):同样标明未完成,但不给重试', async () => {
+    render(<ChatPanel repoId={1} transport={createFakeTransport(midStreamError(false))} />);
+    ask();
+    await waitFor(() => expect(lastAnswer().dataset.status).toBe('error'));
+    expect(within(lastAnswer()).getByRole('alert')).toHaveTextContent('回答未完成');
+    expect(within(lastAnswer()).queryByRole('button', { name: /重试/ })).toBeNull();
+  });
+
+  it('开流前 error(没有任何正文):不显示「回答未完成」', async () => {
+    render(
+      <ChatPanel repoId={1} transport={createFakeTransport([errorOf('LLM_UNAVAILABLE', true)])} />,
+    );
+    ask();
+    await waitFor(() => expect(lastAnswer().dataset.status).toBe('error'));
+    expect(lastAnswer()).not.toHaveTextContent('回答未完成');
+  });
+
+  // #108 开流前的 HTTP 错误(apps/api/src/chat/route.ts 检查顺序:id → schema → 限流/并发 → 404/409;errors.ts 状态码)
+  const httpCases: [number, unknown, RegExp, boolean][] = [
+    [
+      400,
+      { error: { code: 'BAD_REQUEST', message: '请求体无效', details: { fields: ['message'] } } },
+      /问答请求失败:请求体无效/,
+      false,
+    ],
+    [
+      404,
+      { error: { code: 'REPO_NOT_FOUND', message: '会话不存在' } },
+      /问答请求失败:会话不存在/,
+      false,
+    ],
+    [
+      409,
+      { error: { code: 'REPO_NOT_READY', message: '仓库尚未分析完成' } },
+      /仓库还在分析中/,
+      true,
+    ],
+    // 并发满:没有 details(没有 reason,也没有 retryAfterSec)
+    [
+      429,
+      { error: { code: 'RATE_LIMITED', message: '当前问答并发已满,请稍后再试' } },
+      /提问太频繁,请稍后再试/,
+      true,
+    ],
+    [
+      500,
+      { error: { code: 'INTERNAL', message: '服务器内部错误' } },
+      /问答请求失败:服务器内部错误/,
+      true,
+    ],
+  ];
+  it.each(httpCases)(
+    '开流前 HTTP %i:中文提示,不出现 NaN/undefined,重试按状态给出',
+    async (status, body, text, retry) => {
+      const fetchImpl = vi.fn(
+        async () =>
+          new Response(JSON.stringify(body), {
+            status,
+            headers: { 'content-type': 'application/json' },
+          }),
+      );
+      render(
+        <ChatPanel
+          repoId={1}
+          transport={createFetchTransport('http://api.test', fetchImpl as unknown as typeof fetch)}
+        />,
+      );
+      ask();
+      await waitFor(() => expect(lastAnswer().dataset.status).toBe('error'));
+      const alert = within(lastAnswer()).getByRole('alert');
+      expect(alert.textContent).toMatch(text);
+      expect(lastAnswer().textContent).not.toMatch(/NaN|undefined|null/);
+      expect(lastAnswer()).not.toHaveTextContent('回答未完成');
+      const btn = within(lastAnswer()).queryByRole('button', { name: /重试/ });
+      if (retry) expect(btn).not.toBeNull();
+      else expect(btn).toBeNull();
+      if (status === 429) expect(btn).toHaveTextContent('重试(10s)');
+    },
+  );
 });

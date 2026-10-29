@@ -69,8 +69,13 @@ describe('首页提交', () => {
 
   it('README 隐私与数据流一节与提交页披露文案逐字一致', () => {
     const readme = readFileSync(resolve(__dirname, '../../../../README.md'), 'utf8');
-    expect(readme).toContain('## 隐私与数据流');
-    expect(readme).toContain(THIRD_PARTY_DISCLOSURE);
+    // 只在「隐私与数据流」这一节内比对:文案出现在 README 别处(如 FAQ)不算通过
+    const start = readme.indexOf('## 隐私与数据流');
+    expect(start).toBeGreaterThanOrEqual(0);
+    const rest = readme.slice(start + '## 隐私与数据流'.length);
+    const next = rest.search(/^## /m);
+    const section = next === -1 ? rest : rest.slice(0, next);
+    expect(section).toContain(THIRD_PARTY_DISCLOSURE);
   });
 
   it('提交返回 422 REPO_NOT_PUBLIC → 表单下显示「只支持公开仓库」,不跳转、不当作网络错误', async () => {
