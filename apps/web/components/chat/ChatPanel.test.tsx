@@ -602,3 +602,43 @@ describe('<ChatPanel> 契约 v2:429 按 details.reason 细分(T-235)', () => {
     expect(btn).toBeDisabled();
   });
 });
+
+describe('<ChatPanel> 等待提示行(T-237)', () => {
+  it('提示行是 role=status(polite);61 秒走 1 秒后跨档重新取整「约 2 分钟」→「约 1 分钟」', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const fetchImpl = vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              error: {
+                code: 'RATE_LIMITED',
+                message: 'x',
+                details: { reason: 'rate_limit', retryAfterSec: 61 },
+              },
+            }),
+            { status: 429, headers: { 'content-type': 'application/json' } },
+          ),
+      );
+      render(
+        <ChatPanel
+          repoId={1}
+          transport={createFetchTransport('http://api.test', fetchImpl as unknown as typeof fetch)}
+        />,
+      );
+      ask();
+      await waitFor(() => expect(lastAnswer().dataset.status).toBe('error'));
+      const status = within(lastAnswer()).getByRole('status');
+      expect(status).toHaveAttribute('aria-live', 'polite');
+      expect(status).toBe(within(lastAnswer()).getByTestId('retry-wait'));
+      expect(status.textContent).toBe('约 2 分钟后可再提问');
+      await act(async () => void vi.advanceTimersByTime(1000));
+      await waitFor(() =>
+        expect(within(lastAnswer()).getByRole('status').textContent).toBe('约 1 分钟后可再提问'),
+      );
+      expect(within(lastAnswer()).getByRole('button', { name: '重试' })).toBeDisabled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

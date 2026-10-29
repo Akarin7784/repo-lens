@@ -20,6 +20,9 @@ export const RATE_LIMIT_MAX_COOLDOWN_S = 3600;
 /**
  * 等待时长文案(T-236,架构师定稿):不足 60 秒「N 秒」;60 秒及以上向上取整「约 N 分钟」。
  * 用于提示行「…后可再提问」;按钮文字不含倒计时。
+ *
+ * 前置条件:调用方保证 sec>0 才渲染(RetryButton 仅在 left>0 时显示提示行)。
+ * 本函数不防 0 / 负数 / NaN,传入时按原样格式化(如 0 → 「0 秒」),不做兜底。
  */
 export function formatWait(sec: number): string {
   return sec < 60 ? `${sec} 秒` : `约 ${Math.ceil(sec / 60)} 分钟`;
