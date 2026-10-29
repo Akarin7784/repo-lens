@@ -7,8 +7,17 @@
  */
 const proxy = process.env.API_PROXY_TARGET?.replace(/\/+$/, '');
 
-/** @type {import('next').NextConfig} */
-const nextConfig = {
+/**
+ * T-230:`*.dev.tsx` 页面(假数据预览,如 app/dev/chat/page.dev.tsx)只在 `next dev` 时注册为路由;
+ * `next build` 的 pageExtensions 不含 dev.tsx,这些文件不会被打包进生产产物。
+ * @param {string} phase
+ * @returns {import('next').NextConfig}
+ */
+const nextConfig = (phase) => ({
+  pageExtensions:
+    phase === 'phase-development-server'
+      ? ['dev.tsx', 'tsx', 'ts', 'jsx', 'js']
+      : ['tsx', 'ts', 'jsx', 'js'],
   output: 'standalone',
   transpilePackages: ['@repolens/shared'],
   // SSE 走代理时不能被压缩缓冲
@@ -16,5 +25,5 @@ const nextConfig = {
   ...(proxy
     ? { rewrites: async () => [{ source: '/api/:path*', destination: `${proxy}/api/:path*` }] }
     : {}),
-};
+});
 export default nextConfig;

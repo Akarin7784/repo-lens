@@ -75,7 +75,7 @@ export function userMessageOf(e: unknown): string {
   return CLIENT_ERROR_TEXT.NETWORK;
 }
 
-function looseError(
+export function looseError(
   body: unknown,
 ): { code: ApiErrorCode; message: string; reason?: string } | null {
   if (typeof body !== 'object' || body === null) return null;

@@ -1,6 +1,7 @@
 'use client';
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { ChatPanel } from '../../../components/chat/ChatPanel';
 import { NodeDetail, type GraphNeighbors } from '../../../components/detail/NodeDetail';
 import { ProgressPanel } from '../../../components/analysis/ProgressPanel';
 import { GraphView } from '../../../components/graph/GraphView';
@@ -15,6 +16,7 @@ import {
   type EventSourceFactory,
 } from '../../../lib/api/jobEvents';
 import { createApiSource } from '../../../lib/graph/source';
+import { createFetchTransport, type ChatTransport } from '../../../lib/chat/transport';
 
 type Props = {
   repoId: number;
@@ -24,11 +26,23 @@ type Props = {
   /** 测试注入 */
   api?: ApiClient;
   eventSource?: EventSourceFactory;
+  /** T-230:问答传输;默认 fetch POST /api/repos/:id/chat(后端未实现时显示「问答服务暂未上线」),测试注入假流 */
+  chatTransport?: ChatTransport;
 };
 
 type Init = { jobId: string | null; error: string | null };
 
-export function AnalysisWorkspace({ repoId, jobId, repoLabel, api: apiProp, eventSource }: Props) {
+export function AnalysisWorkspace({
+  repoId,
+  jobId,
+  repoLabel,
+  api: apiProp,
+  eventSource,
+  chatTransport,
+}: Props) {
+  const transport = useMemo(() => chatTransport ?? createFetchTransport(), [chatTransport]);
+  // T-230:右栏分「详情 / 问答」两个标签;点引用会切回详情显示文件预览
+  const [tab, setTab] = useState<'detail' | 'chat'>('detail');
   const api = useMemo(() => apiProp ?? createApiClient(), [apiProp]);
   const [progress, dispatch] = useReducer(jobProgressReducer, initialJobProgress);
   const [init, setInit] = useState<Init>({ jobId: jobId ?? null, error: null });
@@ -170,40 +184,77 @@ export function AnalysisWorkspace({ repoId, jobId, repoLabel, api: apiProp, even
           <aside
             aria-label="详情"
             data-testid="detail-aside"
-            data-drawer={sel ? 'open' : 'closed'}
+            data-drawer={sel || tab === 'chat' ? 'open' : 'closed'}
             className={
               'shrink-0 overflow-y-auto border-line bg-bg ' +
               'md:block md:max-h-none md:w-[360px] md:rounded-none md:border-l md:border-t-0 md:shadow-none ' +
-              (sel
+              (sel || tab === 'chat'
                 ? 'h-[55dvh] max-h-[55dvh] shrink-0 rounded-t-[12px] border-t shadow-soft md:h-auto'
                 : 'hidden')
             }
           >
-            {sel && (
-              <div className="sticky top-0 z-10 flex justify-end border-b border-line bg-bg px-3 py-1.5 md:hidden">
+            <div
+              role="tablist"
+              aria-label="右栏"
+              className="sticky top-0 z-10 flex gap-1 border-b border-line bg-bg px-3 py-1.5"
+            >
+              {(['detail', 'chat'] as const).map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  role="tab"
+                  aria-selected={tab === t}
+                  onClick={() => setTab(t)}
+                  className={
+                    'rounded-control px-3 py-1 text-[13px] ' +
+                    (tab === t ? 'bg-panel text-fg' : 'text-muted')
+                  }
+                >
+                  {t === 'detail' ? '详情' : '问答'}
+                </button>
+              ))}
+              {(sel || tab === 'chat') && (
                 <button
                   type="button"
                   aria-label="关闭详情"
-                  onClick={() => setCloseTick((t) => t + 1)}
-                  className="rounded-control border border-line bg-panel px-3 py-1 text-[13px] text-fg"
+                  onClick={() => {
+                    setTab('detail');
+                    setCloseTick((t) => t + 1);
+                  }}
+                  className="ml-auto rounded-control border border-line bg-panel px-3 py-1 text-[13px] text-fg md:hidden"
                 >
                   关闭
                 </button>
-              </div>
-            )}
-            {sel ? (
-              <NodeDetail
+              )}
+            </div>
+            {/* 问答面板常驻挂载(切到详情不丢对话、不中断流);离开工作区时卸载并 abort */}
+            <div className={tab === 'chat' ? 'h-[calc(100%-45px)]' : 'hidden'}>
+              <ChatPanel
                 repoId={repoId}
-                nodeId={sel.id}
-                api={api}
-                neighbors={sel}
-                doneTick={doneTick}
-                analysisDone={progress.status === 'done'}
-                onJump={jumpTo}
+                transport={transport}
+                onCitationClick={(c) => {
+                  // 只跳到文件:选中文件节点 → 图上逐层展开到可见层并高亮节点与一跳边,右栏显示文件预览。
+                  // 行号高亮依赖 FRONTEND_DESIGN 9.1.2 的 line/endLine,W3 后端 PR 前未实现。
+                  setTab('detail');
+                  jumpTo(c.nodeId);
+                }}
               />
-            ) : (
-              <p className="p-5 text-[13px] text-muted">单击图中节点查看详情。</p>
-            )}
+            </div>
+            <div className={tab === 'detail' ? '' : 'hidden'}>
+              {sel ? (
+                <NodeDetail
+                  repoId={repoId}
+                  nodeId={sel.id}
+                  api={api}
+                  neighbors={sel}
+                  doneTick={doneTick}
+                  analysisDone={progress.status === 'done'}
+                  onJump={jumpTo}
+                />
+              ) : (
+                <p className="p-5 text-[13px] text-muted">单击图中节点查看详情。</p>
+              )}
+            </div>
           </aside>
         </div>
       ) : (
