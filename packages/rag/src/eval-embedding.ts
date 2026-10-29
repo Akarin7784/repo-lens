@@ -1,6 +1,7 @@
 import { DEFAULT_EMBEDDING_MODEL, EMBEDDING_DIM, readEmbeddingConfig } from './config.js';
 import type { DashscopeConfig } from './config.js';
 import type { Embedder } from './embedder.js';
+import { estimateTokens } from './dashscope.js';
 
 /** 评测脚本(scripts/rag-eval.mjs)的 embedding 选择结果;开始行打印前四项,不含密钥 */
 export interface EvalEmbeddingChoice {
@@ -77,4 +78,76 @@ export function makeEvalEmbedder(
   const e = c.dashscope ? factories.dashscope(c.dashscope) : factories.local();
   if (e.dim !== c.dim) throw new Error(`embedder 维度 ${e.dim} != 请求维度 ${c.dim}`);
   return e;
+}
+
+/**
+ * 评测索引阶段的 embedding 用量。measuredTokens 只累计响应 usage.total_tokens;
+ * 响应没给 usage 的批次按 estimateTokens 估算,单独记在 estimatedTokens,不混进实测数。
+ */
+export interface EvalIndexUsage {
+  batches: number;
+  measuredTokens: number;
+  estimatedBatches: number;
+  estimatedTokens: number;
+}
+
+type WithUsage = Embedder & {
+  embedDocumentsWithUsage?: (
+    texts: string[],
+  ) => Promise<{ vectors: number[][]; usageTokens?: number }>;
+};
+
+/**
+ * 包一层只用于索引的 embedder,统计 embedDocuments 的用量;不改向量、不改字段
+ * (provider/model/revision/dim 原样透传,digest 仍按原 embedder 计算)。
+ * 底层没有 embedDocumentsWithUsage(如 local)时只计批次,不计 token。
+ */
+export function trackEvalIndexUsage(inner: Embedder): {
+  embedder: Embedder;
+  usage: EvalIndexUsage;
+} {
+  const usage: EvalIndexUsage = {
+    batches: 0,
+    measuredTokens: 0,
+    estimatedBatches: 0,
+    estimatedTokens: 0,
+  };
+  const src = inner as WithUsage;
+  const embedder: Embedder = {
+    ...(inner.provider === undefined ? {} : { provider: inner.provider }),
+    model: inner.model,
+    ...(inner.revision === undefined ? {} : { revision: inner.revision }),
+    dim: inner.dim,
+    embedQuery: (t) => inner.embedQuery(t),
+    embedDocuments: async (texts) => {
+      if (!src.embedDocumentsWithUsage) return inner.embedDocuments(texts);
+      const r = await src.embedDocumentsWithUsage(texts);
+      usage.batches++;
+      if (r.usageTokens !== undefined) usage.measuredTokens += r.usageTokens;
+      else {
+        usage.estimatedBatches++;
+        usage.estimatedTokens += texts.reduce((s, t) => s + estimateTokens(t), 0);
+      }
+      return r.vectors;
+    },
+  };
+  return { embedder, usage };
+}
+
+/**
+ * 用量行(不含密钥):
+ * - 复用向量缓存:`EVAL embedding usage reused=1 totalTokens=未测`(不写 0)
+ * - local:`EVAL embedding usage reused=0 totalTokens=不适用(local)`
+ * - dashscope:`EVAL embedding usage reused=0 totalTokens=<实测累计> batches=N`;
+ *   有批次没给 usage 时追加 `estimatedTokens=<估算>(估算,未计入totalTokens) estimatedBatches=k`
+ */
+export function evalUsageLine(c: EvalEmbeddingChoice, u: EvalIndexUsage | null): string {
+  const head = 'EVAL embedding usage';
+  if (!u) return `${head} reused=1 totalTokens=未测`;
+  if (c.provider === 'local') return `${head} reused=0 totalTokens=不适用(local)`;
+  const est =
+    u.estimatedBatches > 0
+      ? ` estimatedTokens=${u.estimatedTokens}(估算,未计入totalTokens) estimatedBatches=${u.estimatedBatches}`
+      : '';
+  return `${head} reused=0 totalTokens=${u.measuredTokens} batches=${u.batches}${est}`;
 }
