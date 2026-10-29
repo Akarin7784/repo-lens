@@ -253,7 +253,8 @@ export function buildApp(deps?: AppDeps): FastifyInstance {
     const repo = await store.getRepo(repoId);
     if (!repo) throw new HttpError('REPO_NOT_FOUND', '仓库不存在');
     const task = await store.latestGraphTask(repoId);
-    if (!task) throw new HttpError('REPO_NOT_READY', '依赖图尚未生成');
+    if (!task)
+      throw new HttpError('REPO_NOT_READY', '依赖图尚未生成', { reason: 'GRAPH_NOT_READY' });
     return { task, ix: new GraphIndex(await store.loadGraph(repoId, task.commitSha)) };
   }
 
@@ -267,7 +268,8 @@ export function buildApp(deps?: AppDeps): FastifyInstance {
     const repo = await store.getRepo(repoId);
     if (!repo) throw new HttpError('REPO_NOT_FOUND', '仓库不存在');
     const task = await store.latestGraphTask(repoId);
-    if (!task) throw new HttpError('REPO_NOT_READY', '依赖图尚未生成');
+    if (!task)
+      throw new HttpError('REPO_NOT_READY', '依赖图尚未生成', { reason: 'GRAPH_NOT_READY' });
     // key 带投影版本号(GRAPH_PROJECTION_VERSION),改投影逻辑时递增,旧缓存自然失效
     const key = redisKeys.graph(repoId, task.commitSha, parentId, ext);
     const cached = await redis.getBuffer(key);
@@ -304,8 +306,12 @@ export function buildApp(deps?: AppDeps): FastifyInstance {
     const repo = await store.getRepo(repoId);
     if (!repo) throw new HttpError('REPO_NOT_FOUND', '仓库不存在');
     const task = await store.latestGraphTask(repoId);
-    if (!task) throw new HttpError('REPO_NOT_READY', '依赖图尚未生成');
-    if (!deps.reposDir) throw new HttpError('REPO_NOT_READY', '未配置源码快照目录(REPOS_DIR)');
+    if (!task)
+      throw new HttpError('REPO_NOT_READY', '依赖图尚未生成', { reason: 'GRAPH_NOT_READY' });
+    if (!deps.reposDir)
+      throw new HttpError('REPO_NOT_READY', '未配置源码快照目录(REPOS_DIR)', {
+        reason: 'REPOS_DIR_NOT_CONFIGURED',
+      });
     const res = await readRepoFile({
       reposDir: deps.reposDir,
       repoId,

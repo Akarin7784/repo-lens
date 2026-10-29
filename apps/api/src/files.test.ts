@@ -15,7 +15,8 @@ const code = async (p: Promise<unknown>) => {
   try {
     await p;
   } catch (e) {
-    if (e instanceof HttpError) return `${e.status} ${e.code}`;
+    if (e instanceof HttpError)
+      return `${e.status} ${e.code}${e.details ? ' ' + e.details.reason : ''}`;
     throw e;
   }
   return 'ok';
@@ -83,19 +84,19 @@ describe('readRepoFile(T-213)', () => {
     expect(await code(read(p))).toBe('400 BAD_REQUEST');
   });
   it('不存在的文件 404;快照不存在 409', async () => {
-    expect(await code(read('src/nope.ts'))).toBe('404 REPO_NOT_FOUND');
-    expect(await code(read('src/a.ts/x'))).toBe('404 REPO_NOT_FOUND');
+    expect(await code(read('src/nope.ts'))).toBe('404 FILE_NOT_FOUND');
+    expect(await code(read('src/a.ts/x'))).toBe('404 FILE_NOT_FOUND');
     expect(
       await code(readRepoFile({ reposDir, repoId: 8, commitSha: SHA, path: 'src/a.ts' })),
-    ).toBe('409 REPO_NOT_READY');
+    ).toBe('409 REPO_NOT_READY SNAPSHOT_MISSING');
   });
   it('共享排除规则:敏感(路径/内容)、过大、二进制只给提示,不给内容', async () => {
     const env = await read('.env');
     expect(env).toMatchObject({ content: null, totalLines: null });
-    expect(env.excluded?.notice).toBe(SENSITIVE_PLACEHOLDER);
+    expect(env.excluded).toEqual({ reason: 'sensitive', notice: SENSITIVE_PLACEHOLDER });
     const aws = await read('src/aws.ts');
     expect(aws.content).toBeNull();
-    expect(aws.excluded?.notice).toBe(SENSITIVE_PLACEHOLDER);
+    expect(aws.excluded).toEqual({ reason: 'sensitive', notice: SENSITIVE_PLACEHOLDER });
     expect(JSON.stringify(aws)).not.toContain('AKIA');
     expect((await read('src/big.ts')).excluded?.reason).toBe('too-large');
     expect((await read('src/bin.ts')).excluded).toMatchObject({ reason: 'binary' });

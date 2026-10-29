@@ -171,9 +171,9 @@ sequenceDiagram
 **`GET /api/repos/:id/files`(T-213)**:schema 为 `packages/shared` 的 `FileQuerySchema` / `FileContentSchema`(字段只增不改)。
 - 参数:`path` 必填,仓库内规范化 POSIX 相对路径;`start`/`end` 可选,正整数、1 起、闭区间。不给 `start` 从第 1 行起;不给 `end` 最多返回 `FILE_MAX_LINES`=2000 行并以 `hasMore` 标记;显式区间超过 2000 行、`end<start`、`start` 超出总行数、未知参数一律 400。`end` 超出总行数按总行数截断。
 - 响应:`{path, commitSha, totalLines, start, end, hasMore, content, excluded}`。`commitSha` 与 graph 同源(最近一次已出图任务)。`content` 为区间原文(`\n` 连接,CRLF 归一)。
-- 排除:命中共享 `exclusionRule`(敏感 / 过大 >500KB / 二进制)时 `content=null`,`excluded={reason, notice}`,敏感文件的 `notice` 为 `SENSITIVE_PLACEHOLDER`;只按路径命中(如 `.env`)时不读内容。
-- 安全:`..`、`.`、空段、绝对路径、反斜杠、盘符、`.git` 一律 400;路径上任一段是符号链接 400(逐段 `lstat`,再 `realpath` 确认仍在快照内,`O_NOFOLLOW` 打开);目录 400;不存在 404 `REPO_NOT_FOUND`。
-- 来源:worker 快照 `${REPOS_DIR}/{repoId}/{commitSha}`(compose 里 worker 与 api 共用 `repos` 卷,api 只读挂载)。快照不存在(未保留 / 已清理 / 未配置 REPOS_DIR)返回 409 `REPO_NOT_READY`;api 不自行 clone。保留策略见 §6.5(D5 临时默认:每仓库最近 10 个提交、LRU,`SNAPSHOT_KEEP_PER_REPO`;清理未实现)。
+- 排除:命中共享 `exclusionRule`(敏感 / 过大 >500KB / 二进制)时 `content=null`,`excluded={reason, notice}`,`reason ∈ sensitive | too-large | binary`(敏感规则 id 不外露,一律 `sensitive`),敏感文件的 `notice` 为 `SENSITIVE_PLACEHOLDER`;只按路径命中(如 `.env`)时不读内容。
+- 安全:`..`、`.`、空段、绝对路径、反斜杠、盘符、`.git` 一律 400;路径上任一段是符号链接 400(逐段 `lstat`,再 `realpath` 确认仍在快照内,`O_NOFOLLOW` 打开);目录 400;文件不存在 404 `FILE_NOT_FOUND`(仓库不存在仍为 404 `REPO_NOT_FOUND`)。
+- 来源:worker 快照 `${REPOS_DIR}/{repoId}/{commitSha}`(compose 里 worker 与 api 共用 `repos` 卷,api 只读挂载)。图未生成 / 快照不存在(未保留、已清理)/ 未配置 REPOS_DIR 均返回 409 `REPO_NOT_READY`,`error.details.reason` 分别为 `GRAPH_NOT_READY` / `SNAPSHOT_MISSING` / `REPOS_DIR_NOT_CONFIGURED`;api 不自行 clone。保留策略见 §6.5(D5 临时默认:每仓库最近 10 个提交、LRU,`SNAPSHOT_KEEP_PER_REPO`;清理未实现)。
 
 说明:`:id` 即 `repoId`(`repo.id`);`jobId` 为 BullMQ 任务 id(`analysis_task.job_id`)。
 
@@ -193,7 +193,8 @@ sequenceDiagram
 | `BAD_REQUEST` | 400(框架 4xx 保留原状态码,如 413/415) | 参数或请求体格式非法 |
 | `INVALID_REPO_URL` | 400 | `repoUrl` 存在但不是合法的 GitHub 仓库地址 |
 | `REPO_NOT_FOUND` | 404 | 仓库不存在、不可访问或 ref 无效;资源 id 不存在。私有仓库在 GitHub 返回 404 时也是这个码,不透露是否存在。`ref` 为 40 位 SHA 时不跑 ls-remote,只有 `repoInfo` 明确 404 才返回此码(不建任务、不计 `rl:ip`);403 限流、5xx、网络错误照常放行 |
-| `REPO_NOT_READY` | 409 | 图还没生成 |
+| `FILE_NOT_FOUND` | 404 | 仓库存在,但快照里没有该文件(`/files`) |
+| `REPO_NOT_READY` | 409 | 资源未就绪。错误体带 `details.reason`:`GRAPH_NOT_READY`(依赖图尚未生成)、`SNAPSHOT_MISSING`(源码快照缺失或已被清理)、`REPOS_DIR_NOT_CONFIGURED`(api 未配置 REPOS_DIR);`details` 可缺省,前端按缺省兼容 |
 | `REPO_TOO_LARGE` | 413 | 仓库超过 `MAX_REPO_MB` |
 | `UNSUPPORTED_LANGUAGE` | 422 | 非 TypeScript 仓库 |
 | `REPO_NOT_PUBLIC` | 422 | GitHub `repoInfo` 返回 `private: true`,文案「只支持公开仓库」;在建仓库/任务之前拒绝 |
@@ -498,7 +499,7 @@ volumes: { repos: {}, mysql: {}, qdrant: {} }
 - **工作目录(源码快照)分析后不再立即删除**,保留在 `${REPOS_DIR}/{repoId}/{commitSha}`,供 `/files` 与 W3 引用校验读原文(原写「完成后删除工作目录」,与 `/files` 冲突)。
   - D5 临时默认值(架构师临时裁定,Eva 定下 D5 后再调):每个仓库保留最近 **10** 个提交的快照,超出按 **LRU** 清理;数量由 `SNAPSHOT_KEEP_PER_REPO` 配置(默认 10)。
   - **现状:清理逻辑尚未实现**,留给后续小 PR;在此之前快照只增不减,磁盘会持续增长,部署时需关注 `repos` 卷占用。
-  - 快照被清理(或未保留、未配置 REPOS_DIR)后,`GET /files` 返回 409 `REPO_NOT_READY`,api 不自行 clone。
+  - 快照被清理(或未保留、未配置 REPOS_DIR)后,`GET /files` 返回 409 `REPO_NOT_READY`(`details.reason=SNAPSHOT_MISSING` / `REPOS_DIR_NOT_CONFIGURED`),api 不自行 clone。
 - 读文件接口做路径规范化,拒绝 `..` 与符号链接逃逸。
 - 提示注入防护:代码内容作为数据包裹在分隔符内,工具只读,无写/网络工具。
 
