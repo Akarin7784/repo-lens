@@ -11,6 +11,7 @@ import {
   indexChunks,
   withEmbedLock,
 } from '@repolens/rag';
+import { onServiceUnavailable } from '@repolens/shared';
 
 // 本机 Redis 共用:默认 db 6 + 进程唯一前缀,不碰其他库和 key
 const REDIS_URL = process.env.TEST_REDIS_URL ?? 'redis://127.0.0.1:6379/6'; // 库号占用表见 packages/agent/src/llm/llm.test.ts
@@ -31,7 +32,7 @@ async function redisUp() {
   }
 }
 const hasRedis = await redisUp();
-if (!hasRedis) console.warn(`[worker] Redis 不可达,跳过向量化锁集成测试`);
+if (!hasRedis) onServiceUnavailable('Redis', `[worker] Redis 不可达,跳过向量化锁集成测试`);
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const chunks = Array.from({ length: 3 }, (_, i) => ({

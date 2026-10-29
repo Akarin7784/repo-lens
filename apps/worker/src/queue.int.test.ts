@@ -5,6 +5,7 @@ import { MemoryStore, publicJobId, queueJobId, redisKeys } from '@repolens/db';
 import { RedisEventSink } from './events.js';
 import { ANALYZE_JOB_OPTS, processAnalyzeJob, type AnalyzeJobData } from './queue.js';
 import { makeGitRepo, SAMPLE_REPO, testConfig } from './test-utils.js';
+import { onServiceUnavailable } from '@repolens/shared';
 
 const REDIS_URL = process.env.TEST_REDIS_URL ?? 'redis://127.0.0.1:6379/7'; // 库号占用表见 packages/agent/src/llm/llm.test.ts
 async function redisUp() {
@@ -24,7 +25,8 @@ async function redisUp() {
   }
 }
 const hasRedis = await redisUp();
-if (!hasRedis) console.warn(`[worker] Redis 不可达(${REDIS_URL}),跳过 BullMQ 集成测试`);
+if (!hasRedis)
+  onServiceUnavailable('Redis', `[worker] Redis 不可达(${REDIS_URL}),跳过 BullMQ 集成测试`);
 
 describe.skipIf(!hasRedis)('BullMQ + Redis Stream(真实 Redis)', () => {
   const qname = `analyze-test-${process.pid}-${Date.now()}`;

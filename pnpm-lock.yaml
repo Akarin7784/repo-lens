@@ -146,6 +146,9 @@ importers:
       '@repolens/db':
         specifier: workspace:*
         version: link:../db
+      '@repolens/shared':
+        specifier: workspace:*
+        version: link:../shared
     devDependencies:
       ioredis:
         specifier: 5.11.1

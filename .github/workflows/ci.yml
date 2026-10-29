@@ -25,6 +25,8 @@ jobs:
     env:
       TEST_MYSQL_URL: mysql://root:repolens-ci@127.0.0.1:3306/repolens_test
       TEST_REDIS_URL: redis://127.0.0.1:6379/12
+      # 集成测试服务不可达时直接抛错,不允许静默跳过
+      REQUIRE_DB_TESTS: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
