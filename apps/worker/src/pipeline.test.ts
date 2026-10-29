@@ -197,6 +197,10 @@ describe('summarizing(T-211)', () => {
     expect(usage1).toBe(rows.length);
     const calls = client.calls;
 
+    // 重跑时 worker 只按输入哈希逐节点查(findSummaryByInput),不整表读所有 commit
+    let listed = 0;
+    const orig = store.listSummaries.bind(store);
+    store.listSummaries = async (id) => (listed++, orig(id));
     await runPipeline(data, {
       store,
       events: new MemoryEventSink(),
@@ -206,6 +210,8 @@ describe('summarizing(T-211)', () => {
     });
     expect((await store.llmUsageByTask(task.id)).length).toBe(usage1);
     expect(client.calls).toBe(calls);
+    expect(listed).toBe(0);
+    store.listSummaries = orig;
   });
 
   it('预算熔断:改用规则摘要,只发一次 stage_error(summarizing),任务仍 done', async () => {

@@ -105,6 +105,29 @@ function suite(name: string, make: () => Promise<Store>, enabled = true) {
         model: 'fake',
         source: 'llm',
       });
+      // findSummaryByInput:按 (level, targetId, inputHash) 命中,优先 preferCommit
+      const hashB = 'b'.repeat(64);
+      expect(await s.findSummaryByInput(r.id, 'dir', 'm:src', hashB, A)).toMatchObject({
+        commitSha: A,
+        content: '第二版',
+      });
+      // B 那行的 inputHash 是 row.inputHash('a…')
+      expect(await s.findSummaryByInput(r.id, 'dir', 'm:src', row.inputHash, B)).toMatchObject({
+        commitSha: B,
+        content: 'B 版',
+        source: 'rule',
+      });
+      // 偏好 B 但 B 没有 hashB 的行:退回 A 的
+      expect(await s.findSummaryByInput(r.id, 'dir', 'm:src', hashB, B)).toMatchObject({
+        commitSha: A,
+        content: '第二版',
+      });
+      // preferCommit 没有这行时退回其他 commit 的同哈希行
+      expect(
+        await s.findSummaryByInput(r.id, 'file', 'f:src/a.ts', row.inputHash, B),
+      ).toMatchObject({ commitSha: A, content: 'f' });
+      expect(await s.findSummaryByInput(r.id, 'dir', 'm:src', 'c'.repeat(64), A)).toBeNull();
+      expect(await s.findSummaryByInput(r.id, 'dir', 'm:other', hashB, A)).toBeNull();
     });
 
     it('llm_usage 写入与按任务读回(T-210)', async () => {

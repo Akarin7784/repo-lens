@@ -26,15 +26,33 @@ export class SummaryTimeoutError extends Error {
   }
 }
 
-function withTimeout<T>(p: Promise<T>, ms: number | undefined): Promise<T> {
-  if (!ms || ms <= 0) return p;
-  let t: ReturnType<typeof setTimeout>;
-  return Promise.race([
-    p,
-    new Promise<never>((_, rej) => {
-      t = setTimeout(() => rej(new SummaryTimeoutError(ms)), ms);
-    }),
-  ]).finally(() => clearTimeout(t));
+/**
+ * 带超时地执行一次调用:超时时 abort 传给调用的 signal(真正中止底层请求,迟到响应不会再计费),
+ * 并以 SummaryTimeoutError 失败。外部 signal(如任务取消)用 AbortSignal.any 合并。
+ */
+async function withTimeout<T>(
+  run: (signal: AbortSignal | undefined) => Promise<T>,
+  ms: number | undefined,
+  external?: AbortSignal,
+): Promise<T> {
+  if (!ms || ms <= 0) return run(external);
+  const ctl = new AbortController();
+  const signal = external ? AbortSignal.any([ctl.signal, external]) : ctl.signal;
+  let t: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, rej) => {
+    t = setTimeout(() => {
+      const e = new SummaryTimeoutError(ms);
+      ctl.abort(e);
+      rej(e);
+    }, ms);
+  });
+  const p = run(signal);
+  p.catch(() => {}); // 超时后底层的 AbortError 不再有人等,避免 unhandled rejection
+  try {
+    return await Promise.race([p, timeout]);
+  } finally {
+    clearTimeout(t);
+  }
 }
 
 export interface SummaryFileInput {
@@ -62,7 +80,12 @@ export interface SummarizeInput {
    * 已有摘要(可跨 commit),key = `${level}|${targetId}`,
    * 或 `${level}|${targetId}#${inputHash}`(同一节点多个 commit 各有一份时按哈希精确命中)
    */
-  existing: Map<string, SummaryRow>;
+  existing?: Map<string, SummaryRow>;
+  /**
+   * 按输入哈希查可复用的旧摘要(优先于 existing)。worker 用它逐节点查库(store.findSummaryByInput),
+   * 不再把仓库所有 commit 的摘要一次读进内存
+   */
+  lookup?: (level: SummaryLevel, targetId: string, inputHash: string) => Promise<SummaryRow | null>;
 }
 
 export interface SummarizeDeps {
@@ -76,6 +99,8 @@ export interface SummarizeDeps {
   concurrency?: number;
   /** 单文件摘要调用超时,默认 DEFAULT_FILE_TIMEOUT_MS;0 表示不限 */
   fileTimeoutMs?: number;
+  /** 外部取消(可选):与单文件超时合并后传给 LLM 请求 */
+  signal?: AbortSignal;
   save: (row: SummaryRow) => Promise<void>;
   onProgress?: (done: number, total: number) => void | Promise<void>;
 }
@@ -175,16 +200,19 @@ export async function summarizeRepo(
             ];
       try {
         const r = await withTimeout(
-          deps.gateway.complete({
-            model,
-            messages: msgs,
-            json: true,
-            maxTokens: 600,
-            purpose: 'summary',
-            repoId: deps.repoId,
-            taskId: deps.taskId,
-          }),
+          (signal) =>
+            deps.gateway.complete({
+              model,
+              messages: msgs,
+              json: true,
+              maxTokens: 600,
+              purpose: 'summary',
+              repoId: deps.repoId,
+              taskId: deps.taskId,
+              signal,
+            }),
           timeoutMs,
+          deps.signal,
         );
         const s = parseSummary(r.text);
         if (s) return { text: s, ...r.usage };
@@ -214,8 +242,9 @@ export async function summarizeRepo(
     timeoutMs?: number,
   ) => {
     const key = summaryKey(level, targetId);
-    const prevWith = (hash: string) => {
-      const p = inp.existing.get(`${key}#${hash}`) ?? inp.existing.get(key);
+    const prevWith = async (hash: string) => {
+      if (inp.lookup) return inp.lookup(level, targetId, hash);
+      const p = inp.existing?.get(`${key}#${hash}`) ?? inp.existing?.get(key);
       return p && p.inputHash === hash ? p : null;
     };
     const llmHash = inputHash(level, model, llmInput);
@@ -230,7 +259,7 @@ export async function summarizeRepo(
       content.set(targetId, prev.content);
       await tick();
     };
-    const hit = prevWith(mode === 'llm' ? llmHash : ruleHash);
+    const hit = await prevWith(mode === 'llm' ? llmHash : ruleHash);
     if (hit) return reuse(hit);
     if (mode === 'llm') {
       const out = await callLlm(model, messages(), timeoutMs);
@@ -251,7 +280,7 @@ export async function summarizeRepo(
       }
     }
     if (!row) {
-      const ruleHit = prevWith(ruleHash);
+      const ruleHit = await prevWith(ruleHash);
       if (ruleHit) return reuse(ruleHit);
       res.rule++;
       row = {

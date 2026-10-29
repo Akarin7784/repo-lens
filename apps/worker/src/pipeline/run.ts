@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { lstat, readFile } from 'node:fs/promises';
 import { dirname, join, posix } from 'node:path';
 import {
   AnalyzerError,
@@ -15,7 +15,6 @@ import {
   MemoryLlmKv,
   createLlmClient,
   summarizeRepo,
-  summaryKey,
   type SummaryFileInput,
 } from '@repolens/agent';
 import {
@@ -23,11 +22,16 @@ import {
   type FileInput,
   type GraphInput,
   type Store,
-  type SummaryRow,
+  type SummaryLevel,
   type SymbolInput,
   type TaskStats,
 } from '@repolens/db';
-import { exclusionRule, type GraphNode, type ProgressStage } from '@repolens/shared';
+import {
+  exclusionRule,
+  MAX_SEND_BYTES,
+  type GraphNode,
+  type ProgressStage,
+} from '@repolens/shared';
 import type { WorkerConfig } from '../config.js';
 import type { EventSink } from '../events.js';
 import { cloneAtCommit } from './clone.js';
@@ -408,6 +412,9 @@ export async function runSummaries(
   }
   const readOpt = async (p: string) => {
     try {
+      // 先 lstat:非普通文件(符号链接等)或超过 MAX_SEND_BYTES 的不读,避免把超大 README 整个读进内存
+      const st = await lstat(join(root, p));
+      if (!st.isFile() || st.size > MAX_SEND_BYTES) return null;
       const c = await readFile(join(root, p), 'utf8');
       // README / package.json 也会进 repo 提示词:含 key 特征、超限或二进制就不送
       return exclusionRule(p, c) ? null : c;
@@ -415,15 +422,10 @@ export async function runSummaries(
       return null;
     }
   };
-  // 跨 commit 复用:同一节点每个 commit 各一行,按 `key#inputHash` 精确登记;
-  // 普通 key 优先登记当前 commit 的行(重跑同一 commit 时直接命中)
-  const existing = new Map<string, SummaryRow>();
-  for (const r of await store.listSummaries(repoId)) {
-    const k = summaryKey(r.level, r.targetId);
-    if (!existing.has(`${k}#${r.inputHash}`) || r.commitSha === commitSha)
-      existing.set(`${k}#${r.inputHash}`, r);
-    if (!existing.has(k) || r.commitSha === commitSha) existing.set(k, r);
-  }
+  // 跨 commit 复用:逐节点按 (level, targetId, inputHash) 查库(idx_input),优先当前 commit 的行;
+  // 不再把仓库所有 commit 的摘要整表读进内存。旧 commit 行的清理跟随 D5 快照保留策略(见 BACKEND_AI_DESIGN)
+  const lookup = (level: SummaryLevel, targetId: string, hash: string) =>
+    store.findSummaryByInput(repoId, level, targetId, hash, commitSha);
   const task = await store.getTask(jobId);
   let last = 50;
   const r = await summarizeRepo(
@@ -437,7 +439,7 @@ export async function runSummaries(
       files,
       readme: await readOpt('README.md'),
       packageJson: await readOpt('package.json'),
-      existing,
+      lookup,
     },
     {
       gateway: gatewayOf(deps),

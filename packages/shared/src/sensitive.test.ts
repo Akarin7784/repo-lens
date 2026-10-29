@@ -32,12 +32,22 @@ describe('敏感文件规则', () => {
     ['deploy/secrets.yaml', 'secrets-file'],
     ['secrets.toml', 'secrets-file'],
     ['secrets.env', 'secrets-file'],
+    ['config/app-secrets.json', 'secrets-file'],
+    ['k8s/prod_secrets.yaml', 'secrets-file'],
+    ['.secrets', 'secrets-file'],
+    ['credentials.env', 'credentials-file'],
+    ['aws-credentials.ini', 'credentials-file'],
+    ['secrets.properties', 'secrets-file'],
   ])('路径 %s → %s', (p, id) => expect(sensitivePathRule(p)).toBe(id));
   it('普通文件不命中', () => {
     for (const p of [
       'src/credentials.ts',
       'src/my-secrets-util.ts',
       'src/secrets.ts',
+      'src/app-secrets.ts',
+      'src/credentials.env.ts',
+      'docs/secrets-guide.md',
+      'src/mysecrets.json',
       'secrets.js',
       'src/env.ts',
       'src/keys.ts',
@@ -59,6 +69,9 @@ describe('敏感文件规则', () => {
     ['//registry.npmjs.org/:_authToken=FAKE-0000', 'npm-auth-token'],
     ['_authToken = FAKE0000', 'npm-auth-token'],
     ['NPM=npm_' + 'F'.repeat(36), 'npm-token'],
+    ['{\n  "name": "x",\n  "_authToken": "FAKE-0000-FAKE"\n}', 'npm-auth-token-json'],
+    ['npmAuthToken: FAKEFAKE0000', 'yarn-npm-auth-token'],
+    ['npmScopes:\n  acme:\n    npmAuthToken: "FAKEFAKE0000"\n', 'yarn-npm-auth-token'],
     ['Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJmYWtlIn0.FAKEFAKEFAKEsig', 'jwt'],
   ])('内容 %s → %s', (c, id) => expect(sensitiveContentRule(c)).toBe(id));
   it('普通代码不误报', () => {
@@ -69,6 +82,11 @@ describe('敏感文件规则', () => {
       'const ask = task-runner;',
       '//registry.npmjs.org/:_authToken=${NPM_TOKEN}',
       'this._authToken = token;',
+      '"_authToken": "${NPM_TOKEN}"',
+      '"_authToken": ""',
+      'npmAuthToken: "${NPM_TOKEN}"',
+      '  npmAuthToken: token,',
+      '  npmAuthToken: process.env.NPM_TOKEN,',
       "const npm_version = 'npm_short';",
       "const s = 'eyJ.eyJ.x';",
     ])
@@ -99,6 +117,10 @@ describe('超限 / 二进制内容', () => {
     expect(unsendableContentRule('a'.repeat(MAX_SEND_BYTES))).toBeNull();
     // 多字节字符按 UTF-8 字节数算
     expect(unsendableContentRule('中'.repeat(Math.ceil(MAX_SEND_BYTES / 3) + 1))).toBe('too-large');
+    // 边界:恰好 MAX_SEND_BYTES 字节不算超限(含多字节);Buffer 已换成 TextEncoder
+    expect(unsendableContentRule('a'.repeat(MAX_SEND_BYTES))).toBeNull();
+    expect(unsendableContentRule('a'.repeat(MAX_SEND_BYTES - 3) + '中')).toBeNull();
+    expect(unsendableContentRule('a'.repeat(MAX_SEND_BYTES - 2) + '中')).toBe('too-large');
     expect(unsendableContentRule('PNG\u0000\u0001')).toBe('binary');
     expect(unsendableContentRule('export const a = 1;')).toBeNull();
   });

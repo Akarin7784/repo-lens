@@ -185,13 +185,14 @@ sequenceDiagram
 |---|---|---|
 | `BAD_REQUEST` | 400(框架 4xx 保留原状态码,如 413/415) | 参数或请求体格式非法 |
 | `INVALID_REPO_URL` | 400 | `repoUrl` 存在但不是合法的 GitHub 仓库地址 |
-| `REPO_NOT_FOUND` | 404 | 仓库不存在、不可访问或 ref 无效;资源 id 不存在。私有仓库在 GitHub 返回 404 时也是这个码,不透露是否存在 |
+| `REPO_NOT_FOUND` | 404 | 仓库不存在、不可访问或 ref 无效;资源 id 不存在。私有仓库在 GitHub 返回 404 时也是这个码,不透露是否存在。`ref` 为 40 位 SHA 时不跑 ls-remote,只有 `repoInfo` 明确 404 才返回此码(不建任务、不计 `rl:ip`);403 限流、5xx、网络错误照常放行 |
 | `REPO_NOT_READY` | 409 | 图还没生成 |
 | `REPO_TOO_LARGE` | 413 | 仓库超过 `MAX_REPO_MB` |
 | `UNSUPPORTED_LANGUAGE` | 422 | 非 TypeScript 仓库 |
 | `REPO_NOT_PUBLIC` | 422 | GitHub `repoInfo` 返回 `private: true`,文案「只支持公开仓库」;在建仓库/任务之前拒绝 |
 | `RATE_LIMITED` | 429 | 限流 |
 | `INTERNAL` | 500 | 内部错误 |
+
 ```jsonc
 // GET /api/repos/:id   (repo / commitSha 与 POST /api/repos 响应同名同义;commitSha 优先取最近一次已完成(done)任务的 commit,没有已完成任务时取最新任务的;jobId/status/stage/progress 始终是最新任务的)
 { "repoId": 12, "jobId": "12:a1b2c3d", "repo": "honojs/hono", "commitSha": "a1b2c3d…(40 位)", "status": "running", "stage": "parsing", "progress": 42,
@@ -391,6 +392,8 @@ Qdrant collection `code_chunks`:向量维度随 `EMBEDDING_MODEL`(text-embedding
 同时暴露 resource `repolens://{repoId}/graph` 返回 GraphData。传输:stdio(本地)+ Streamable HTTP(`/mcp`)。
 
 ## 6. 部署方案
+
+> **api 与 worker 必须同版本一起升级(T-211c 起)**。迁移 0001 之后 summary 表多了 `commit_sha`(默认 `''`)与 `source`(默认 `llm`);滚动发布期间如果旧 worker 还在跑,它写入的行会是 `commit_sha=''`、`source='llm'`(规则摘要也被标成 llm),新 api 按 commit 读不到这些行。顺序:先跑迁移 → 停旧 worker → 同时发布新 api 与新 worker;不要只升一个。如已产生 `commit_sha=''` 的行,按 BACKEND_AI_DESIGN「summary 孤儿行清理」手动处理。
 
 ### 6.1 docker-compose
 ```yaml

@@ -129,9 +129,20 @@ export interface Store {
   latestTask(repoId: number): Promise<TaskRow | null>;
   /**
    * 某仓库全部 commit 的摘要(T-211c:uk = repoId + level + targetId + commitSha,各 commit 各存一份),
-   * 每行带 commitSha;worker 用它按输入哈希跨 commit 复用
+   * 每行带 commitSha。只用于测试与运维排查;worker 复用改走 findSummaryByInput
    */
   listSummaries(repoId: number): Promise<SummaryRow[]>;
+  /**
+   * 按输入哈希找可复用的摘要(worker 摘要阶段逐节点调用,走 idx_input,不再整表读所有 commit):
+   * 同 (repoId, level, targetId, inputHash) 的行,优先 preferCommit,其次最新写入的一行;没有返回 null
+   */
+  findSummaryByInput(
+    repoId: number,
+    level: SummaryLevel,
+    targetId: string,
+    inputHash: string,
+    preferCommit: string,
+  ): Promise<SummaryRow | null>;
   /** 按 (repoId, level, targetId, commitSha) 插入或覆盖 */
   upsertSummary(repoId: number, commitSha: string, row: SummaryRow): Promise<void>;
   /** 读某 commit 的摘要;没有返回 null */
