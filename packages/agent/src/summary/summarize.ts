@@ -47,6 +47,8 @@ export interface SummaryFileInput {
   contentHash: string;
   /** 源码(读快照);读不到时为 null,只能用规则摘要 */
   code: string | null;
+  /** 命中敏感文件规则时的规则 id:只做规则摘要(路径/语言/行数),内容绝不进提示词 */
+  sensitive?: string | null;
 }
 
 export interface SummarizeInput {
@@ -267,8 +269,14 @@ export async function summarizeRepo(
       contentHash: '',
       code: null,
     };
+    if (info.sensitive) {
+      // 双保险:调用方已清空 code/exports,这里再强制只用路径、语言、行数
+      info.code = null;
+      info.exports = [];
+      info.imports = [];
+    }
     const ruleInput = JSON.stringify([info.path, info.lang, info.loc, info.exports]);
-    const mode: Mode = llmFiles.has(n.id) && info.code !== null ? 'llm' : 'rule';
+    const mode: Mode = llmFiles.has(n.id) && info.code !== null && !info.sensitive ? 'llm' : 'rule';
     const llmInput = JSON.stringify([
       info.path,
       info.lang,

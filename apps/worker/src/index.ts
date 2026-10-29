@@ -19,7 +19,8 @@ const redis = new Redis(config.redisUrl, { maxRetriesPerRequest: null });
 const events = new RedisEventSink(redis);
 // LLM 网关:缓存与预算计数放 Redis,记账写 llm_usage
 const gateway = new LlmGateway({
-  client: createLlmClient(config.llm),
+  // LLM_PROVIDER=deepseek 时套 cb:llm:{provider} 熔断(状态放共享 Redis)
+  client: createLlmClient(config.llm, { kv: redis }),
   kv: redis,
   usage: store,
   prices: DEFAULT_PRICES,

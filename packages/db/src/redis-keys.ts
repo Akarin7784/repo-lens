@@ -47,6 +47,10 @@ export const redisKeys = {
   llmSpendDay: (d = new Date()) => `llm:spend:day:${dayBucket(d)}`,
   /** 单个分析任务的 LLM 花费(micro-USD) */
   llmSpendTask: (taskId: number) => `llm:spend:task:${taskId}`,
+  /** provider 级熔断:存在即打开(TTL 60s) */
+  llmBreaker: (provider: string) => `cb:llm:${provider}`,
+  /** 熔断的连续失败计数,成功清零 */
+  llmBreakerFails: (provider: string) => `cb:llm:${provider}:fails`,
 } as const;
 
 /** 对外 jobId = `${repoId}:${commit}`;BullMQ 5 禁止自定义 id 含单个 ':',队列内用 '-' */
