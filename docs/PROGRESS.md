@@ -112,6 +112,7 @@
 - #49 非阻塞后续:窄屏状态条压住缩放按钮且显示「Esc 取消」;截图带 Next dev 角标;README 本地开发步骤仍是 `--filter` 写法,api 的 dev 需先 `pnpm build`;「跳转中保留选中」例外无测试;`55vh` 改 `55dvh`。
 
 ## 演示检查清单(第 4 周前逐项勾选)
+- [ ] 演示前抽查 hono 的在环节点:节点详情里环上的文件显示「在环中」,数量与状态栏环边数相符(`inCycle` 须与图投影同源,不依赖 `stats`)。
 - [ ] 演示机内存至少 4 GB(本地 e5 embedding 峰值约 2.5 GB,见 D4 与 T-214);embedding 批大小可配置。
 - [x] summary 迁移 0001 在 MySQL 8.4 上的幂等与回填:CI smoke 已验证(8.4.13)。
 - [ ] 演示机拉代码后先在仓库根目录运行 `pnpm build`(或 `pnpm --filter @repolens/shared build`),避免 shared 旧构建导致错误码显示异常。
