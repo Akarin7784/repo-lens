@@ -39,6 +39,9 @@ export function GraphSearch({
   // T-224b:nodes 在搜索框打开期间可能变化(加载/重新分析),结果变少时 active 会越界;
   // 渲染与回车都用钳过的序号,无结果时为 -1(不指向任何 option)
   const activeIdx = hits.length === 0 ? -1 : Math.min(active, hits.length - 1);
+  // T-224c:钳位时把状态也写回钳过的序号,否则结果再变多(5→2→5)会跳回旧的第 5 项。
+  // 渲染期间按条件更新自身 state 是 React 允许的写法(只在越界时触发一次,不会循环)
+  if (hits.length > 0 && active > activeIdx) setActive(activeIdx);
   const expanded = showList && hits.length > 0;
 
   useEffect(() => {
