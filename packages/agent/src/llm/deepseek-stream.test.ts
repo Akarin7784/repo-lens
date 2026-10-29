@@ -215,6 +215,16 @@ describe('DeepSeekClient.stream(本地假 SSE 服务)', () => {
     expect(err.message).not.toMatch(/sk-/);
   });
 
+  it('sk- 正则边界:task-xxx / disk-cache 不误伤,大写 SK- 与 sk-ab****xyz 照样替换', async () => {
+    handler = script([
+      chunk({
+        error: { message: 'task-abcd1 disk-cache1 ask-me12 SK-UPPER123 sk-ab****xyz sk-ab' },
+      }),
+    ]);
+    const err = await failure(collect(client().stream(call())));
+    expect(err.message).toContain('task-abcd1 disk-cache1 ask-me12 *** *** sk-ab');
+  });
+
   it('非 2xx 的部分打码 key 回显也被抹掉', async () => {
     handler = (_rq, rs) => {
       rs.writeHead(401, { 'content-type': 'application/json' });
