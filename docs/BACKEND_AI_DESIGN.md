@@ -423,7 +423,7 @@ event: done
 data: {"messageId":881,"sessionId":7,"droppedCitations":1,"retrieval":"hybrid","usage":{"in":5210,"out":402}}
 ```
 示例与 shared `chat.ts` 一致：`citation` = `{id, path, startLine, endLine, nodeId, moduleId?}`(`id` 是显示编号，不带片段编号);`done` = `{messageId, sessionId?, droppedCitations, fallback?, retrieval?, usage}`,`retrieval` 服务端始终填写;`sessionId` 在 P4(落库)之前不填,P4 起始终填写。
-引用流式处理(P3,`apps/api/src/chat/citations.ts`):`[[Sn:a-b]]` 从 token 文本中去掉,在标记原位置之后立即发 `citation`;`id` 按首次出现从 1 编号,同文件同(收缩后)范围沿用 id,每次出现都发事件;被剔除的标记只去文本、不发事件,计入 `droppedCitations`。单行标记 `[[Sn:a]]` 按 `a-a` 处理,合法;以 `[[S` 开头、`]]` 结尾但格式不合法的标记同样从文本剔除、不发 `citation`,计入 `droppedCitations`。
+引用流式处理(P3,`apps/api/src/chat/citations.ts`):`[[Sn:a-b]]` 从 token 文本中去掉,在标记原位置之后立即发 `citation`;`id` 按首次出现从 1 编号,同文件同(收缩后)范围沿用 id,每次出现都发事件;被剔除的标记只去文本、不发事件,计入 `droppedCitations`。标记规则:① 合法为 `[[S<数字>:<数字>]]` 与 `[[S<数字>:<数字>-<数字>]]`,单行按 `a-a`;② 以 `[[S<数字>:` 开头、其后只有数字/冒号/连字符/字母、以 `]]` 结尾但不符合 ① 的(如 `[[S1:]]`、`[[S1:a-b]]`、`[[S1:3-]]`)剔除文本、不发 `citation`、计入 `droppedCitations`;不以 `[[S<数字>:` 开头的(`[[x]]`、`[[0]]`、`arr[0]`、`m[[1]]`)原样当文本;③ 半截标记:结尾是 `[[S<数字>:<数字和连字符>` 加最多一个 `]` 时缓冲到下一个 token,缓冲超过 24 个字符或出现不属于标记的字符就当文本输出。路径含控制字符(含换行)的片段不进 prompt。用户问题里以 `=== ` 开头的行加转义前缀(防伪造片段边界)放到 P4 做,问题仍放在片段之后。
 错误分两层：开流前(参数非法 400、仓库不存在 404、未就绪 409、限流 429,其余 500 `INTERNAL` 通用码)用 HTTP 状态码 + `ApiError` JSON;开流后才用 SSE `error` 事件。不支持断流续传，SSE 不带事件 `id`,重试就是重新发同一个问题。
 `done.retrieval`（可选，`hybrid` | `keyword-only`，架构师定案）：向量路可用时 `hybrid`；`embeddingStatus` 不是 ready/reused 或查询时 Qdrant 不可用，只用关键词/精确匹配路做 RRF 时为 `keyword-only`，前端在回答下方显示「已降级为关键词检索」。约定见 ARCHITECTURE SSE `done` 一节。
 前端收到 `citation` 就高亮 `nodeId`，再沿 `parentId` 链把祖先节点展开或高亮。

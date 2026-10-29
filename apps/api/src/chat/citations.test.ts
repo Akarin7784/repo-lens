@@ -47,11 +47,11 @@ describe('CitationStream', () => {
   });
 
   it('切分点任意位置结果一致', () => {
-    const full = 'a[[S1:11-12]]b[[S9:1-2]]c[[S2:4-4]]d';
+    const full = 'a[[S1:11-12]]b[[S9:1-2]]c[[S2:4-4]]d[[S1:12]]e';
     for (let i = 1; i < full.length; i++) {
       const r = run([full.slice(0, i), full.slice(i)]);
-      expect(r.text).toBe('abcd');
-      expect(r.cites.map((c) => c.id)).toEqual([1, 2]);
+      expect(r.text).toBe('abcde');
+      expect(r.cites.map((c) => c.id)).toEqual([1, 2, 3]);
       expect(r.dropped).toBe(1);
     }
   });
@@ -83,6 +83,9 @@ describe('CitationStream', () => {
 
   it('不像标记的方括号原样保留;流结束时半截标记当文本', () => {
     expect(run(['arr[0] 和 [[x]] 以及 [S1:1]']).text).toBe('arr[0] 和 [[x]] 以及 [S1:1]');
+    expect(run(['arr[0] m[[1]] [[0]] [[S1]] [[Sabc]]']).text).toBe(
+      'arr[0] m[[1]] [[0]] [[S1]] [[Sabc]]',
+    );
     const r = run(['结尾[[S1:1']);
     expect(r.text).toBe('结尾[[S1:1');
     expect(r.cites).toEqual([]);
@@ -99,17 +102,44 @@ describe('CitationStream', () => {
     expect(cites[0]?.path).toBe('src/db/index.ts');
     expect(text).toBe('(/etc/passwd)');
   });
-  it('单行标记 [[Sn:a]] 按 a-a 处理,合法', () => {
-    const { text, cites } = run(['见[[S1:1', '2]]处']);
-    expect(text).toBe('见处');
-    expect(cites.map((c) => [c.startLine, c.endLine])).toEqual([[12, 12]]);
+  it('单行标记 [[Sn:a]] 按 a-a 处理,合法;跨 token 拼接也能识别', () => {
+    for (const toks of [['见[[S1:12]]处'], ['见[[S1:1', '2]]处'], ['见[[S1:12]', ']处']]) {
+      const { text, cites } = run(toks);
+      expect(text).toBe('见处');
+      expect(cites.map((c) => [c.startLine, c.endLine])).toEqual([[12, 12]]);
+    }
   });
 
-  it('格式不合法的 [[S…]] 标记从文本剔除,不发 citation,计入 dropped', () => {
+  it('单行标记在片段范围外:剔除并计入 dropped', () => {
+    const r = run(['a[[S1:3]]b']);
+    expect([r.text, r.cites, r.dropped]).toEqual(['ab', [], 1]);
+  });
+
+  it('同文件同行的单行标记与 a-a 标记共用 id', () => {
+    const { cites } = run(['[[S1:12]] [[S1:12-12]]']);
+    expect(cites.map((c) => c.id)).toEqual([1, 1]);
+  });
+
+  it('[[S1:]] 格式不合法:剔除,不发 citation,计入 dropped', () => {
+    const r = run(['a[[S1:]]b']);
+    expect([r.text, r.cites, r.dropped]).toEqual(['ab', [], 1]);
+  });
+
+  it('[[S1:a-b]] / [[S1:3-]] 格式不合法:剔除,不发 citation,计入 dropped', () => {
+    const r = run(['a[[S1:a-b]]b[[S1:3-]]c']);
+    expect([r.text, r.cites, r.dropped]).toEqual(['abc', [], 2]);
+  });
+
+  it('arr[0] 等正常方括号不被删', () => {
+    expect(run(['const v = arr[0] + m[1][2];']).text).toBe('const v = arr[0] + m[1][2];');
+  });
+
+  it('半截标记缓冲超过 24 字符当文本输出;流结束残留仍当文本', () => {
     const s = new CitationStream(snippets);
-    const out = [...s.push('a[[S1]]b[[S1:x-2]]c[[S1:'), ...s.push('3-]]d[[Sabc]]e'), ...s.end()];
-    expect(out.filter((o) => o.type === 'citation')).toEqual([]);
-    expect(out.map((o) => (o.type === 'token' ? o.text : '')).join('')).toBe('abcde');
-    expect(s.dropped).toBe(4);
+    const long = '[[S1:' + '1'.repeat(30);
+    const out = s.push(long);
+    expect(out).toEqual([{ type: 'token', text: long }]);
+    const r = run(['尾巴[[S1:12-']);
+    expect([r.text, r.cites]).toEqual(['尾巴[[S1:12-', []]);
   });
 });

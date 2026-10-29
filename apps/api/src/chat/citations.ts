@@ -4,20 +4,24 @@ import type { Snippet } from './prompt.js';
 export type CitationOutput =
   { type: 'token'; text: string } | { type: 'citation'; citation: Citation };
 
-/** 合法标记:[[Sn:a-b]],或单行 [[Sn:a]](按 a-a 处理) */
+/*
+ * 标记规则(架构师裁定,见 ARCHITECTURE §4.2):
+ * 1. 合法:[[S<数字>:<数字>]] 与 [[S<数字>:<数字>-<数字>]],单行按 a-a;
+ * 2. 以 [[S<数字>: 开头、其后只有数字/冒号/连字符/字母、以 ]] 结尾但不符合 1 的
+ *    (如 [[S1:]]、[[S1:a-b]]、[[S1:3-]]):剔除文本、不发 citation、计入 dropped;
+ *    不以 [[S<数字>: 开头的([[x]]、[[0]]、arr[0]、m[[1]])原样当文本;
+ * 3. 半截标记:结尾是 [[S<数字>:<数字和连字符> 加最多一个 ] 时缓冲到下一个 token;
+ *    缓冲超过 24 个字符或出现不属于标记的字符就当文本输出。
+ */
 const MARKER = /^\[\[S(\d+):(\d+)(?:-(\d+))?\]\]/;
-/** 以 [[S 开头、以 ]] 结束但格式不合法的标记:从文本剔除,不发 citation */
-const MALFORMED = /^\[\[S[^[\]\n]*\]\]/;
-/** 可能是标记前缀(还没收完)的尾巴;不匹配就当普通文本 */
-const PARTIAL = /^\[(?:\[(?:S[^[\]\n]*\]?)?)?$/;
-/** 防止异常长的数字串一直卡在缓冲里 */
-const MAX_PENDING = 64;
+const MALFORMED = /^\[\[S\d+:[0-9A-Za-z:-]*\]\]/;
+const PARTIAL = /^\[(?:\[(?:S(?:\d+(?::[\d-]*\]?)?)?)?)?$/;
+const MAX_PENDING = 24;
 
 /**
  * 流式引用解析 + 校验(纯逻辑,无 IO)。
- * - 从 token 文本中去掉 [[Sn:a-b]]([[Sn:a]] 视为 a-a),在标记原位置之后产出 citation;
+ * - 从 token 文本中去掉合法标记,在标记原位置之后产出 citation;
  * - 范围收缩到与片段 Sn 的交集,无交集 / 未知 Sn / a>b / 行号 0 则剔除(只去文本,不产出事件);
- * - 以 [[S 开头、]] 结尾但格式不合法的标记同样从文本剔除、计入 dropped,不产出事件;
  * - citation.id 是显示编号,按 (path, 收缩后范围) 首次出现从 1 分配,重复出现沿用 id 但每次都产出事件;
  * - 模型输出的路径从不使用,path/nodeId 只取自片段。
  */
@@ -25,7 +29,14 @@ export class CitationStream {
   private pending = '';
   private readonly ids = new Map<string, number>();
   private readonly byN: Map<number, Snippet>;
-  dropped = 0;
+  /**
+   * 被剔除的标记数(范围无效 + 格式不合法)。P4 接 done.droppedCitations 时直接读取,
+   * 不改这个公开字段的名字和语义;外部只读。
+   */
+  private droppedCount = 0;
+  get dropped(): number {
+    return this.droppedCount;
+  }
 
   constructor(snippets: readonly Snippet[]) {
     this.byN = new Map(snippets.map((s) => [s.n, s]));
@@ -60,15 +71,15 @@ export class CitationStream {
         text = '';
         const c = this.validate(Number(m[1]), Number(m[2]), Number(m[3] ?? m[2]));
         if (c) out.push({ type: 'citation', citation: c });
-        else this.dropped++;
+        else this.droppedCount++;
         s = s.slice(m[0].length);
         continue;
       }
       const bad = MALFORMED.exec(s);
-      if (bad && bad[0].length <= MAX_PENDING) {
+      if (bad) {
         if (text) out.push({ type: 'token', text });
         text = '';
-        this.dropped++;
+        this.droppedCount++;
         s = s.slice(bad[0].length);
         continue;
       }

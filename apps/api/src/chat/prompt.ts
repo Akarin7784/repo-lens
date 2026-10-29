@@ -44,7 +44,9 @@ export function assemblePrompt(question: string, chunks: readonly ChunkInput[]):
   const snippets: Snippet[] = [];
   const excluded: string[] = [];
   for (const c of chunks) {
-    if (exclusionRule(c.path, c.content) !== null) {
+    // 路径含控制字符(含换行)会破坏片段头一行的格式,整个片段不进 prompt
+    // eslint-disable-next-line no-control-regex
+    if (/[\u0000-\u001f\u007f]/.test(c.path) || exclusionRule(c.path, c.content) !== null) {
       if (!excluded.includes(c.path)) excluded.push(c.path);
       continue;
     }
