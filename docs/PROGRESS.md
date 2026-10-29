@@ -151,6 +151,8 @@
 
 - 2026-10-29 18:1x:#70 合并(T-226 纯文档,提交 bc25d1b)。演示清单「断网构建与运行」的中文字体口径改为系统无衬线(`--font-cjk-fallback`),`layout.tsx` 一行注释改指该变量,`FRONTEND_DESIGN.md` 新增 9.1.2:`/files` 行号参数契约 `?line=N&endLine=M`(行号从 1 起、闭区间,只给 `line` 时 `endLine=line`;接口返回完整文件内容并新增 `range: { start, end }`;越界按截断、不报错;`line` 非正整数或 `endLine<line` 返回 400 `BAD_REQUEST`;前端 2000 行上限须包含 `range.end`,超出则放宽到 `range.end+50` 并保留提示)。**契约已定(架构师),尚未实现**:现状仍是 `start/end` 严格校验、后端切片、`start` 越界 400,前端无行号跳转;将在 W3 引用联动开工时由后端与前端在同一个 PR 里改 `packages/shared` 和两端实现。我核对了 head fd4e5dc 的 diff 只含这两个文件(+20/-2),文字与架构师的规则一致,`ci` 与 `smoke` 均绿,CLEAN;因只改文档和注释,未另跑全量测试。
 
+- 2026-10-29 18:1x:#71 合并(T-226b 纯文档,提交 c0c1ea0)。`FRONTEND_DESIGN.md` 9.1.2 按架构师补充裁定:`start/end` 保持服务端切片、行为不变也不删除;`line/endLine` 只表示高亮范围、不影响返回内容、始终是整个文件的绝对行号,`endLine` 非正整数同样返回 400;W3 时 `FileQuerySchema` 的 `.strict()` 一并改,后端在同一个 PR 里写清两组参数同时出现的语义并加测试。**契约已定,尚未实现。待架构师裁定**:不带 `start/end` 时是返回完整文件,还是保留现状的 `FILE_MAX_LINES`(2000)行加 `hasMore`;文档已如实标注两者冲突。我核对了 head 8d349d9 的 diff 只改这一个文档,`ci` 与 `smoke` 均绿,CLEAN,未另跑全量测试。
+
 ## 演示检查清单(第 4 周前逐项勾选)
 - [ ] 演示前抽查 hono 的 `embeddingStatus` 为 `ready`(或 `reused`)。
 - [ ] 「镜像构建下载模型」:CI 已验证(GitHub 环境直连 huggingface.co,手动 workflow `worker-model-build.yml` run 40838998679,5 个文件 `sha256sum -c` 全 OK,镜像内 ONNX embedding 维度 384,构建约 58 秒);**演示机(国内网络)上的构建仍待验证**:演示前先在演示机构建好镜像,下载慢时设 `EMBEDDING_MODEL_BASE_URL` 为镜像站(哈希校验不变)。
