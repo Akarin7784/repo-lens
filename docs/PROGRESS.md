@@ -209,6 +209,8 @@
 
 - 2026-10-30:合并 #126(7c32c08,ci/db-test-hardening,仅测试基础设施):db 包 MySQL 探测改连服务器根(`/`),再各自 DROP/CREATE 独立库(`repolens_test` / `repolens_mig_test`);db/agent/api/worker 的 `test` 脚本加 `vitest --no-file-parallelism`;新增 `probeService`(最多 4 次、退避 250/500/1000ms、connectTimeout 5000ms),失败经 `onServiceUnavailable` 报 `err.code: err.message` 并整体脱敏连接串。根因把握 60–70%(推断 migrate 探测与 store DROP/CREATE 竞态+旧 1500ms 超时),未证实。架构师评审无阻塞;非阻塞项:PR 描述已改明「本地独立 Redis db、CI 共用 /12 靠前缀隔离」(无 flushdb);URL pathname/`i>1` 成功 warn/脱敏边界单测/最坏耗时注释放部署后 CI 小跟进。CI/smoke 绿。下一步:私聊 Eva 收服务器登录与 DEEPSEEK/DASHSCOPE key(安全输入)后部署;真实 DeepSeek/DashScope 仍未调用,上线后先跑 demo-prep,不写「问答可用」。
 
+- 2026-10-30:合并 #127(a88c094):`docker-compose.yml` 与 `docs/DEPLOY.md` 里 api healthcheck 由 `localhost` 改为 `127.0.0.1`,避免容器内解析到 IPv6 `::1` 导致 unhealthy(演示机曾用 override 临时绕过)。diff 仅 2 行。smoke 含 compose /health 绿;ci 因 web `ChatPanel.test.tsx` 倒计时跨档 flaky(期望「约 1 分钟」收到「约 2 分钟」,`shouldAdvanceTime` 已知问题)失败,与本 PR 无关,不挡合并;前端仍按原计划修。
+
 ## 演示检查清单(第 4 周前逐项勾选)
 - [ ] 演示前抽查 hono 的 `embeddingStatus` 为 `ready`(或 `reused`)。
 - [ ] 「镜像构建下载模型」:CI 已验证(GitHub 环境直连 huggingface.co,手动 workflow `worker-model-build.yml` run 40838998679,5 个文件 `sha256sum -c` 全 OK,镜像内 ONNX embedding 维度 384,构建约 58 秒);**演示机(国内网络)上的构建仍待验证**:演示前先在演示机构建好镜像,下载慢时设 `EMBEDDING_MODEL_BASE_URL` 为镜像站(哈希校验不变)。
