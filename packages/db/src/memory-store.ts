@@ -69,6 +69,10 @@ export class MemoryStore implements Store {
     const t = this.byRepo(repoId)[0];
     return t ? { ...t } : null;
   }
+  async latestDoneTask(repoId: number) {
+    const t = this.byRepo(repoId).find((x) => x.stage === 'done');
+    return t ? { ...t } : null;
+  }
   async latestGraphTask(repoId: number) {
     const t = this.byRepo(repoId).find((x) => GRAPH_STAGES.has(x.stage));
     return t ? { ...t } : null;

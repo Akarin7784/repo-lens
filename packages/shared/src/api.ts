@@ -33,10 +33,13 @@ export const ApiErrorSchema = z.object({
   error: z.object({ code: z.enum(API_ERROR_CODES), message: z.string() }),
 });
 
-/** GET /api/repos/:id */
+/** GET /api/repos/:id;`repo`/`commitSha` 与 CreateRepoResponse 同名同义;commitSha 优先取最近一次 done 任务的 commit,没有 done 任务时取最新任务的;jobId/status/stage 始终是最新任务的 */
 export const RepoStatusSchema = z.object({
   repoId: z.number().int().positive(),
   jobId: z.string().min(1),
+  /** `owner/name` */
+  repo: z.string().regex(/^[^/\s]+\/[^/\s]+$/),
+  commitSha: CommitShaSchema,
   status: z.enum(['queued', 'running', 'done', 'failed']),
   stage: ProgressStageSchema,
   progress: z.number().min(0).max(100),

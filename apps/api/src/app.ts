@@ -169,12 +169,17 @@ export function buildApp(deps?: AppDeps): FastifyInstance {
 
   app.get<{ Params: { id: string } }>('/api/repos/:id', async (req) => {
     const repoId = repoIdOf(req.params.id);
-    const task = (await store.getRepo(repoId)) ? await store.latestTask(repoId) : null;
-    if (!task) throw new HttpError('REPO_NOT_FOUND', '仓库不存在');
+    const repo = await store.getRepo(repoId);
+    const task = repo ? await store.latestTask(repoId) : null;
+    if (!repo || !task) throw new HttpError('REPO_NOT_FOUND', '仓库不存在');
+    // commitSha 优先取最近一次已完成任务的(重新分析期间仍指向能看的那版),没有已完成任务才取最新任务的
+    const done = await store.latestDoneTask(repoId);
     const s = task.stats;
     const res: RepoStatus = {
       repoId,
       jobId: task.jobId,
+      repo: `${repo.owner}/${repo.name}`,
+      commitSha: (done ?? task).commitSha,
       status: statusOf(task.stage),
       stage: (task.stage === 'failed'
         ? (s.failedStage ?? 'queued')

@@ -179,8 +179,8 @@ sequenceDiagram
 { "error": { "code": "UNSUPPORTED_LANGUAGE", "message": "第 1 周仅支持 TypeScript 仓库" } }
 ```
 ```jsonc
-// GET /api/repos/:id
-{ "repoId": 12, "jobId": "12:a1b2c3d", "status": "running", "stage": "parsing", "progress": 42,
+// GET /api/repos/:id   (repo / commitSha 与 POST /api/repos 响应同名同义;commitSha 优先取最近一次已完成(done)任务的 commit,没有已完成任务时取最新任务的;jobId/status/stage/progress 始终是最新任务的)
+{ "repoId": 12, "jobId": "12:a1b2c3d", "repo": "honojs/hono", "commitSha": "a1b2c3d…(40 位)", "status": "running", "stage": "parsing", "progress": 42,
   "stats": { "files": 312, "modules": 14, "edges": 980 }, "error": null }
 ```
 ```text
