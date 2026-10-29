@@ -483,7 +483,7 @@ T-210b（DeepSeek，D1）：
 **敏感文件排除（T-210b，接真实 provider 前的合并门槛）**：
 - 事实：`LLM_PROVIDER=deepseek` 时，被选中做 LLM 摘要的文件源码、README、package.json 会发送给第三方模型服务（DeepSeek）。前端提交页与 README 的提示由前端/架构师负责。
 - 规则表在 `packages/shared/src/sensitive.ts`（摘要、embedding 切块、T-213 `/files` 共用一份）：
-  - 路径（按文件名）：`.env*`、`*.pem`、`id_rsa*` / `id_ed25519*` 等 SSH 私钥、`*.key`、证书 `*.crt` / `*.cer` / `*.der` / `*.p7b`、密钥库 `*.p12` / `*.pfx` / `*.jks` / `*.keystore`、`.npmrc`、`.netrc`、`.pgpass`、`.htpasswd`、凭据文件 `credentials`（无扩展名或配置/数据扩展名，如 `~/.aws/credentials`、`.git-credentials`、`gcp-credentials.json`；`credentials.ts` 这类源码不算）、`secrets.*`。
+  - 路径（按文件名）：`.env*`、`*.pem`、`id_rsa*` / `id_ed25519*` 等 SSH 私钥、`*.key`、证书 `*.crt` / `*.cer` / `*.der` / `*.p7b`、密钥库 `*.p12` / `*.pfx` / `*.jks` / `*.keystore`、`.npmrc`、`.netrc`、`.pgpass`、`.htpasswd`、凭据文件 `credentials`（无扩展名或配置/数据扩展名，如 `~/.aws/credentials`、`.git-credentials`、`gcp-credentials.json`；`credentials.ts` 这类源码不算）、`secrets`（同规则，只认无扩展名或 `json` / `yaml` / `yml` / `toml` / `env` / `ini` / `txt`；`secrets.ts` 这类源码按内容规则判断）。
   - 内容特征：`-----BEGIN … PRIVATE KEY-----`、`AKIA` / `ASIA` + 16 位、`ghp_` / `gho_` / `ghu_` / `ghs_` / `ghr_` / `github_pat_`、`sk-`（含 `sk-proj-`、`sk-ant-`）+ ≥20 位、Slack `xox?-`、Google `AIza…`、Stripe `sk_live_` / `rk_live_` / `sk_test_` / `rk_test_`、npm `_authToken=`（`${ENV}` 引用除外）与 `npm_` + 36 位、JWT（`eyJ….eyJ….…` 三段）。往 `SENSITIVE_PATH_RULES` / `SENSITIVE_CONTENT_RULES` 追加即可扩展。日志和提示里只出现规则 id，不出现命中内容。
 - 命中后：
   - 摘要：只做规则摘要，输入只有路径、语言、行数。不含源码，也不含导出名和 import：导出名是从源码里抽出来的标识符，可能就是常量名或值本身，与其逐个甄别不如一律不带。`contentHash` 也置空。worker 读文件时判定（`exclusionRule(path, code)`），`summarizeRepo` 见到 `sensitive` 再强制一次。

@@ -34,6 +34,24 @@ describe('敏感文件 → 不产出 embedding 切块', () => {
     expect(r.graph.nodes.some((n) => n.id === 'f:src/aws.ts')).toBe(true);
   });
 
+  it('secrets.ts:无密钥正常分析切块,含假 key 被内容规则排除', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'rl-secrets-'));
+    const files: Record<string, string> = {
+      'tsconfig.json': '{}',
+      'src/secrets.ts': 'export function loadSecrets() {\n  return process.env;\n}\n',
+      'lib/secrets.ts': `export const key = '${FAKE_AWS}';\nexport function f() {\n  return key;\n}\n`,
+    };
+    for (const [p, c] of Object.entries(files)) {
+      mkdirSync(dirname(join(root, p)), { recursive: true });
+      writeFileSync(join(root, p), c);
+    }
+    const r = await analyzeRepo({ root, files: scanSourceFiles(root) });
+    const by = new Map(r.parsed.map((p) => [p.path, p]));
+    expect(by.get('src/secrets.ts')?.sensitive).toBeUndefined();
+    expect(by.get('src/secrets.ts')?.chunks.length).toBeGreaterThan(0);
+    expect(by.get('lib/secrets.ts')).toMatchObject({ sensitive: 'aws-access-key-id', chunks: [] });
+  });
+
   it('超限 / 二进制内容(绕过扫描直接传入):只留节点,不切块', async () => {
     const root = mkdtempSync(join(tmpdir(), 'rl-big-'));
     const files: Record<string, string> = {

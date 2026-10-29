@@ -31,8 +31,9 @@ export const SENSITIVE_PATH_RULES: SensitivePathRule[] = [
     id: 'credentials-file',
     test: /(^|[._-])credentials(\.(json|ya?ml|toml|ini|xml|txt|csv|conf|cfg|properties))?$/,
   },
-  // secrets.yml / secrets.json / secrets.enc.yaml …
-  { id: 'secrets-file', test: /^secrets\./ },
+  // secrets、secrets.json / secrets.yml …:与 credentials 同规则,只认无扩展名或配置/数据扩展名,
+  // secrets.ts 这类源码按内容规则判断
+  { id: 'secrets-file', test: /^secrets(\.(json|ya?ml|toml|env|ini|txt))?$/ },
 ];
 
 export const SENSITIVE_CONTENT_RULES: SensitiveContentRule[] = [

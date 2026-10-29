@@ -763,14 +763,14 @@ describe.skipIf(!hasRedis)('路由(真实 Redis + 内存 Store)', () => {
       exported: true,
     });
     await store.saveGraph(repo.id, SHA, {
-      files: [f('config/secrets.ts'), f('src/ok.ts')],
-      symbols: [sym('config/secrets.ts', 'FAKE_TOKEN'), sym('src/ok.ts', 'ok')],
+      files: [f('config/secrets.json'), f('src/ok.ts')],
+      symbols: [sym('config/secrets.json', 'FAKE_TOKEN'), sym('src/ok.ts', 'ok')],
       edges: [],
     });
     await store.updateTask(publicJobId(repo.id, SHA), { stage: 'graph_ready', progress: 50 });
     const get = async (id: string) =>
       NodeDetailSchema.parse((await app.inject(`/api/repos/${repo.id}/nodes/${id}`)).json());
-    expect((await get('f:config/secrets.ts')).exports).toEqual([]);
+    expect((await get('f:config/secrets.json')).exports).toEqual([]);
     expect((await get('f:src/ok.ts')).exports).toEqual(['ok']);
     await app.close();
   });

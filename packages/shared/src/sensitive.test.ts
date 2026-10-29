@@ -28,12 +28,17 @@ describe('敏感文件规则', () => {
     ['config/gcp-credentials.json', 'credentials-file'],
     ['config/secrets.yml', 'secrets-file'],
     ['secrets.json', 'secrets-file'],
-    ['deploy/secrets.enc.yaml', 'secrets-file'],
+    ['secrets', 'secrets-file'],
+    ['deploy/secrets.yaml', 'secrets-file'],
+    ['secrets.toml', 'secrets-file'],
+    ['secrets.env', 'secrets-file'],
   ])('路径 %s → %s', (p, id) => expect(sensitivePathRule(p)).toBe(id));
   it('普通文件不命中', () => {
     for (const p of [
       'src/credentials.ts',
       'src/my-secrets-util.ts',
+      'src/secrets.ts',
+      'secrets.js',
       'src/env.ts',
       'src/keys.ts',
       'README.md',
@@ -73,6 +78,18 @@ describe('敏感文件规则', () => {
     expect(sensitiveRule('.env', null)).toBe('dotenv');
     expect(sensitiveRule('src/a.ts', null)).toBeNull();
     expect(sensitiveRule('src/a.ts', 'x AKIAFAKEFAKEFAKE0000')).toBe('aws-access-key-id');
+  });
+});
+
+describe('secrets.*:配置文件按路径排除,源码按内容判断', () => {
+  it('secrets.json 排除;secrets.ts 无密钥不排除;secrets.ts 含假 key 被内容规则排除', () => {
+    expect(sensitiveRule('config/secrets.json', '{"a":1}')).toBe('secrets-file');
+    expect(
+      sensitiveRule('src/secrets.ts', 'export const loadSecrets = () => process.env;'),
+    ).toBeNull();
+    expect(sensitiveRule('src/secrets.ts', "export const k = 'AKIAFAKEFAKEFAKE0000';")).toBe(
+      'aws-access-key-id',
+    );
   });
 });
 
