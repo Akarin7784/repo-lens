@@ -36,7 +36,7 @@ import {
 } from './route.js';
 import { readChatLimits } from '../limits.js';
 
-// 未设 TEST_REDIS_URL 时用专用 db 11(不连共享 db 0;agent 用 9、worker embed-lock 用 10)
+// 未设 TEST_REDIS_URL 时用专用 db 11(不连共享 db 0;agent llm.test 用 5、worker embed-lock 用 6)
 const REDIS_URL = process.env.TEST_REDIS_URL ?? 'redis://127.0.0.1:6379/11';
 async function redisUp() {
   const r = new Redis(REDIS_URL, {
