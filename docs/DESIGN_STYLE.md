@@ -40,7 +40,7 @@
 | `--edge` | 依赖边(`type-only` 用同色圆点线、透明度 0.55;循环依赖边改用 `--accent-strong` 长虚线 + `↻` 标记) | `#8A8579` | `#77746C` |
 | 选中节点 | `--accent-strong` 2px 描边 + 引用高亮底色 | 同上 | 同上 |
 
-- **字体**:标题使用衬线字体(`"Tiempos Headline", "Source Serif 4", Georgia, serif`),正文使用无衬线(`system-ui, "Inter", sans-serif`),代码使用等宽(`"JetBrains Mono", ui-monospace, monospace`)。开源项目不得内嵌商业字体,实际加载 Source Serif 4 与 Inter;中文标题回退 Noto Serif SC(next/font,`display: swap`、不 preload,按 unicode-range 分片只下载用到的字)。
+- **字体**:标题使用衬线字体(`"Tiempos Headline", "Source Serif 4", Georgia, serif`),正文使用无衬线(`system-ui, "Inter", sans-serif`),代码使用等宽(`"JetBrains Mono", ui-monospace, monospace`)。开源项目不得内嵌商业字体,实际加载 Source Serif 4 与 Inter;中文标题走系统衬线字体回退(Noto Serif CJK SC / Source Han Serif SC / Songti SC),不加载中文网页字体。西文字体用 `next/font/local` 自托管(T-225,`display: swap`),构建和运行都不依赖外网。
 - **圆角**:卡片 12px,按钮与输入框 10px,标签 999px。
 - **阴影**:仅用 `0 1px 2px rgba(31,30,29,0.06)`,悬浮层可加到 `0 8px 24px rgba(31,30,29,0.08)`。
 - **间距**:以 4px 为基数,面板内边距 16 到 24px。
