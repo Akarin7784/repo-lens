@@ -27,7 +27,7 @@ export class LlmStreamError extends Error {
 
 /** 首包 / 相邻 chunk 空闲超时默认值 */
 /** 通用 OpenAI 风格 key 形态,含部分打码回显(`sk-ab****xyz`) */
-const SK_PATTERN = /(?<![A-Za-z0-9])sk-[A-Za-z0-9*._-]{4,}/gi;
+export const SK_PATTERN = /(?<![A-Za-z0-9])sk-[A-Za-z0-9*._-]{4,}/gi;
 
 export const DEEPSEEK_STREAM_IDLE_DEFAULT_MS = 20_000;
 const TOTAL_DEFAULT_MS = 60_000;
