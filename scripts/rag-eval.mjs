@@ -54,6 +54,7 @@ import {
   makeEvalEmbedder,
   trackEvalIndexUsage,
   evalUsageLine,
+  evalIndexedSource,
 } from '../packages/rag/dist/index.js';
 import {
   DEFAULT_PRICES,
@@ -346,6 +347,7 @@ if (ATTRIB) {
         embeddingStatus: 'ready',
         embedder: emb,
         vectorStore: vs,
+        ...evalIndexedSource(EMB),
         limit: N,
       })
     ).hits;
@@ -427,6 +429,7 @@ if (DIAG) {
       embeddingStatus: 'ready',
       embedder: emb,
       vectorStore: vs,
+      ...evalIndexedSource(EMB),
       limit: 10,
     });
     show(label, r.hits, (c) => ` rrf=${c.score.toFixed(4)} [${c.sources.join(',')}]`);
@@ -503,6 +506,7 @@ for (const [id, q, want, syms] of SETS[setName]) {
     embeddingStatus: 'ready',
     embedder: emb,
     vectorStore: vs,
+    ...evalIndexedSource(EMB),
     limit: 5,
   });
   const base = (await vs.search(1, SHA, await emb.embedQuery(q), 5)).map((h) => byId.get(h.id));
