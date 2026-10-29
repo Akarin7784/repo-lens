@@ -169,4 +169,4 @@ API_BASE=http://localhost:4000 TIMEOUT_MIN=15 bash scripts/demo-prep.sh
 
 依次 `POST /api/repos` 提交四个仓库,轮询 `GET /api/repos/:id` 到 `done`/`failed`/超时,打印耗时、文件、模块、边和根层节点数;任一失败非零退出。脚本只做过 `bash -n` 与 shellcheck 检查,没有对真实 API 运行过。
 - [ ] 现场演示只走预分析加复用,不现场分析新仓库:按本机测速(taskset 绑核、单核 1 线程约 3.6 块/秒,见 `docs/notes/embed-lock-bench.md`),hono 的 1434 块首次向量化约 6.6 分钟,worker 限 1.5 核也要约 4 到 5 分钟。这个耗时只来自本机测速,尚未在 worker 容器内实测。
-- [ ] 演示机至少 4 核、4 GB 内存(架构师裁定):worker 容器的 `cpus` 不要卡太低,现在的 1.5 要改成可配置,默认值在 4 核机器上不低于 2(待后端做,未实现)。hono 用 `scripts/demo-prep.sh` 提前跑好并保留结果,现场只做问答和已分析仓库浏览;现场若要分析新仓库,只用块数少的小仓库(例如 zustand)。
+- [ ] 演示机至少 4 核、4 GB 内存(架构师裁定):worker 容器的 `cpus` 不要卡太低,现在的 1.5 要改成可配置,默认值在 4 核机器上不低于 2(待后端做,未实现)。hono 用 `scripts/demo-prep.sh` 提前跑好并保留结果,现场只做问答和已分析仓库浏览;演示默认不现场分析任何新仓库;zustand 这类小仓库的现场分析只是备选,要等在演示机上实测过耗时、确认只需一两分钟,才能写进演示脚本。
