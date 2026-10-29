@@ -6,6 +6,8 @@ import {
   escapeQuestionSeparators,
   type ChunkInput,
 } from './prompt.js';
+import { prepareSnippet } from './chunk-guard.js';
+import { realChunks } from './real-chunks.fixture.js';
 
 const chunk = (path: string, startLine: number, content: string): ChunkInput => ({
   path,
@@ -82,6 +84,19 @@ describe('assemblePrompt', () => {
     expect(p.snippets.map((s) => [s.n, s.path])).toEqual([[1, 'src/ok.ts']]);
     expect(p.user).not.toContain('evil');
     expect(p.user).not.toContain('S9');
+  });
+});
+
+describe('assemblePrompt + prepareSnippet(buildChunks 真实输出)', () => {
+  it('只给剥掉标题后的代码编号,第一行为 startLine;标题行不出现', async () => {
+    const src = ['// head', 'export const a = 1;', 'export const b = 2;'].join('\n');
+    const [c] = await realChunks('src/ab.ts', src, [{ symbol: 'a', startLine: 2, endLine: 3 }]);
+    const sn = prepareSnippet(c!)!;
+    const p = assemblePrompt('q', [sn]);
+    expect(p.user).toContain(
+      '=== S1 src/ab.ts:2-3 ===\n2| export const a = 1;\n3| export const b = 2;\n=== /S1 ===',
+    );
+    expect(p.user).not.toContain('| src/ab.ts a');
   });
 });
 

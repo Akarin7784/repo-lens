@@ -271,6 +271,7 @@ curl -so /dev/null -w "size=%{size_download} t=%{time_total}\n" -H 'Accept-Encod
     `for i in $(seq 1 61); do curl -s -o /dev/null -w '%{http_code} ' -XPOST http://<服务器IP>/api/repos -H 'content-type: application/json' -H "X-Forwarded-For: 10.9.8.$i" -d '{}'; done; echo`
   - 预期:Caddy 覆盖 XFF 时全部按真实 IP 计数,前 60 次 400,**第 61 次 429**;若 61 次全是 400,说明伪造 XFF 生效(计数被分散到伪造 IP),trustProxy/代理配置有缺口。Caddy 是否覆盖而非追加 XFF、Fastify 取哪一段为 `req.ip`:**未验证**,以本实测为准。
   - 测前确认本小时该 IP 未提交过(否则 429 会提前出现);测完删掉 `rl:sub:<真实IP>:*`(`docker compose exec redis redis-cli --scan --pattern 'rl:sub:*'` 找到后 `DEL`)或等到下一个小时桶,再做预分析等提交操作。不用 hono/zustand/zod/trpc 或任何真实仓库地址。
+    IPv6 的限流键形如 `rl:sub:2001:0db8:0000:0001::/64:<小时桶>`(按 /64 归并;IPv4 及 `::ffff:` 映射地址仍为原 IPv4),清理时按这个前缀找。
 - [ ] 真实触发一次花费硬上限(临时把 DAILY_LLM_BUDGET_CENTS / EMBEDDING_TASK_BUDGET_CENTS 设 0)看友好提示;真实触发一次 keyword-only(临时错误 DASHSCOPE key 或不可达)看降级提示;不能只靠单元测试;测完还原
 - [ ] 断外网(iptables 临时拦出站,保留 SSH)打开页面:web 不依赖外部 CDN(字体/高亮/图标已打包,未验证)
 - [ ] `docker stats` 在分析时看内存峰值

@@ -53,6 +53,10 @@ importers:
       ioredis:
         specifier: 5.11.1
         version: 5.11.1
+    devDependencies:
+      '@repolens/rag':
+        specifier: workspace:*
+        version: link:../../packages/rag
 
   apps/mcp: {}
 

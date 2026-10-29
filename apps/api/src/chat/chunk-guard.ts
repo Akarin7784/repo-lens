@@ -11,16 +11,62 @@ export function chunkMatchesHash(content: string, contentHash: string): boolean 
 }
 
 /**
- * 片段自身行号是否合法:startLine≥1、endLine≥startLine、行数与 content 分行数一致。
- * 不合法的片段不进 prompt。
+ * 与 `@repolens/rag` 的 MAX_CHUNK_CHARS 一致(测试里断言相等):worker 写入的 content 是
+ * `${path}[ ${symbol}]\n${code}` 再 slice(0, 4000),长度达到上限即视为可能被截断。
  */
-export function snippetSpanValid(c: {
+export const CHUNK_TEXT_MAX_CHARS = 4000;
+
+/** code_chunk 行(content 为 worker 写入的原文 c.text,含标题行,可能被截断) */
+export interface StoredChunk {
+  path: string;
+  symbol: string | null;
   startLine: number;
   endLine: number;
   content: string;
-}): boolean {
-  if (c.startLine < 1 || c.endLine < c.startLine) return false;
-  return c.endLine - c.startLine + 1 === c.content.split('\n').length;
+  contentHash: string;
+}
+
+/** 可进 prompt 的片段:content 只含代码(已剥标题),[startLine,endLine] 为有效区间 */
+export interface PreparedSnippet {
+  path: string;
+  startLine: number;
+  endLine: number;
+  content: string;
+}
+
+/** 标题行,与 rag buildChunks 的拼法一致:`${path}${symbol ? ` ${symbol}` : ''}` */
+export function chunkHeader(path: string, symbol: string | null): string {
+  return `${path}${symbol ? ` ${symbol}` : ''}`;
+}
+
+/**
+ * 把 code_chunk 原文转成可进 prompt 的片段;任何一步对不上返回 null(丢弃该片段):
+ * 1. 对原始 content 做 hash 校验;
+ * 2. 剥掉第一行,必须等于 `path[ symbol]`;
+ * 3. 代码行数多于 endLine-startLine+1 → 不合法;少于、或原文达到截断上限 → 视为被截断,
+ *    丢掉可能不完整的最后一行,有效 endLine = startLine + 行数 - 2;剩不下完整行则丢弃。
+ */
+export function prepareSnippet(c: StoredChunk): PreparedSnippet | null {
+  if (c.startLine < 1 || c.endLine < c.startLine) return null;
+  if (!chunkMatchesHash(c.content, c.contentHash)) return null;
+  const nl = c.content.indexOf('\n');
+  if (nl < 0) return null;
+  if (c.content.slice(0, nl) !== chunkHeader(c.path, c.symbol)) return null;
+  const lines = c.content.slice(nl + 1).split('\n');
+  const expected = c.endLine - c.startLine + 1;
+  if (lines.length > expected) return null;
+  const truncated = lines.length < expected || c.content.length >= CHUNK_TEXT_MAX_CHARS;
+  if (!truncated) {
+    return { path: c.path, startLine: c.startLine, endLine: c.endLine, content: lines.join('\n') };
+  }
+  const kept = lines.slice(0, -1);
+  if (kept.length === 0) return null;
+  return {
+    path: c.path,
+    startLine: c.startLine,
+    endLine: c.startLine + lines.length - 2,
+    content: kept.join('\n'),
+  };
 }
 
 /**
