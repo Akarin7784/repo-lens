@@ -24,6 +24,10 @@ async function setup() {
   await store.createTask({ jobId, repoId: repo.id, commitSha: sha });
   return { store, data: { jobId, repoId: repo.id, repoUrl: url, commitSha: sha } };
 }
+const progressMessages = (ev: MemoryEventSink) =>
+  ev.events
+    .filter((e) => e.event === 'progress')
+    .map((e) => (e.data as { message?: string }).message);
 const errs = (ev: MemoryEventSink) =>
   ev.events
     .filter((e) => e.event === 'stage_error')
@@ -35,9 +39,16 @@ const errs = (ev: MemoryEventSink) =>
  */
 class MemLockKv implements LockKv {
   m = new Map<string, string>();
+  /** NX 被拒次数(说明调用方确实走了等待路径) */
+  nxRejected = 0;
+  /** 同步点:第一次 NX 被拒时回调一次(例如释放「另一任务」的锁),不依赖任何延迟 */
+  onFirstReject?: () => void;
   constructor(public renewOk = true) {}
   async set(k: string, v: string) {
-    if (this.m.has(k)) return null;
+    if (this.m.has(k)) {
+      if (this.nxRejected++ === 0) this.onFirstReject?.();
+      return null;
+    }
     this.m.set(k, v);
     return 'OK' as const;
   }
@@ -249,8 +260,10 @@ describe('embedding 阶段(T-214)', () => {
     const key = embedLockKey(data.repoId, data.commitSha);
     kv.m.set(key, 'other');
     kv.m.set(`${key}:done`, digest);
+    const pointsBefore = vectorStore.points.size;
     vectorStore.points.delete([...vectorStore.points.keys()][0]!);
-    setTimeout(() => kv.m.delete(key), 50);
+    // 同步点:等待者第一次抢锁被拒之后才释放,保证走「等待 → 复用核对」路径,与流水线快慢无关
+    kv.onFirstReject = () => kv.m.delete(key);
     await store.createTask({
       jobId: `${data.jobId}-w`,
       repoId: data.repoId,
@@ -268,5 +281,48 @@ describe('embedding 阶段(T-214)', () => {
         message: expect.stringContaining('复用校验失败'),
       },
     ]);
+    expect(kv.nxRejected).toBeGreaterThanOrEqual(1);
+    expect(progressMessages(events)).toContain('等待同 commit 的另一任务完成向量化');
+    // 没有自己拿锁重建(ran:false):缺的那个点没被补回,完成标记仍是持有者写的
+    expect(vectorStore.points.size).toBe(pointsBefore - 1);
+    expect(kv.m.get(`${key}:done`)).toBe(digest);
+  });
+
+  it('等待者到达时锁已释放:自己拿锁重建,补齐点数,无报错', async () => {
+    const { store, data } = await setup();
+    const vectorStore = new MemoryVectorStore();
+    const deps = {
+      store,
+      config: testConfig(),
+      embedder: new FakeEmbedder(),
+      vectorStore,
+      allowFileProtocol: true,
+    };
+    await runPipeline(data, { ...deps, events: new MemoryEventSink() });
+    const digest = (await store.getTask(data.jobId))?.stats.embeddingDigest as string;
+    const total = vectorStore.points.size;
+    // 另一任务已完成并释放锁(只留完成标记),但向量库少了一个点
+    const kv = new MemLockKv();
+    const key = embedLockKey(data.repoId, data.commitSha);
+    kv.m.set(`${key}:done`, digest);
+    vectorStore.points.delete([...vectorStore.points.keys()][0]!);
+    await store.createTask({
+      jobId: `${data.jobId}-w`,
+      repoId: data.repoId,
+      commitSha: data.commitSha,
+    });
+    const events = new MemoryEventSink();
+    await runPipeline(
+      { ...data, jobId: `${data.jobId}-w` },
+      { ...deps, events, lockKv: kv, lockPollMs: 20 },
+    );
+    expect(errs(events)).toEqual([]);
+    expect(kv.nxRejected).toBe(0);
+    expect(progressMessages(events)).not.toContain('等待同 commit 的另一任务完成向量化');
+    expect(vectorStore.points.size).toBe(total);
+    expect(kv.m.has(key)).toBe(false);
+    expect(kv.m.get(`${key}:done`)).toBe(digest);
+    const t = await store.getTask(`${data.jobId}-w`);
+    expect(t?.stats.embeddingStatus).toBe('ready');
   });
 });
