@@ -9,4 +9,19 @@ export {
   type LlmKv,
   type UsageSink,
 } from './llm/gateway.js';
-export { readLlmConfig, createLlmClient, type LlmConfig } from './llm/config.js';
+export {
+  readLlmConfig,
+  createLlmClient,
+  LLM_PROVIDERS,
+  DEEPSEEK_DEFAULT_MODEL,
+  type LlmConfig,
+  type LlmProvider,
+} from './llm/config.js';
+export { DeepSeekClient, LlmHttpError, DEEPSEEK_DEFAULT_BASE_URL } from './llm/deepseek.js';
+export {
+  BreakerClient,
+  CircuitOpenError,
+  BREAKER_FAILURES,
+  BREAKER_OPEN_S,
+  type BreakerKv,
+} from './llm/breaker.js';

@@ -458,8 +458,16 @@ T-210 已实现的部分（不依赖 D1）：
 - 缓存：`llm:{sha256(model + messages + maxTokens/temperature/json)}`，TTL 30d；命中不查预算、不计费，记一条 `cache_hit=1` 的 `llm_usage`。
 - 预算：Redis 计数 `llm:spend:day:{yyyyMMdd UTC}`（TTL 2d）与 `llm:spend:task:{taskId}`（TTL 7d），单位 micro-USD；调用前检查、调用后 INCRBY，并发时最多超出（并发数 − 1）次调用的花费。超限抛 `BUDGET_EXCEEDED`（scope = daily / task），不调用模型、不写 `llm_usage`。
 - 记账：每次调用写 `llm_usage`；费用按价格表（每百万 token 美元）换算成 micro-USD 并向上取整；不在价格表里的模型拒绝调用。模型失败写 `ok=0` 并抛 `LLM_UNAVAILABLE`，重试与规则降级由调用方（T-211，D6）负责。
-- `FakeLlm`：确定性输出、不联网、不需要 key；`LLM_PROVIDER` 目前只接受 `fake`。
-- D1 已决 DeepSeek(见 `docs/WEEK2_PLAN.md` D1),真实客户端为 T-210b。待做：真实 OpenAI 兼容客户端、`cb:llm:{provider}` 连续失败熔断、备用 provider。
+- `FakeLlm`：确定性输出、不联网、不需要 key；`LLM_PROVIDER` 默认 `fake`。
+
+T-210b（DeepSeek，D1）：
+- `DeepSeekClient`：OpenAI 兼容，`POST {DEEPSEEK_BASE_URL}/chat/completions`，`Authorization: Bearer`，非流式，`reasoning_effort: "none"`（关闭思考模式），`json=true` 时发 `response_format: {type: "json_object"}`（prompt 里也必须要求 JSON），默认超时 60s。只在 `LLM_PROVIDER=deepseek` 时启用，缺 `DEEPSEEK_API_KEY` 启动报错；key 只在客户端私有字段和请求头里，不进配置对象、错误信息和日志。
+- 模型变量：保留 `LLM_SUMMARY_MODEL`（file/dir/module 摘要）与 `LLM_CHAT_MODEL`（repo 摘要、问答），默认都为 `deepseek-flash`；fake 下忽略。
+- usage：`tokensIn = prompt_tokens`（= `prompt_cache_hit_tokens + prompt_cache_miss_tokens`），`tokensOut = completion_tokens`，`cachedTokensIn = prompt_cache_hit_tokens`。来源 https://api-docs.deepseek.com/api/create-chat-completion 。
+- 价格（https://api-docs.deepseek.com/quick_start/pricing ，2026-10-29 核对，美元/百万 token）：`deepseek-flash` 高峰价缓存命中输入 0.006、未命中输入 0.30、输出 1.2；官方非高峰时段减半。记账一律按高峰价（偏保守，记账 ≥ 实际扣费）。费用 = 未命中输入×未命中价 + 命中输入×命中价 + 输出×输出价，向上取整到 micro-USD。
+- 熔断 `BreakerClient`：`cb:llm:{provider}:fails` 记连续失败（成功清零），达到 5 次写 `cb:llm:{provider}`（EX 60），打开期间直接抛 `CircuitOpenError`，网关按 `LLM_UNAVAILABLE` 处理（写 `ok=0`），60s 后自动放行下一次调用。
+- 手动冒烟：`LLM_PROVIDER=deepseek node scripts/llm-smoke.mjs`（需先 build agent），只打印回复长度、usage 和折算费用，不打印 key；CI 不跑。
+- 待做：备用 provider（§10.4）。embedding：DeepSeek 官方 API 文档没有 embedding 接口，型号、维度、价格均未确认，供应商仍按 D4 另定。
 
 ---
 

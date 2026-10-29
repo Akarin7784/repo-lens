@@ -120,18 +120,28 @@ export class LlmGateway {
       });
     }
 
-    const cost = costMicroUsd(price, res.usage.tokensIn, res.usage.tokensOut);
+    // 按真实 usage 记账;缓存命中的输入 token(provider 侧上下文缓存)按缓存价计
+    const cost = costMicroUsd(
+      price,
+      res.usage.tokensIn,
+      res.usage.tokensOut,
+      res.usage.cachedTokensIn ?? 0,
+    );
     await this.addSpend(cost, taskId);
     await this.o.usage.insertLlmUsage({
       ...owner,
-      ...res.usage,
+      tokensIn: res.usage.tokensIn,
+      tokensOut: res.usage.tokensOut,
       costMicroUsd: cost,
       cacheHit: false,
       ok: true,
     });
     await this.o.kv.set(
       cacheKey,
-      JSON.stringify({ text: res.text, usage: res.usage }),
+      JSON.stringify({
+        text: res.text,
+        usage: { tokensIn: res.usage.tokensIn, tokensOut: res.usage.tokensOut },
+      }),
       'EX',
       LLM_CACHE_TTL_S,
     );

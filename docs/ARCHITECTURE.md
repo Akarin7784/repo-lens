@@ -422,11 +422,14 @@ volumes: { repos: {}, mysql: {}, qdrant: {} }
 |---|---|---|
 | `DATABASE_URL` | `mysql://root:pw@mysql:3306/repolens` | MySQL |
 | `REDIS_URL` | `redis://redis:6379` | Redis |
-| `LLM_BASE_URL` / `LLM_API_KEY` | `https://api.openai.com/v1` | OpenAI 兼容 |
-| `LLM_CHAT_MODEL` / `LLM_SUMMARY_MODEL` | `gpt-4o` / `gpt-4o-mini` | 问答/摘要模型 |
-| `EMBEDDING_MODEL` | `text-embedding-3-small` | 向量 |
+| `LLM_PROVIDER` | `fake`(默认)/ `deepseek` | LLM 供应商;fake 不联网、不需要 key |
+| `DEEPSEEK_API_KEY` | (只放本地 `.env`) | `LLM_PROVIDER=deepseek` 时必填,不得提交、打印或写日志 |
+| `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` | OpenAI 兼容 base URL,请求 `{base}/chat/completions` |
+| `LLM_CHAT_MODEL` / `LLM_SUMMARY_MODEL` | `deepseek-flash` / `deepseek-flash` | 问答与 repo 摘要 / file·dir·module 摘要模型;只在 deepseek 下读取,必须在价格表里 |
+| `LLM_TASK_BUDGET_CENTS` | `30` | 单次分析任务预算 |
+| `EMBEDDING_MODEL` | (空) | 向量;供应商待 D4,DeepSeek 官方文档无 embedding 接口,当前代码未读取 |
 
-> 供应商已定为 DeepSeek,embedding 供应商待定,变量以 `docs/WEEK2_PLAN.md` D1/D4 和 `.env.example` 为准,上表 OpenAI 示例值仅作历史参考。
+> 原 `LLM_BASE_URL` / `LLM_API_KEY`(OpenAI 示例)已由 T-210b 改为 `DEEPSEEK_BASE_URL` / `DEEPSEEK_API_KEY`;以后若接第二家 provider,按 `{PROVIDER}_BASE_URL` / `{PROVIDER}_API_KEY` 命名。
 | `GITHUB_TOKEN` | 只读 PAT(可选) | 提高 API 限额 |
 | `MAX_REPO_MB` / `MAX_FILES` | `300` / `5000` | 仓库限制 |
 | `DAILY_LLM_BUDGET_CENTS` | `500` | 每日预算熔断 |
