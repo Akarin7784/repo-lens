@@ -17,7 +17,13 @@ export {
   type LlmConfig,
   type LlmProvider,
 } from './llm/config.js';
-export { DeepSeekClient, LlmHttpError, DEEPSEEK_DEFAULT_BASE_URL } from './llm/deepseek.js';
+export {
+  DeepSeekClient,
+  LlmHttpError,
+  LlmStreamError,
+  DEEPSEEK_DEFAULT_BASE_URL,
+  DEEPSEEK_STREAM_IDLE_DEFAULT_MS,
+} from './llm/deepseek.js';
 export {
   BreakerClient,
   CircuitOpenError,

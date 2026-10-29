@@ -39,8 +39,11 @@ export interface LlmCallResult {
 /**
  * 流式输出的一个事件:`text` 为正文增量;`usage` 为服务商返回的用量,只在流正常结束时出现一次(最后一个事件)。
  * 没有 `usage` 就结束的流视为上游中途断流。
+ * `truncated: true` 表示输出因 max_tokens 被截断(OpenAI 兼容的 finish_reason: "length"),
+ * 正文到此为止但流本身正常结束;不给或 false 表示正常结束。
  */
-export type LlmStreamEvent = { type: 'text'; text: string } | { type: 'usage'; usage: LlmUsage };
+export type LlmStreamEvent =
+  { type: 'text'; text: string } | { type: 'usage'; usage: LlmUsage; truncated?: boolean };
 
 /** 底层模型客户端:FakeLlm(默认)与 DeepSeekClient(OpenAI 兼容) */
 export interface LlmClient {
@@ -48,7 +51,7 @@ export interface LlmClient {
   call(req: LlmCall): Promise<LlmCallResult>;
   /**
    * 可选:流式调用。被 `req.signal` 取消时应中止底层请求并抛出(调用方据 signal.aborted 判定为用户中止)。
-   * 未实现的客户端(目前 DeepSeekClient,见 P7)不提供此方法。
+   * 未实现的客户端不提供此方法。
    */
   stream?(req: LlmCall): AsyncIterable<LlmStreamEvent>;
 }
@@ -66,6 +69,8 @@ export interface LlmResult extends LlmCallResult {
   /** 本次实际花费;缓存命中为 0 */
   costMicroUsd: number;
   cacheHit: boolean;
+  /** 仅 LlmGateway.stream:输出因 max_tokens 被截断(finish_reason: length)时为 true */
+  truncated?: boolean;
 }
 
 /** LlmGateway.stream 的正文增量 */

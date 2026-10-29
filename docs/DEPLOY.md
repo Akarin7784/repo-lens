@@ -194,6 +194,7 @@ volumes: { repos: {}, mysql: {}, qdrant: {}, caddy_data: {} }
 | LLM_PROVIDER | deepseek | 默认 fake |
 | DEEPSEEK_API_KEY | 环境文件注入 | 必填 |
 | DEEPSEEK_BASE_URL | https://api.deepseek.com | 默认 |
+| DEEPSEEK_STREAM_FIRST_CHUNK_TIMEOUT_MS / DEEPSEEK_STREAM_IDLE_TIMEOUT_MS | 20000 / 20000 | 默认;问答流式首包与 chunk 间空闲超时(毫秒,1–60000,非法值启动报错) |
 | LLM_CHAT_MODEL / LLM_SUMMARY_MODEL | deepseek-flash | 默认 |
 | EMBEDDING_PROVIDER | dashscope | 默认 local |
 | EMBEDDER | 保留(仅 local 读取,待确认) | .env.example |

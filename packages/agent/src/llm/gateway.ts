@@ -189,7 +189,7 @@ export class LlmGateway {
    * - 建连失败 / 中途断流 / 没给 usage 就结束:写 ok=0 的 llm_usage,抛 LlmError('LLM_UNAVAILABLE')。
    *   已经吐出的正文不收回,由调用方决定怎么收尾。熔断计数由 BreakerClient 负责。
    * - 用户中止(signal.aborted):写 ok=0、不计花费,抛 LlmError('LLM_UNAVAILABLE', 'LLM 调用已取消')。
-   * - 正常结束时 generator 的返回值是 LlmResult(text 为全文)。
+   * - 正常结束时 generator 的返回值是 LlmResult(text 为全文);输出被 max_tokens 截断时照常记账,返回值带 `truncated: true`。
    */
   async *stream(req: LlmRequest): AsyncGenerator<LlmStreamChunk, LlmResult> {
     const { purpose, repoId, taskId, sessionId, ...call } = req;
@@ -215,10 +215,13 @@ export class LlmGateway {
 
     let text = '';
     let usage: LlmUsage | undefined;
+    let truncated = false;
     try {
       for await (const ev of this.o.client.stream(call)) {
-        if (ev.type === 'usage') usage = ev.usage;
-        else if (ev.text) {
+        if (ev.type === 'usage') {
+          usage = ev.usage;
+          truncated = ev.truncated === true;
+        } else if (ev.text) {
           text += ev.text;
           yield { text: ev.text };
         }
@@ -246,7 +249,14 @@ export class LlmGateway {
       cacheHit: false,
       ok: true,
     });
-    return { text, usage, model: call.model, costMicroUsd: cost, cacheHit: false };
+    return {
+      text,
+      usage,
+      model: call.model,
+      costMicroUsd: cost,
+      cacheHit: false,
+      ...(truncated ? { truncated: true } : {}),
+    };
   }
 
   private async checkBudget(taskId?: number) {
