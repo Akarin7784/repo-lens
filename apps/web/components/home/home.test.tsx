@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ApiClient } from '../../lib/api/client';
 import { ApiRequestError } from '../../lib/api/errors';
 import { DemoRepoList } from './DemoRepoList';
+import { RepoUrlInput } from './RepoUrlInput';
 import { analysisHref, parseRepoInput } from './useSubmitRepo';
 
 const push = vi.fn();
@@ -46,5 +47,12 @@ describe('首页提交', () => {
     render(<DemoRepoList api={{ createRepo } as unknown as ApiClient} />);
     fireEvent.click(screen.getByRole('button', { name: 'honojs/hono' }));
     expect((await screen.findByRole('status')).textContent).toContain('提交太频繁了');
+  });
+
+  it('输入框下方显示公开仓库与第三方模型提示', () => {
+    render(<RepoUrlInput api={{} as unknown as ApiClient} />);
+    const notice = screen.getByText('只接受公开仓库。源码内容会发送给第三方模型服务。');
+    expect(notice).toHaveClass('text-muted');
+    expect(screen.getByLabelText('GitHub 仓库地址')).toHaveAttribute('aria-describedby', notice.id);
   });
 });
