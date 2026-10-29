@@ -430,6 +430,20 @@ type GraphData = { nodes: GraphNode[] /* ≤300，id 唯一 */; edges: GraphEdge
 
 前端新增、总方案未提及但不影响接口的行为：只有前端 20 秒兜底超时一项。
 
+### 7.5 真实接口接入（T-007）
+
+- **API 地址**：`NEXT_PUBLIC_API_BASE_URL`（构建期注入浏览器）；为空时同源请求 `/api/*`。后端未开 CORS，同源部署时设 `API_PROXY_TARGET`，由 Next rewrites 把 `/api/:path*` 转发到 api；`next.config.mjs` 设 `compress:false`，避免 gzip 缓冲 SSE。
+- **部署（compose）**：`apps/web/Dockerfile` 以 `ARG API_PROXY_TARGET=http://api:4000` 在构建期注入，`docker-compose.yml` 的 web 构建通过 `args` 传入；`turbo.json` 的 build 任务声明了 `API_PROXY_TARGET` / `NEXT_PUBLIC_API_BASE_URL`（turbo 2 严格 env 模式否则会过滤掉，rewrites 为空）。运行时变量对 rewrites 无效。
+- **直连另一个域名**：若改用 `NEXT_PUBLIC_API_BASE_URL` 指向别的域名，api 必须开 CORS，并通过 `Access-Control-Expose-Headers: x-graph-truncated` 暴露该头，否则浏览器读不到截断标记、截断提示会丢失。
+- **调用**：`lib/api/client.ts` 的 `createRepo`（`POST /api/repos`）、`getRepoStatus`（`GET /api/repos/:id`）、`getGraph`（`GET /api/repos/:id/graph`）、`jobEventsUrl`。所有响应都先过 `@repolens/shared` schema（`CreateRepoResponseSchema` / `RepoStatusSchema` / `GraphDataSchema` / `ApiErrorSchema` / `JobEventSchema`），不合规按 `INVALID_RESPONSE` 处理。
+- **图接口参数**：只带 `parentId`（根层不带任何参数）。后端对其它参数（缓存破坏 `_t=`、depth、level 等）一律返回 400，前端不得追加。
+- **流程**：首页提交 → `/a/:repoId?job=…&repo=…` → 订阅 SSE `/api/jobs/:id/events`，进度面板按阶段（排队 / 克隆 / 扫描 / 解析 / 依赖图已生成）显示进度条与后端 message，进度只前进；`stage_error` 在对应阶段标 ✕ 并以 `role=alert` 显示；`graph_ready` 后取根层（module 层），双击 / ▸ 按 `parentId` 懒加载下一层；`done` 后关闭连接。直接打开链接（无 `job`）时先 `GET /api/repos/:id` 判断已完成、进行中或失败。
+- **边界节点**：展开 P 的结果里 `node.parentId !== P` 的节点是聚合边的外端（#12），只当作已存在节点的占位：不加入状态、不渲染进 P、折叠 P 时不受影响；它们的边照常按可见祖先上卷。
+- **分层边（#16 聚合边）**：每条边归属返回它的那一层（根层或某个 P）。只有根层和「已展开且可见」的层参与渲染；一端是已展开容器的边丢弃（由下一层的细粒度边/聚合边接替），两端都已展开的容器↔容器边保留。折叠 P 后其层的边留在缓存里不渲染，再次展开不重新请求。聚合边（`aggregated: true`）按 `weight` 加粗，weight>1 时显示 `×N`，悬停（SVG `<title>`）显示「聚合边:N 条依赖」；图例有「聚合边(越粗越多) ×N 聚合次数」。
+- **截断提示**：`x-graph-truncated: true` 只表示该层 P 的子节点被截到 `MAX_NODES_PER_RESPONSE`(300)。前端记录每层的标记，当前可见层中有截断时以 `role=note` 显示「「P」的子节点超过 300 个,只显示了前 300 个。」（根层显示为「顶层」），折叠后消失。
+- **错误提示**：shared 的 8 个错误码（含 `BAD_REQUEST`：非正整数 repo id、非法图查询）和客户端的 `NETWORK` / `INVALID_RESPONSE` 映射为中文（`lib/api/errors.ts`），后端 message 作为括注附在后面。repo id 不在前端拦截，由后端 400 给出提示。
+- **示例数据**：`lib/fixtures` 只用于测试，页面不再使用，也不再显示「示例数据」标签。
+
 ## 8. 视觉规范
 
 ### 8.1 风格定位
@@ -490,7 +504,7 @@ Tailwind 映射为 `bg-bg / bg-panel / text-fg / text-muted / border-line / bg-a
 边（`<WeightedEdge>`，smoothstep + 闭合小箭头，颜色 `--edge`）：
 - 原始边：1.25px 实线；`kind: type-only` 更淡的圆点线（`1 5`，透明度 0.55），`dynamic` 短虚线（`6 4`）。
 - `aggregated:true`：线宽 `1 + 1.5·log2(weight)`，上限 8px，不透明度 75%；weight>1 时中点显示 `×weight` 小胶囊。
-- 循环依赖：`--accent-strong` 长虚线（`8 4`，比普通边粗 0.75px，对画布 ≥3:1：浅色 4.35、深色 6.37）+ 边中点 `↻` 小标记；优先级高于 kind 线型。数据来自 `meta.cycles`（环上 file id 按依赖方向排列），原始边上卷到可见层级后判断。图区左下图例列出「依赖 / 仅类型引用 / 循环依赖」，状态条显示可见环边数。T-004 只用 hono 示例 fixture 里人为加的一个环验证，真实环数据随 T-003 接入。
+- 循环依赖：`--accent-strong` 长虚线（`8 4`，比普通边粗 0.75px，对画布 ≥3:1：浅色 4.35、深色 6.37）+ 边中点 `↻` 小标记；优先级高于 kind 线型。数据来自 `meta.cycles`：每项是一个强连通分量（Tarjan SCC）投影到该层可见节点后的成员集合，**不是有序路径**（hono `d:src/jsx` 层有 4 成员分量）。判定规则：原始边上卷到可见层级后，两端落在同一分量里即为环边（T-007 起；T-004 曾按有序路径判断）。各层切片的 cycles 去重累积。图区左下图例列出「依赖 / 仅类型引用 / 循环依赖」，状态条显示可见环边数。
 
 高亮：
 - 选中：2px `--accent` 描边 + `--cite-bg` 填充。
