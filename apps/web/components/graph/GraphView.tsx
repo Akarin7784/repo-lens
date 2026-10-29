@@ -46,6 +46,12 @@ import { ToggleContext } from './ToggleContext';
 import { GraphSearch } from './GraphSearch';
 import { HoverContext } from './HoverContext';
 import { createHoverController, createHoverStore } from '../../lib/graph/hover';
+import {
+  absolutePosition,
+  makeAnchor,
+  viewportAfterLayout,
+  type Anchor,
+} from '../../lib/graph/viewport';
 
 export type GraphViewProps = {
   source: GraphSource;
@@ -111,7 +117,9 @@ function Inner({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const engineRef = useRef<Promise<LayoutEngine> | null>(null);
   const layoutFile = useRef<LayoutFile | null>(null);
-  const { fitView } = useReactFlow();
+  const { fitView, getViewport, setViewport, getNodes } = useReactFlow();
+  // T-239:用户展开/收起时的锚点(被点击节点的屏幕位置 + 当时缩放);布局完成后据此平移,不 fitView
+  const anchorRef = useRef<Anchor | null>(null);
 
   // meta.suggestedFocus:首次加载时自动逐层展开;用户手动展开/折叠后置空,不再自动展开
   const autoFocus = useRef<string | null>(null);
@@ -195,9 +203,11 @@ function Inner({
   const userToggle = useCallback(
     (id: string) => {
       autoFocus.current = null;
+      const abs = absolutePosition(getNodes(), id);
+      anchorRef.current = abs ? makeAnchor(id, abs, getViewport()) : null;
       return toggle(id);
     },
-    [toggle],
+    [toggle, getNodes, getViewport],
   );
 
   useEffect(() => {
@@ -267,29 +277,33 @@ function Inner({
         if (file && state.expanded.size === 0)
           for (const [id, [x, y]] of Object.entries(file.positions))
             if (layout.positions.has(id)) layout.positions.set(id, { x, y });
-        setFlow(
-          toFlow(
-            derived.nodes,
-            derived.edges,
-            layout,
-            state.expanded,
-            countChildren(state.nodes),
-            derived.cycleKeys,
-          ),
+        const next = toFlow(
+          derived.nodes,
+          derived.edges,
+          layout,
+          state.expanded,
+          countChildren(state.nodes),
+          derived.cycleKeys,
         );
+        setFlow(next);
         const nCycle = derived.edges.filter((e) =>
           derived.cycleKeys.has(`${e.source}->${e.target}`),
         ).length;
         setStatus(
           `当前显示 ${derived.nodes.length} 节点 / ${derived.edges.length} 条边${nCycle ? ` · 环边 ${nCycle}` : ''} · 布局 ${Math.round(performance.now() - t0)} ms`,
         );
-        requestAnimationFrame(() => fitView({ padding: 0.12, duration: 300 }));
+        // T-239:用户展开/收起 → 保持缩放,只平移让被点击节点留在原屏幕位置;
+        // 初次加载 / 自动下探 / 全部收起 / 锚点节点已不在图中 → 仍整图 fitView
+        const v = viewportAfterLayout(anchorRef.current, next.nodes);
+        anchorRef.current = null;
+        if (v === 'fit') requestAnimationFrame(() => fitView({ padding: 0.12, duration: 300 }));
+        else setViewport(v);
       })
       .catch((e: unknown) => alive && setError(`布局失败:${String(e)}`));
     return () => {
       alive = false;
     };
-  }, [derived, state.expanded, state.nodes, engine, fitView]);
+  }, [derived, state.expanded, state.nodes, engine, fitView, setViewport]);
 
   const view = useMemo(() => highlightSelection(flow, selectedId), [flow, selectedId]);
 
@@ -485,6 +499,7 @@ function Inner({
               className="rounded-control border border-line bg-panel px-3 py-1.5 text-[13px] text-fg shadow-soft hover:border-accent-strong"
               onClick={() => {
                 autoFocus.current = null;
+                anchorRef.current = null;
                 dispatch({ type: 'collapseAll' });
               }}
             >

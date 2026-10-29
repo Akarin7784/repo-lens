@@ -202,3 +202,53 @@ describe('<GraphView> 折叠后清除选中(T-222d)', () => {
     await waitFor(() => expect(calls.at(-1)).toBeNull());
   });
 });
+
+// T-239:展开/收起不重置视图。jsdom 量不到节点尺寸,fitView 在 jsdom 下不改变视口,
+// 因此这里断言「缩放保持 + 被点击节点屏幕位置不变」;无锚点走 fit 的分支由 viewport.test.ts 覆盖
+describe('<GraphView> 展开/收起保持视图(T-239)', () => {
+  const parseVp = (c: HTMLElement) => {
+    const t = (c.querySelector('.react-flow__viewport') as HTMLElement).style.transform;
+    const m = /translate\(([^,]+)px,\s*([^)]+)px\)\s*scale\(([^)]+)\)/.exec(t)!;
+    return { x: Number(m[1]), y: Number(m[2]), zoom: Number(m[3]) };
+  };
+  const nodePos = (c: HTMLElement, id: string) => {
+    const el = c
+      .querySelector(`[data-testid="node-${id}"]`)!
+      .closest('.react-flow__node') as HTMLElement;
+    const m = /translate\(([^,]+)px,\s*([^)]+)px\)/.exec(el.style.transform)!;
+    return { x: Number(m[1]), y: Number(m[2]) };
+  };
+  const screenPos = (c: HTMLElement, id: string) => {
+    const v = parseVp(c);
+    const p = nodePos(c, id);
+    return { x: p.x * v.zoom + v.x, y: p.y * v.zoom + v.y };
+  };
+
+  it('用户缩放后展开 middleware:缩放不变、middleware 屏幕位置不变;再收起同样保持', async () => {
+    const { container } = await mount();
+    await screen.findByRole('button', { name: '展开 middleware' });
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('当前显示'));
+    fireEvent.click(screen.getByRole('button', { name: 'Zoom In' }));
+    await waitFor(() => expect(parseVp(container).zoom).not.toBe(1));
+    const zoom = parseVp(container).zoom;
+    const before = screenPos(container, 'm:src/middleware');
+
+    fireEvent.click(screen.getByRole('button', { name: '展开 middleware' }));
+    await waitFor(() => expect(container.querySelector(mwFile)).not.toBeNull());
+    await waitFor(() => {
+      expect(parseVp(container).zoom).toBe(zoom);
+      const after = screenPos(container, 'm:src/middleware');
+      expect(after.x).toBeCloseTo(before.x, 1);
+      expect(after.y).toBeCloseTo(before.y, 1);
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: '收起 middleware' }));
+    await waitFor(() => expect(container.querySelector(mwFile)).toBeNull());
+    await waitFor(() => {
+      expect(parseVp(container).zoom).toBe(zoom);
+      const after = screenPos(container, 'm:src/middleware');
+      expect(after.x).toBeCloseTo(before.x, 1);
+      expect(after.y).toBeCloseTo(before.y, 1);
+    });
+  });
+});
