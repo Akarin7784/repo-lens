@@ -85,7 +85,7 @@ flowchart LR
 | | madge(校验) | 仅离线交叉验证依赖与循环检测,不进主路径 |
 | 聚类 | 目录前缀分组 + Louvain(graphology-communities-louvain) | 目录结构为主保证可解释,社区算法修正跨目录耦合 |
 | LLM | OpenAI 兼容接口(OpenAI / DeepSeek / 通义),Vercel AI SDK | 统一 function calling 与流式;模型可配,摘要用便宜模型,问答用强模型 |
-| Embedding | `text-embedding-3-small`(1536 维)或 bge-m3 本地 | 成本低;本地方案避免外部费用 |
+| Embedding | 本地 ONNX `Xenova/multilingual-e5-small`(384 维,fp32;D4 定稿,T-214) | 无外部费用、代码不出机;只在 worker 内跑,峰值内存约 2.5 GB |
 | 图可视化 | **React Flow + elkjs** | React 原生、自定义节点(显示摘要/徽标)方便;elk 分层布局适合依赖图。Cytoscape 适合 >2000 节点,作为文件级大图降级 |
 | 流式 | SSE(`text/event-stream`) | 单向推送足够,穿透代理简单,比 WebSocket 轻 |
 | 校验 | zod | 前后端共享 DTO,LLM 结构化输出校验 |
@@ -357,7 +357,7 @@ CREATE TABLE llm_usage (
 ```
 > `code_chunk` 为本文档新增(后端文档未定义),用于 Qdrant point 映射和 MySQL FULLTEXT 关键词回退,待后端确认。
 
-Qdrant collection `code_chunks`:向量维度随 `EMBEDDING_MODEL`(text-embedding-3-small 为 1536,cosine);point id = `code_chunk.qdrant_point_id`;payload `{repo_id, commit_sha, path, symbol, start_line, end_line, content_hash}`,**`repo_id` 作为 filter 字段**并建 payload index(`path` 同建)。重新分析时按 `repo_id`+`commit_sha` 过滤删除旧 points。
+Qdrant collection `code_chunks`:命名向量 `dense`,384 维(multilingual-e5-small),cosine;point id = `code_chunk.qdrant_point_id`;payload `{repo_id, commit_sha, path, symbol, start_line, end_line, content_hash}`,**`repo_id` 作为 filter 字段**并建 payload index(`path` 同建)。重新分析时按 `repo_id`+`commit_sha` 过滤删除旧 points。
 
 ### 5.4 Redis key 设计
 | Key | 类型 | TTL | 用途 |
@@ -369,7 +369,7 @@ Qdrant collection `code_chunks`:向量维度随 `EMBEDDING_MODEL`(text-embedding
 | `graph:v{N}:{repoId}:{commitSha}:{parentId\|root}`(N=投影版本) | string(JSON gzip) | 7d | 图数据缓存(本文档) |
 | `lock:repo:{repoId}:{commit}` | string NX | 30m | 去重锁,同 commit 不重复分析(以后端为准) |
 | `budget:day:{yyyyMMdd}`、`budget:repo:{repoId}` | INCRBY(微美元) | 2d | LLM 预算熔断(以后端为准) |
-| `emb:{model}:{contentHash}` | string(base64 float32) | 30d | embedding 缓存,避免重复计费(向量本体以 Qdrant 为准) |
+| `emb:{model}:{role}:{contentHash}` | string(base64 float32) | 30d | embedding 缓存;`role` 为 `query`/`passage`(e5 前缀不同,同一文本两种向量不同),向量本体以 Qdrant 为准 |
 
 ### 5.5 MCP Server tools
 ```jsonc

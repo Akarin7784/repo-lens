@@ -3,6 +3,9 @@
 set -euo pipefail
 TIMEOUT="${SMOKE_TIMEOUT:-120}"
 [ -f .env ] || cp .env.example .env
+# CI 不下载 embedding 模型(约 490 MB),worker 用确定性假向量
+export EMBEDDING_MODEL_DOWNLOAD=0
+sed -i 's/^EMBEDDER=.*/EMBEDDER=fake/' .env
 
 # 失败时打印关键服务日志尾部,便于排错(成功时不打印;compose down 由 workflow 的 always 步骤负责)
 on_fail() {
@@ -81,8 +84,20 @@ done
 # 镜像内 tree-sitter 0.22.4 原生绑定:用 TypeScriptAnalyzer 真实解析一小段 TS,失败即 CI 失败
 docker compose run --rm --no-deps -T worker node scripts/smoke-analyzer.mjs
 
+# T-214:worker 镜像换成 glibc 后,onnxruntime-node 原生绑定能加载(CI 不下载模型,只验证运行时)
+docker compose run --rm --no-deps -T -w /app/packages/rag worker \
+  node -e "import('@huggingface/transformers').then((t)=>console.log('SMOKE onnx_runtime=ok transformers='+t.env.version))"
+
 # 真实业务链路:提交 zustand 固定 commit → SSE 等 graph_ready/done → 校验图接口
 node scripts/ci-smoke-analyze.mjs
+
+# T-214:分析完成后 Qdrant collection code_chunks 有点(CI 为假向量);api-key 从 .env 读,只走请求头不打印
+qkey=$(grep -E '^QDRANT_API_KEY=' .env | cut -d= -f2-)
+qcount=$(curl -fsS -X POST -H "api-key: ${qkey}" -H 'content-type: application/json' \
+  -d '{"exact":true}' http://127.0.0.1:6333/collections/code_chunks/points/count |
+  node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(JSON.parse(s).result.count))")
+echo "SMOKE qdrant_points=$qcount"
+[ "$qcount" -gt 0 ] || { echo "SMOKE FAIL: code_chunks 没有向量"; exit 1; }
 
 # inCycle 与图投影同源:hono 固定 commit 的已知环,/graph 边与 /nodes 都要 inCycle:true
 node scripts/ci-smoke-cycles.mjs

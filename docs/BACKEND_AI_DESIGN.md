@@ -241,7 +241,7 @@ CREATE TABLE llm_usage (
 | LLM 响应缓存 | `llm:{sha256(model+prompt)}` | String，TTL 30d |
 | LLM 日花费 | `llm:spend:day:{yyyyMMdd}`（UTC） | String 计数（micro-USD），TTL 2d |
 | LLM 任务花费 | `llm:spend:task:{taskId}` | String 计数（micro-USD），TTL 7d |
-| Embedding 缓存 | `emb:{model}:{contentHash}` | String(base64 float32)，TTL 30d |
+| Embedding 缓存 | `emb:{model}:{role}:{contentHash}`(role = query / passage) | String(base64 float32)，TTL 30d |
 | 限流 | `rl:ip:{ip}:{yyyyMMddHH}` | INCR，TTL 1h;**只计真正入队的提交**(新任务或 failed 重试);同仓库同 commit 已有 done/queued/running 任务时直接复用,不计数(T-003d);被拒绝或出错的提交也不计。每来源每小时上限默认 5,环境变量 `RATE_LIMIT_NEW_REPOS_PER_HOUR`。超限返回 429 `RATE_LIMITED`,不建任务 |
 | 提交总量(宽松) | `rl:sub:{ip}:{yyyyMMddHH}` | INCR,TTL 1h;`POST /api/repos` 的**每一次**提交都计(包括被拒绝的 400/404/413/422、出错的 500、复用的 200,T-003f),同一来源每小时上限默认 60,环境变量 `RATE_LIMIT_SUBMITS_PER_HOUR`(复用不占新仓库额度,但计入这里,是便宜的防刷兜底),超限返回 429 `RATE_LIMITED`。这个检查在请求最前面做,被它拦下的请求不建任务,也不占新任务名额。被拒绝的提交不进入新任务计数;已计数但最终没有入队的提交(并发下别人先建了未失败任务,或建任务/入队抛错)会 DECR 退还 1 次 |
 | 预算 | `budget:day:{yyyyMMdd}`、`budget:repo:{repoId}` | INCRBY(微美元) |
@@ -257,13 +257,13 @@ CREATE TABLE llm_usage (
 
 Collection `code_chunks`（所有仓库共用一个 collection，按 payload 过滤；`repo_id` 建 payload index）：
 ```json
-{ "vectors": {"dense": {"size": 1536, "distance": "Cosine"}},
+{ "vectors": {"dense": {"size": 384, "distance": "Cosine"}},
   "sparse_vectors": {"bm25": {}},
   "payload": {"repo_id":12,"commit":"a1b2c3d","path":"src/db/index.ts","node_id":"f:src/db/index.ts",
               "symbol":"createPool","kind":"function","start_line":10,"end_line":48,
               "lang":"ts","chunk_type":"code|summary","content_hash":"…"} }
 ```
-维度取决于选用的 embedding 模型（1536 是 text-embedding-3-small 的维度，**待验证**最终选型）。稀疏向量 BM25 需要在应用侧生成，或者用 Qdrant 的 IDF modifier，**待验证**；如果不行就退回 MySQL FULLTEXT（ngram parser）做关键词检索。
+维度 384：D4 定稿为本地 ONNX `multilingual-e5-small`（fp32），查询加 `query: `、文档块加 `passage: ` 前缀；模型在 worker 镜像构建时下载，只在 worker 内运行，峰值内存约 2.5 GB（compose 给 worker `mem_limit: 3g`，演示机整机至少 4 GB）。T-214 第一部分只写 `dense`，`sparse_vectors`、`node_id`/`kind`/`lang`/`chunk_type` 等 payload 字段暂不写（检索见第二部分）。稀疏向量 BM25 需要在应用侧生成，或者用 Qdrant 的 IDF modifier，**待验证**；如果不行就退回 MySQL FULLTEXT（ngram parser）做关键词检索。
 
 **`code_chunk` 表（采纳架构师新增的定义，以 `/workspace/architecture/ARCHITECTURE.md` 的 DDL 为准）**：存切块元数据（repo_id、commit_sha、path、symbol、start_line、end_line、content、content_hash、qdrant_point_id），用作 Qdrant point 映射、引用校验时的 `content_hash` 比对来源，以及 MySQL FULLTEXT（ngram）关键词检索的回退。向量只存 Qdrant。重新分析同一个 repo+commit 时先按 `repo_id`+`commit_sha` 删除旧的 chunk 和对应 points。
 

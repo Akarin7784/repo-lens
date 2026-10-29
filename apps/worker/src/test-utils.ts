@@ -1,3 +1,4 @@
+import { readEmbeddingConfig } from '@repolens/rag';
 import { readLlmConfig } from '@repolens/agent';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
@@ -47,6 +48,7 @@ export function testConfig(over: Partial<WorkerConfig> = {}): WorkerConfig {
     parseConcurrency: 4,
     concurrency: 1,
     llm: readLlmConfig({}),
+    embedding: readEmbeddingConfig({}),
     ...over,
   };
 }

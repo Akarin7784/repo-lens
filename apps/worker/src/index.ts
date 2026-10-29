@@ -2,6 +2,13 @@ import { Worker } from 'bullmq';
 import { Redis } from 'ioredis';
 import { DEFAULT_PRICES, LlmGateway, createLlmClient } from '@repolens/agent';
 import { MysqlStore, redisKeys, waitForSchema } from '@repolens/db';
+import {
+  CachedEmbedder,
+  FakeEmbedder,
+  OnnxEmbedder,
+  QdrantVectorStore,
+  type Embedder,
+} from '@repolens/rag';
 import { loadConfig } from './config.js';
 import { RedisEventSink } from './events.js';
 import { ANALYZE_QUEUE, processAnalyzeJob, type AnalyzeJobData } from './queue.js';
@@ -28,6 +35,16 @@ const gateway = new LlmGateway({
   taskBudgetCents: config.llm.taskBudgetCents,
 });
 
+// embedding 只在 worker 里跑(本地 ONNX 峰值约 2.5 GB);未配置 QDRANT_URL 时跳过向量化阶段
+const emb = config.embedding;
+const baseEmbedder: Embedder =
+  emb.provider === 'onnx' ? new OnnxEmbedder(emb.model, emb.modelDir) : new FakeEmbedder();
+const embedder = new CachedEmbedder(baseEmbedder, redis);
+const vectorStore = emb.qdrant ? new QdrantVectorStore(emb.qdrant) : undefined;
+console.log(
+  `[worker] embedder=${emb.provider} model=${emb.model} batch=${emb.batchSize} qdrant=${emb.qdrant ? 'on' : 'off'}`,
+);
+
 async function invalidateGraphCache(repoId: number, commitSha: string) {
   const stream = redis.scanStream({ match: redisKeys.graphPattern(repoId, commitSha), count: 200 });
   for await (const keys of stream as AsyncIterable<string[]>)
@@ -42,6 +59,8 @@ const worker = new Worker<AnalyzeJobData>(
       events,
       config,
       gateway,
+      embedder,
+      vectorStore,
       onGraphPersisted: invalidateGraphCache,
     }),
   { connection: redis.duplicate(), concurrency: config.concurrency },
