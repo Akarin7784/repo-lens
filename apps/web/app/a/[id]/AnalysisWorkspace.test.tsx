@@ -57,6 +57,26 @@ describe('<AnalysisWorkspace>', () => {
     await waitFor(() => expect(api.getGraph).toHaveBeenCalledWith(1, null));
   });
 
+  it('T-224c:进行中横幅渲染进图左上的提示栏容器(与截断提示同一纵向容器),不拦截点击', async () => {
+    const api = fakeApi();
+    render(
+      <AnalysisWorkspace repoId={1} jobId={jobId} api={api} eventSource={(u) => new FakeES(u)} />,
+    );
+    act(() =>
+      FakeES.last!.emit('graph_ready', { jobId, repoId: 1, graphUrl: '/api/repos/1/graph' }),
+    );
+    act(() => FakeES.last!.emit('progress', { jobId, stage: 'summarizing', progress: 61.6 }));
+    const banner = await screen.findByTestId('progress-banner');
+    expect(banner).toHaveTextContent('后续阶段进行中(62%)');
+    const box = screen.getByTestId('graph-top-notices');
+    expect(banner.parentElement).toBe(box);
+    expect(box.className).toContain('flex-col');
+    expect(banner.className).toContain('pointer-events-none');
+    expect(banner.className).not.toContain('absolute');
+    act(() => FakeES.last!.emit('done', { jobId, status: 'done' }));
+    expect(screen.queryByTestId('progress-banner')).toBeNull();
+  });
+
   it('非正整数 repo id → 后端 400 BAD_REQUEST → 中文提示', async () => {
     const api = fakeApi({
       getRepoStatus: vi.fn(async () => {

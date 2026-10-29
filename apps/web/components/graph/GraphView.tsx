@@ -1,6 +1,14 @@
 'use client';
 import { MAX_NODES_PER_RESPONSE, type GraphNode } from '@repolens/shared';
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 import {
   Background,
   BackgroundVariant,
@@ -53,6 +61,11 @@ export type GraphViewProps = {
   jumpRequest?: { id: string; n: number } | null;
   /** 外部请求取消选中(窄屏抽屉的「关闭」):数值变化即触发,0 不触发 */
   clearRequest?: number;
+  /**
+   * T-224c:左上提示栏里排在截断提示之前的内容(工作区传入分析进度横幅)。
+   * 与截断提示放在同一个纵向容器里,彼此不遮挡;容器不拦截点击。
+   */
+  topNotice?: ReactNode;
 };
 
 /** 节点 id 的 POSIX 路径(m:/d:/f: 去前缀) */
@@ -86,6 +99,7 @@ function Inner({
   onSelectionChange,
   jumpRequest,
   clearRequest = 0,
+  topNotice,
 }: GraphViewProps) {
   const [state, dispatch] = useReducer(graphReducer, initialGraphState);
   const [flow, setFlow] = useState<{ nodes: RepoFlowNode[]; edges: RepoFlowEdge[] }>({
@@ -513,16 +527,26 @@ function Inner({
             <Controls showInteractive={false} position="bottom-right" />
           </ReactFlow>
           <Legend />
-          {derived.truncatedLayers.length > 0 && (
+          {/* T-224c:进度横幅与截断提示同在一个纵向容器(搜索框下方,z-10 低于搜索下拉的 z-20),
+              按顺序堆叠、不互相遮挡。容器 pointer-events-none,截断提示自身恢复可交互(可选中文字) */}
+          {(topNotice || derived.truncatedLayers.length > 0) && (
             <div
-              role="note"
-              data-testid="truncated-notice"
-              className="absolute left-3 top-14 z-10 max-w-[420px] rounded-control border border-line bg-panel px-3 py-1.5 text-[12px] text-fg shadow-soft"
+              data-testid="graph-top-notices"
+              className="pointer-events-none absolute left-3 top-14 z-10 flex max-w-[calc(100%-1.5rem)] flex-col items-start gap-2"
             >
-              {derived.truncatedLayers
-                .map((p) => (p === '' ? '顶层' : `「${p.replace(/^[a-z]:/, '')}」`))
-                .join('、')}
-              的子节点超过 {MAX_NODES_PER_RESPONSE} 个,只显示了前 {MAX_NODES_PER_RESPONSE} 个。
+              {topNotice}
+              {derived.truncatedLayers.length > 0 && (
+                <div
+                  role="note"
+                  data-testid="truncated-notice"
+                  className="pointer-events-auto max-w-[420px] rounded-control border border-line bg-panel px-3 py-1.5 text-[12px] text-fg shadow-soft"
+                >
+                  {derived.truncatedLayers
+                    .map((p) => (p === '' ? '顶层' : `「${p.replace(/^[a-z]:/, '')}」`))
+                    .join('、')}
+                  的子节点超过 {MAX_NODES_PER_RESPONSE} 个,只显示了前 {MAX_NODES_PER_RESPONSE} 个。
+                </div>
+              )}
             </div>
           )}
           {/* T-222e:最大宽度给右下缩放按钮(Controls)留出 5rem,超长截断;窄屏没有键盘,不提示 Esc */}
