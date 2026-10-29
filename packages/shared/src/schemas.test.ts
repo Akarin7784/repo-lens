@@ -360,6 +360,29 @@ describe('API DTO', () => {
     ).toBe(false);
     expect(ChatRequestSchema.safeParse({ message: '' }).success).toBe(false);
   });
+  it('ChatRequest 收紧:未知字段、超长、空白字符串都拒绝', () => {
+    // 未知字段(含旧草案里的 question)
+    expect(ChatRequestSchema.safeParse({ message: 'q', question: 'q' }).success).toBe(false);
+    expect(ChatRequestSchema.safeParse({ message: 'q', foo: 1 }).success).toBe(false);
+    // 超长:trim 后 2000 可以,2001 不行
+    expect(ChatRequestSchema.safeParse({ message: 'a'.repeat(2000) }).success).toBe(true);
+    expect(ChatRequestSchema.safeParse({ message: 'a'.repeat(2001) }).success).toBe(false);
+    expect(ChatRequestSchema.safeParse({ message: `  ${'a'.repeat(2000)}  ` }).success).toBe(true);
+    const ids = (n: number) => Array.from({ length: n }, (_, i) => `f:src/f${i}.ts`);
+    expect(ChatRequestSchema.safeParse({ message: 'q', contextNodeIds: ids(20) }).success).toBe(
+      true,
+    );
+    expect(ChatRequestSchema.safeParse({ message: 'q', contextNodeIds: ids(21) }).success).toBe(
+      false,
+    );
+    // 空白字符串
+    for (const message of [' ', '\n\t ', '\u3000'])
+      expect(ChatRequestSchema.safeParse({ message }).success).toBe(false);
+    // 解析结果是 trim 后的值;sessionId 须为正整数
+    expect(ChatRequestSchema.parse({ message: '  中间件?  ' }).message).toBe('中间件?');
+    expect(ChatRequestSchema.safeParse({ message: 'q', sessionId: 0 }).success).toBe(false);
+    expect(ChatRequestSchema.safeParse({ message: 'q', sessionId: 7 }).success).toBe(true);
+  });
   it('NodeDetail 的 summary 可为 null', () => {
     const d = {
       id: 'f:src/compose.ts',

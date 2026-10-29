@@ -136,7 +136,7 @@ sequenceDiagram
   participant R as RAG/工具
   participant L as LLM
   U->>A: POST /api/repos/:id/chat (SSE, 可带 contextNodeIds)
-  A->>R: 混合检索 top-8 (BM25 + 向量, RRF 融合)
+  A->>R: 混合检索 top-5 (BM25 + 向量, RRF 融合)
   A->>G: 问题 + 检索上下文 + 模块摘要
   loop 最多 5 轮工具调用
     G->>L: messages + tools
@@ -151,7 +151,11 @@ sequenceDiagram
   A-->>U: event: done(droppedCitations, 可选 fallback=retrieval)
   U->>U: 点击引用 → 图中高亮 nodeId + 打开代码 L10-L42
 ```
-- 引用格式约定:模型输出 `[[src/hono.ts#L10-L42]]`,后端在流中截获并校验文件存在、行号在范围内、内容 hash 一致(防幻觉)。**只有校验通过的引用才下发 `citation` 事件,不带 `verified` 字段**;校验失败的直接丢弃,丢弃数量放在 `done.droppedCitations`。前端无需处理"未验证"状态。
+- **状态**:本节契约(shared `chat.ts` 事件、`api.ts` 的 `ChatRequestSchema`)已定,路由尚未实现(拆分为 P1–P7,P4 接路由)。W3 不做工具循环,`tool` 事件先不发;不做答案缓存。
+- 请求体 `{message, sessionId?, contextNodeIds?}`:`message` trim 后 1..2000;`contextNodeIds` 最多 20 个,**W3 只做格式校验,服务端忽略**;未知字段 400。
+- 检索默认 5 条(`hybridSearch` 默认 `limit=5`)。`done.retrieval` 在 schema 上可选(兼容),**服务端每次都填**(`hybrid` | `keyword-only`)。
+- 预算超限(`BUDGET_EXCEEDED`)和 LLM 熔断/不可用都先降级为检索模式(检索结果作为 citation,`done.fallback="retrieval"`);只有拿不到检索结果时才发 `error` 事件。
+- 引用格式约定(与 BACKEND_AI_DESIGN §6 一致):模型输出 `[[Sn:a-b]]`,`Sn` 是上下文里的片段编号,`a-b` 是文件绝对行号,必须落在片段 Sn 的行范围内,超出就收缩到交集,没有交集就剔除;**模型输出的路径一概不采信**,path/nodeId 只能经片段编号映射得到。后端在流中截获并校验行号范围、内容 hash 一致(防幻觉)。**只有校验通过的引用才下发 `citation` 事件,不带 `verified` 字段**;校验失败的直接丢弃,丢弃数量放在 `done.droppedCitations`。前端无需处理"未验证"状态。
 - Agent 工具:`search_code(query)`、`read_file(path, start, end)`(单次 ≤200 行)、`get_dependencies(path, direction)`、`get_module_summary(moduleId)`、`list_files(dir)`。
 
 ## 5. 接口约定
@@ -221,7 +225,7 @@ event: done
 data: {"jobId":"12:a1b2c3d","status":"done","stats":{"files":412,"chunks":2900,"costUsd":0.31}}
 ```
 ```jsonc
-// POST /api/repos/:id/chat  请求(contextNodeIds 可选:用户在图上选中的节点,优先检索)
+// POST /api/repos/:id/chat  请求(message trim 后 1..2000;contextNodeIds 可选、≤20,W3 只校验不使用;未知字段 400)
 { "sessionId": 7, "message": "中间件是怎么串联执行的?", "contextNodeIds": ["m:src/middleware"] }
 ```
 ```text

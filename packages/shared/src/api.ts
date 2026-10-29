@@ -114,12 +114,21 @@ export const NodeDetailSchema = z.object({
   inCycle: z.boolean().default(false),
 });
 
-/** POST /api/repos/:id/chat */
-export const ChatRequestSchema = z.object({
-  sessionId: z.number().int().positive().optional(),
-  message: z.string().min(1).max(4000),
-  contextNodeIds: z.array(NodeIdSchema).max(50).optional(),
-});
+/**
+ * POST /api/repos/:id/chat(路由尚未实现,P4)。
+ * - message:去掉首尾空白后 1..2000 字符(解析结果为 trim 后的值)。
+ * - contextNodeIds:可选,最多 20 个合法节点 id;W3 只做格式校验,服务端忽略(不参与检索)。
+ * - 未知字段一律拒绝(.strict())。
+ */
+export const CHAT_MESSAGE_MAX = 2000;
+export const CHAT_CONTEXT_NODES_MAX = 20;
+export const ChatRequestSchema = z
+  .object({
+    sessionId: z.number().int().positive().optional(),
+    message: z.string().trim().min(1).max(CHAT_MESSAGE_MAX),
+    contextNodeIds: z.array(NodeIdSchema).max(CHAT_CONTEXT_NODES_MAX).optional(),
+  })
+  .strict();
 
 /** GET /health */
 export const HealthResponseSchema = z.object({

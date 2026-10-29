@@ -408,7 +408,7 @@ async function retrieve(repoId, q) {
 
 **问答 SSE（`POST /api/repos/:id/chat`，照用约定）**
 
-请求体:`{question, sessionId?, contextNodeIds?: string[]}`。`contextNodeIds` 可选,检索时对这些节点所在文件的候选分数加权(重排前乘以系数,待调参)。
+请求体:`{message, sessionId?, contextNodeIds?: string[]}`(shared `ChatRequestSchema`,`.strict()`):`message` trim 后 1..2000;`contextNodeIds` 可选、最多 20 个,**W3 只做格式校验,服务端忽略**(以后可对这些节点所在文件的候选分数加权,待定)。路由尚未实现(P4);`done.retrieval` 服务端每次都填。
 ```
 event: token
 data: {"text":"连接池在 "}
