@@ -114,6 +114,22 @@ describe('createFetchTransport', () => {
     expect(chatErrorText(e.info)).toBe('问答请求失败:检索服务异常');
   });
 
+  it('ApiError message 超过 200 字 → 只显示前 200 字', async () => {
+    const long = '错'.repeat(200) + 'TAIL_SHOULD_NOT_SHOW'.repeat(3);
+    const t = createFetchTransport(
+      '',
+      async () =>
+        new Response(JSON.stringify({ error: { code: 'INTERNAL', message: long } }), {
+          status: 500,
+          headers: { 'content-type': 'application/json' },
+        }),
+    );
+    const e = await drain(t(1, { message: 'q' }, new AbortController().signal)).catch((x) => x);
+    expect(e.info.message).toBe('错'.repeat(200));
+    expect(chatErrorText(e.info)).toBe(`问答请求失败:${'错'.repeat(200)}`);
+    expect(chatErrorText(e.info)).not.toContain('TAIL');
+  });
+
   it('非 2xx 非 JSON → 通用文案,不显示原始响应体', async () => {
     const t = createFetchTransport(
       '',

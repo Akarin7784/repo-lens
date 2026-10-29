@@ -64,6 +64,17 @@ describe('<GraphView> 真实接口:聚合边、边界节点、截断提示', () 
       </div>,
     );
     const q = (sel: string) => container.querySelector(sel);
+    /** 从 React Flow 节点包装元素的 transform/width/height 读绝对位置;节点未渲染时抛错,供 waitFor 重试 */
+    const box = (id: string) => {
+      const el = container.querySelector<HTMLElement>(`.react-flow__node[data-id="${id}"]`);
+      const m = el?.style.transform.match(/translate\(([-\d.]+)px,\s*([-\d.]+)px\)/);
+      if (!el || !m) throw new Error(`节点 ${id} 尚未渲染`);
+      const [x, y] = [Number(m[1]), Number(m[2])];
+      return { x, y, r: x + parseFloat(el.style.width), b: y + parseFloat(el.style.height) };
+    };
+    type Box = ReturnType<typeof box>;
+    const inside = (c: Box, p: Box) => c.x >= p.x && c.y >= p.y && c.r <= p.r && c.b <= p.b;
+    const overlaps = (u: Box, v: Box) => u.x < v.r && v.x < u.r && u.y < v.b && v.y < u.b;
     const status = () => screen.getByRole('status');
     // jsdom 不渲染边的 DOM,边数从状态条读(真实浏览器里的 ×N 标签与 hover 见 PR 截图)
     await waitFor(() => expect(status()).toHaveTextContent('当前显示 2 节点 / 1 条边'));
@@ -73,14 +84,27 @@ describe('<GraphView> 真实接口:聚合边、边界节点、截断提示', () 
     fireEvent.click(await screen.findByRole('button', { name: '展开 a' }));
     // 容器边 m:a→m:b 被子层的 x→b、y→b 两条聚合边替代;边界节点 m:b 不进 m:a
     await waitFor(() => expect(status()).toHaveTextContent('当前显示 4 节点 / 2 条边'));
-    expect(container.querySelectorAll('[data-testid="node-m:b"]')).toHaveLength(1);
-    expect(q('[data-testid="node-m:a"] [data-testid="node-m:b"]')).toBeNull();
+    // React Flow 在自身 effect 里同步 nodes,DOM 比状态条晚一拍,所以节点断言都要等。
+    // 注意 React Flow 的节点 DOM 是平铺的(子节点不嵌套在容器 DOM 里),
+    // 「m:a 里面查 m:b」这种选择器永远为空、会误通过;改为比较绝对坐标:
+    // x/y 落在容器 m:a 的框内,边界节点 m:b 与 m:a 不重叠且只渲染一次。
+    await waitFor(() => {
+      const a = box('m:a');
+      expect(inside(box('f:a/x.ts'), a)).toBe(true);
+      expect(inside(box('f:a/y.ts'), a)).toBe(true);
+      expect(container.querySelectorAll('[data-testid="node-m:b"]')).toHaveLength(1);
+      expect(overlaps(box('m:b'), a)).toBe(false);
+    });
     expect(screen.getByTestId('truncated-notice')).toHaveTextContent('「a」的子节点超过 300 个');
     expect(src.calls).toEqual([null, 'm:a']);
 
     fireEvent.click(await screen.findByRole('button', { name: '收起 a' }));
     await waitFor(() => expect(status()).toHaveTextContent('当前显示 2 节点 / 1 条边'));
-    expect(q('[data-testid="node-m:b"]')).not.toBeNull();
+    // 等子节点从 DOM 消失(React Flow 同步完成)后再看:边界节点 m:b 不随 m:a 折叠而隐藏
+    await waitFor(() => {
+      expect(q('[data-testid="node-f:a/x.ts"]')).toBeNull();
+      expect(container.querySelectorAll('[data-testid="node-m:b"]')).toHaveLength(1);
+    });
     expect(screen.queryByTestId('truncated-notice')).toBeNull();
 
     // 再展开走缓存,不重复请求
@@ -131,7 +155,7 @@ describe('<GraphView> 真实接口:聚合边、边界节点、截断提示', () 
     await waitFor(() => expect(status()).toHaveTextContent('当前显示 4 节点 / 0 条边'));
     await new Promise((r) => setTimeout(r, 50));
     expect(status()).toHaveTextContent('当前显示 4 节点');
-    expect(screen.getByRole('button', { name: '展开 a/src' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: '展开 a/src' })).toBeInTheDocument();
   });
 
   it('没有 suggestedFocus:首屏只有根层,不做任何兜底请求', async () => {
@@ -197,7 +221,7 @@ describe('<GraphView> 真实接口:聚合边、边界节点、截断提示', () 
     expect(await screen.findByText(/加载 m:a 失败/)).toBeInTheDocument();
     await new Promise((r) => setTimeout(r, 100));
     expect(calls).toEqual([null, 'm:a']);
-    expect(screen.getByRole('button', { name: '展开 a' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: '展开 a' })).toBeInTheDocument();
   });
 
   it('自动请求返回前用户已手动操作:丢弃返回结果,不再自动展开', async () => {
@@ -231,7 +255,7 @@ describe('<GraphView> 真实接口:聚合边、边界节点、截断提示', () 
     release();
     await new Promise((r) => setTimeout(r, 100));
     expect(calls).toEqual([null, 'm:a', 'm:b']);
-    expect(screen.getByRole('button', { name: '展开 a' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: '展开 a' })).toBeInTheDocument();
     expect(screen.queryByTestId('node-d:a/src')).not.toBeInTheDocument();
   });
 });
