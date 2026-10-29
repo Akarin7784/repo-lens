@@ -44,6 +44,10 @@ export {
   rewriteQuery,
   REWRITE_SYSTEM,
   REWRITE_PROMPT_VERSION,
+  REWRITE_TEMPERATURE,
+  rewriteCacheKey,
+  stripFileNames,
+  type RewriteCache,
   type RewriteLog,
   type RewriteOptions,
 } from './rewrite/rewrite.js';

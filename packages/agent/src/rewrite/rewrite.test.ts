@@ -7,7 +7,14 @@ import { LlmGateway } from '../llm/gateway.js';
 import { MemoryLlmKv } from '../llm/memory-kv.js';
 import { DEFAULT_PRICES, type PriceTable } from '../llm/pricing.js';
 import type { LlmCall, LlmClient } from '../llm/types.js';
-import { REWRITE_SYSTEM, rewriteQuery, type RewriteLog } from './rewrite.js';
+import {
+  REWRITE_PROMPT_VERSION,
+  REWRITE_SYSTEM,
+  rewriteCacheKey,
+  rewriteQuery,
+  stripFileNames,
+  type RewriteLog,
+} from './rewrite.js';
 
 class StubLlm implements LlmClient {
   readonly provider = 'stub';
@@ -110,5 +117,60 @@ describe('查询改写 rewriteQuery(T-214)', () => {
     }
     for (const w of ['request body', 'set/get', 'middleware', 'context', 'csrf', 'router'])
       expect(REWRITE_SYSTEM.toLowerCase()).not.toContain(w);
+  });
+
+  it('提示词不引导输出文件名:规则禁止,示例答案不含文件名;版本为 rw-2', () => {
+    expect(REWRITE_PROMPT_VERSION).toBe('rw-2');
+    expect(REWRITE_SYSTEM).toMatch(/Never output file names/);
+    for (const l of REWRITE_SYSTEM.split('\n').filter((x) => x.startsWith('Q:')))
+      expect(l.split(' A: ')[1]).not.toMatch(/\.[cm]?[jt]sx?\b|\//);
+  });
+
+  it('模型仍输出文件名时后处理去掉,标识符保留', async () => {
+    expect(stripFileNames('pool create pool.ts src/db/conn.js createPool')).toBe(
+      'pool create createPool',
+    );
+    const g = gw(new StubLlm(() => 'queue worker job.ts enqueue'));
+    expect(await rewriteQuery('队列在哪?', { gateway: g, model: 'm' })).toBe(
+      'queue worker enqueue',
+    );
+  });
+
+  it('温度固定 0;按「问题 + 提示词版本」缓存,换网关(无网关缓存)两次改写也一致且只调一次模型', async () => {
+    let n = 0;
+    const temps: (number | undefined)[] = [];
+    const llm = new StubLlm((req) => {
+      temps.push(req.temperature);
+      return `queue run${++n}`;
+    });
+    const store = new Map<string, string>();
+    const cache = {
+      get: (k: string) => store.get(k) ?? null,
+      set: (k: string, v: string) => void store.set(k, v),
+    };
+    const q = '队列怎么消费?';
+    const a = await rewriteQuery(q, { gateway: gw(llm), model: 'm', cache });
+    const logs: RewriteLog[] = [];
+    const b = await rewriteQuery(`  ${q} `, {
+      gateway: gw(llm),
+      model: 'm',
+      cache,
+      log: (l) => logs.push(l),
+    });
+    expect([a, b, llm.calls, temps]).toEqual(['queue run1', 'queue run1', 1, [0]]);
+    expect(logs[0]).toMatchObject({ cacheHit: true, used: true });
+    expect([...store.keys()]).toEqual([rewriteCacheKey(q, 'm')]);
+    expect(rewriteCacheKey(q, 'm')).toContain(`:${REWRITE_PROMPT_VERSION}:`);
+    expect(rewriteCacheKey(q, 'm')).not.toBe(rewriteCacheKey(q, 'other'));
+  });
+
+  it('回退原问题的结果不写缓存', async () => {
+    const store = new Map<string, string>();
+    const cache = {
+      get: (k: string) => store.get(k) ?? null,
+      set: (k: string, v: string) => void store.set(k, v),
+    };
+    await rewriteQuery('队列在哪?', { gateway: gw(new StubLlm(() => '')), model: 'm', cache });
+    expect(store.size).toBe(0);
   });
 });

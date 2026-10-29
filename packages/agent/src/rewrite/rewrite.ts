@@ -4,10 +4,15 @@
  * 任何失败(超预算、熔断打开、调用失败、输出为空或异常)都回退为原问题,不抛错。
  * 每次调用通过 log 回调记录改写前后(只记问题文本,不记 key)。
  */
+import { createHash } from 'node:crypto';
 import type { LlmGateway } from '../llm/gateway.js';
 import { LlmError } from '../llm/types.js';
 
-export const REWRITE_PROMPT_VERSION = 'rw-1';
+/** 提示词或后处理改动必须递增;它是改写缓存 key 的一部分。rw-2:不输出文件名 */
+export const REWRITE_PROMPT_VERSION = 'rw-2';
+
+/** 改写固定温度 0:同一问题、同一提示词版本的结果可复现 */
+export const REWRITE_TEMPERATURE = 0;
 
 /**
  * 改写提示词。示例刻意选与被测仓库无关的通用主题(数据库连接池、命令行参数),
@@ -17,11 +22,12 @@ export const REWRITE_SYSTEM = [
   'You turn a developer question about a code repository into a short English search query for code search.',
   'Rules:',
   '- Output one line only: English keywords, no explanation, no quotes.',
-  '- Keep identifiers, file names and English words from the question unchanged.',
-  '- Add likely code identifiers (camelCase function or class names) and file-name words a codebase would use.',
+  '- Keep identifiers and English words from the question unchanged.',
+  '- Add likely code identifiers (camelCase function or class names) and concept words a codebase would use.',
+  '- Never output file names, paths or file extensions (no .ts, .js, no slashes).',
   '- At most 16 words.',
   'Examples:',
-  'Q: 连接池的创建代码? A: database connection pool create createPool pool.ts',
+  'Q: 连接池的创建代码? A: database connection pool create createPool acquire release',
   'Q: 命令行参数的解析逻辑? A: parse command line arguments argv parseArgs cli options',
 ].join('\n');
 
@@ -35,12 +41,31 @@ export interface RewriteLog {
   costMicroUsd?: number;
 }
 
+/** 改写结果缓存(问题 + 提示词版本 + 模型):命中时不调模型,同一问题多次改写结果一致 */
+export interface RewriteCache {
+  get(key: string): Promise<string | null> | string | null;
+  set(key: string, value: string): Promise<void> | void;
+}
+
+export function rewriteCacheKey(question: string, model: string): string {
+  const h = createHash('sha256').update(question.trim()).digest('hex');
+  return `rewrite:${REWRITE_PROMPT_VERSION}:${model}:${h}`;
+}
+
+const FILE_NAME = /(?:^|\s)(?:[\w.-]*\/)*[\w-]+\.(?:[cm]?[jt]sx?|json|md)(?=\s|$)/g;
+
+/** 后处理:去掉文件名/路径形式的词(提示词已要求不输出,这里兜底),合并空白 */
+export function stripFileNames(line: string): string {
+  return line.replace(FILE_NAME, ' ').replace(/\s+/g, ' ').trim();
+}
+
 export interface RewriteOptions {
   gateway: LlmGateway;
   model: string;
   repoId?: number;
   sessionId?: number;
   log?: (entry: RewriteLog) => void;
+  cache?: RewriteCache;
   signal?: AbortSignal;
 }
 
@@ -54,13 +79,16 @@ export async function rewriteQuery(question: string, o: RewriteOptions): Promise
     return rewritten;
   };
   if (!HAS_CJK.test(q)) return done(q, { used: false, reason: 'not-chinese' });
+  const ck = rewriteCacheKey(q, o.model);
+  const cached = o.cache ? await o.cache.get(ck) : null;
+  if (cached) return done(cached, { used: true, cacheHit: true, costMicroUsd: 0 });
   try {
     const r = await o.gateway.complete({
       purpose: 'chat',
       model: o.model,
       repoId: o.repoId,
       sessionId: o.sessionId,
-      temperature: 0,
+      temperature: REWRITE_TEMPERATURE,
       maxTokens: 64,
       signal: o.signal,
       messages: [
@@ -68,12 +96,14 @@ export async function rewriteQuery(question: string, o: RewriteOptions): Promise
         { role: 'user', content: `Q: ${q} A:` },
       ],
     });
-    const line = (r.text.split('\n').find((l) => l.trim()) ?? '')
+    const raw = (r.text.split('\n').find((l) => l.trim()) ?? '')
       .replace(/^\s*A:\s*/i, '')
       .replace(/^["'`]+|["'`]+$/g, '')
       .trim()
       .slice(0, 300);
+    const line = stripFileNames(raw);
     if (!line || HAS_CJK.test(line)) return done(q, { used: false, reason: 'empty' });
+    await o.cache?.set(ck, line);
     return done(line, { used: true, cacheHit: r.cacheHit, costMicroUsd: r.costMicroUsd });
   } catch (err) {
     const reason =
