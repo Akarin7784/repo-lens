@@ -170,7 +170,12 @@ const file = await fr.json();
 if (file.excluded !== null || typeof file.content !== 'string') fail('vanilla.ts 不应被排除', file);
 const nLines = file.content.split('\n').length;
 if (file.start !== 1 || file.end !== 20 || nLines !== 20) fail('vanilla.ts 前 20 行区间不对', file);
-if (!/create/i.test(file.content)) fail('vanilla.ts 前 20 行不含 create', file);
+// 前 20 行多为类型声明,不对内容做断言;不带 end 读全文件,确认含 createStore 导出
+const fullRes = await fetch(`${BASE}/api/repos/${graphReady.repoId}/files?path=src/vanilla.ts`);
+if (!fullRes.ok) fail(`GET files src/vanilla.ts(全文件)→ ${fullRes.status}`, await fullRes.text());
+const full = await fullRes.json();
+if (typeof full.content !== 'string' || !/createStore/.test(full.content))
+  fail('vanilla.ts 全文件不含 createStore', { totalLines: full.totalLines, hasMore: full.hasMore });
 const trav = await fetch(`${BASE}/api/repos/${graphReady.repoId}/files?path=../x`);
 if (trav.status !== 400) fail(`files ?path=../x 应为 400,实际 ${trav.status}`);
 console.log(
