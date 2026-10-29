@@ -20,11 +20,15 @@ const cfg: DashscopeConfig & { apiKey: string } = {
   taskBudgetCents: 50,
 };
 
-type Call = { url: string; body: { input: string[]; [k: string]: unknown }; timeoutMs?: number };
+type Call = {
+  url: string;
+  body: { input: string[]; [k: string]: unknown };
+  signal?: AbortSignal | null;
+};
 function fakeFetch(responder: (c: Call, n: number) => Response | Promise<Response>) {
   const calls: Call[] = [];
   const f = (async (url: string, init: RequestInit) => {
-    const c: Call = { url, body: JSON.parse(String(init.body)) };
+    const c: Call = { url, body: JSON.parse(String(init.body)), signal: init.signal };
     calls.push(c);
     return responder(c, calls.length);
   }) as unknown as typeof fetch;
@@ -68,6 +72,76 @@ describe('DashscopeEmbedder', () => {
     expect([e.model, e.revision, e.dim]).toEqual(['dashscope:text-embedding-v3', '4', 4]);
   });
 
+  it('每次请求都带超时 signal', async () => {
+    const { f, calls } = fakeFetch((c) => ok(c.body.input));
+    const { e } = mk(f);
+    await e.embedDocuments(['a']);
+    await e.embedQuery('q');
+    expect(calls).toHaveLength(2);
+    for (const c of calls) expect(c.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('响应 index 越界 / 重复 / 缺失 / 非整数视为 bad-response', async () => {
+    const vec = [1, 0, 0, 0];
+    for (const idx of [
+      [0, 5],
+      [0, 0],
+      [0, -1],
+      [0, 1.5],
+      [0, '1'],
+      [0, null],
+    ]) {
+      const { f } = fakeFetch(
+        () =>
+          new Response(JSON.stringify({ data: idx.map((index) => ({ index, embedding: vec })) }), {
+            status: 200,
+          }),
+      );
+      await expect(mk(f).e.embedDocuments(['a', 'b'])).rejects.toMatchObject({
+        kind: 'bad-response',
+      });
+    }
+  });
+
+  it('截断落在高代理项时退一位,不留孤立代理项', async () => {
+    const { f, calls } = fakeFetch((c) => ok(c.body.input));
+    const { e } = mk(f);
+    const t = 'x'.repeat(DASHSCOPE_MAX_INPUT_CHARS - 1) + '😀' + 'tail';
+    await e.embedDocuments([t]);
+    const sent = calls[0]!.body.input[0]!;
+    expect(sent).toHaveLength(DASHSCOPE_MAX_INPUT_CHARS - 1);
+    expect(/[\uD800-\uDBFF]$/.test(sent)).toBe(false);
+    expect(e.truncated).toBe(1);
+  });
+
+  it('索引 429 遵守 Retry-After,上限 10 秒', async () => {
+    const r = (s: string) => () => new Response('', { status: 429, headers: { 'retry-after': s } });
+    for (const [h, want] of [
+      ['3', 3000],
+      ['60', 10_000],
+    ] as const) {
+      const a = fakeFetch(r(h));
+      const m = mk(a.f);
+      await expect(m.e.embedDocuments(['x'])).rejects.toMatchObject({ kind: 'rate-limit' });
+      expect(a.calls).toHaveLength(1 + INDEX_CALL.retries);
+      expect(m.sleeps).toEqual(new Array(INDEX_CALL.retries).fill(want));
+    }
+  });
+
+  it('查询 429:Retry-After ≤ 2 秒等待后重试一次;> 2 秒不重试', async () => {
+    const r = (s: string) => () => new Response('', { status: 429, headers: { 'retry-after': s } });
+    const a = fakeFetch(r('2'));
+    const ma = mk(a.f);
+    await expect(ma.e.embedQuery('q')).rejects.toMatchObject({ kind: 'rate-limit' });
+    expect(a.calls).toHaveLength(2);
+    expect(ma.sleeps).toEqual([2000]);
+    const b = fakeFetch(r('3'));
+    const mb = mk(b.f);
+    await expect(mb.e.embedQuery('q')).rejects.toMatchObject({ kind: 'rate-limit' });
+    expect(b.calls).toHaveLength(1);
+    expect(mb.sleeps).toEqual([]);
+  });
+
   it('批量超过上限直接拒绝(不发请求)', async () => {
     const { f, calls } = fakeFetch((c) => ok(c.body.input));
     await expect(mk(f).e.embedDocuments(Array(11).fill('x'))).rejects.toThrow(RangeError);
@@ -95,8 +169,8 @@ describe('DashscopeEmbedder', () => {
     await expect(mk(b.f).e.embedQuery('x')).rejects.toMatchObject({ kind: 'rate-limit' });
     expect(b.calls).toHaveLength(1 + QUERY_CALL.retries);
     expect([INDEX_CALL, QUERY_CALL]).toEqual([
-      { timeoutMs: 15000, retries: 3 },
-      { timeoutMs: 5000, retries: 1 },
+      { timeoutMs: 15000, retries: 3, maxRetryAfterMs: Infinity },
+      { timeoutMs: 5000, retries: 1, maxRetryAfterMs: 2000 },
     ]);
   });
 
@@ -226,6 +300,28 @@ describe('EMBEDDING_PROVIDER 配置', () => {
     expect(() =>
       readEmbeddingConfig({ EMBEDDING_PROVIDER: 'dashscope', DASHSCOPE_EMBEDDING_DIM: '1000' }),
     ).toThrow();
+  });
+  it('BASE_URL 只允许 https + 官方主机;报错不回显值', () => {
+    const ds = (u: string) =>
+      readEmbeddingConfig({ EMBEDDING_PROVIDER: 'dashscope', DASHSCOPE_EMBEDDING_BASE_URL: u });
+    expect(ds('https://dashscope-intl.aliyuncs.com/compatible-mode/v1').dashscope!.baseUrl).toBe(
+      'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
+    );
+    for (const bad of [
+      'http://dashscope.aliyuncs.com/compatible-mode/v1',
+      'https://evil-proxy.example.com/v1',
+      'https://dashscope.aliyuncs.com.evil.example/v1',
+    ]) {
+      let msg = '';
+      try {
+        ds(bad);
+      } catch (e) {
+        msg = String(e);
+      }
+      expect(msg).toContain('DASHSCOPE_EMBEDDING_BASE_URL');
+      expect(msg).not.toContain(bad);
+      expect(msg).not.toContain('evil');
+    }
   });
   it('非法配置报错只含变量名,不回显 key', () => {
     let msg = '';

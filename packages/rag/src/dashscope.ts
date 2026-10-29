@@ -9,8 +9,22 @@ import type { DashscopeConfig } from './config.js';
 export const DASHSCOPE_MAX_INPUT_CHARS = 6000;
 
 /** 索引:单次 15 秒、最多重试 3 次;查询:单次 5 秒、最多重试 1 次(失败由检索降级 keyword-only) */
-export const INDEX_CALL = { timeoutMs: 15_000, retries: 3 } as const;
-export const QUERY_CALL = { timeoutMs: 5_000, retries: 1 } as const;
+export const INDEX_CALL = {
+  timeoutMs: 15_000,
+  retries: 3,
+  maxRetryAfterMs: Infinity,
+} as const;
+export const QUERY_CALL = { timeoutMs: 5_000, retries: 1, maxRetryAfterMs: 2_000 } as const;
+/** 索引路径 Retry-After 最多等 10 秒(超过按 10 秒);查询路径超过 2 秒不重试,直接失败降级 */
+export const INDEX_RETRY_AFTER_CAP_MS = 10_000;
+
+/** 解析 Retry-After(秒数或 HTTP 日期)为毫秒;无 / 非法为 undefined */
+export function parseRetryAfter(v: string | null, now = Date.now()): number | undefined {
+  if (!v) return undefined;
+  if (/^\d+(\.\d+)?$/.test(v.trim())) return Math.round(Number(v) * 1000);
+  const t = Date.parse(v);
+  return Number.isNaN(t) ? undefined : Math.max(0, t - now);
+}
 
 export type EmbeddingErrorKind =
   'auth' | 'rate-limit' | 'timeout' | 'bad-request' | 'unavailable' | 'bad-response';
@@ -24,6 +38,8 @@ export class EmbeddingError extends Error {
   constructor(
     readonly kind: EmbeddingErrorKind,
     readonly status?: number,
+    /** 429 的 Retry-After(毫秒);不进 message */
+    readonly retryAfterMs?: number,
   ) {
     super(`dashscope embeddings failed: ${kind}${status ? ` (HTTP ${status})` : ''}`);
   }
@@ -124,10 +140,17 @@ export class DashscopeEmbedder implements Embedder {
   private clip(t: string) {
     if (t.length <= DASHSCOPE_MAX_INPUT_CHARS) return t;
     this.truncated++;
-    return t.slice(0, DASHSCOPE_MAX_INPUT_CHARS);
+    // 截断点前一位是高代理项时退一位,避免留下孤立代理项
+    const c = t.charCodeAt(DASHSCOPE_MAX_INPUT_CHARS - 1);
+    const end =
+      c >= 0xd800 && c <= 0xdbff ? DASHSCOPE_MAX_INPUT_CHARS - 1 : DASHSCOPE_MAX_INPUT_CHARS;
+    return t.slice(0, end);
   }
 
-  private async call(raw: string[], opt: { timeoutMs: number; retries: number }) {
+  private async call(
+    raw: string[],
+    opt: { timeoutMs: number; retries: number; maxRetryAfterMs: number },
+  ) {
     const input = raw.map((t) => this.clip(t));
     await this.bucket.take(input.reduce((s, t) => s + estimateTokens(t), 0));
     for (let attempt = 0; ; attempt++) {
@@ -136,6 +159,12 @@ export class DashscopeEmbedder implements Embedder {
       } catch (e) {
         const err = e instanceof EmbeddingError ? e : new EmbeddingError('unavailable');
         if (!err.retryable || attempt >= opt.retries) throw err;
+        if (err.retryAfterMs !== undefined) {
+          // 查询路径:Retry-After 超过上限(2 秒)不重试,交给检索降级 keyword-only
+          if (err.retryAfterMs > opt.maxRetryAfterMs) throw err;
+          await this.sleep(Math.min(err.retryAfterMs, INDEX_RETRY_AFTER_CAP_MS));
+          continue;
+        }
         const base = this.backoffMs * 2 ** attempt;
         await this.sleep(base + Math.floor(Math.random() * base * 0.25));
       }
@@ -166,6 +195,7 @@ export class DashscopeEmbedder implements Embedder {
       // 丢弃响应体,不读入错误对象
       await res.body?.cancel().catch(() => {});
       const s = res.status;
+      const retryAfterMs = s === 429 ? parseRetryAfter(res.headers.get('retry-after')) : undefined;
       throw new EmbeddingError(
         s === 401 || s === 403
           ? 'auth'
@@ -175,6 +205,7 @@ export class DashscopeEmbedder implements Embedder {
               ? 'unavailable'
               : 'bad-request',
         s,
+        retryAfterMs,
       );
     }
     let json: unknown;
@@ -195,15 +226,26 @@ export class DashscopeEmbedder implements Embedder {
     const data = j.data;
     if (!Array.isArray(data) || data.length !== input.length)
       throw new EmbeddingError('bad-response', res.status);
-    const out: number[][] = new Array(input.length);
+    const out: (number[] | undefined)[] = new Array(input.length);
     for (const d of data) {
       const v = d.embedding;
-      if (typeof d.index !== 'number' || !Array.isArray(v) || v.length !== this.dim || out[d.index])
+      const i = d.index;
+      if (
+        typeof i !== 'number' ||
+        !Number.isInteger(i) ||
+        i < 0 ||
+        i >= input.length ||
+        out[i] !== undefined ||
+        !Array.isArray(v) ||
+        v.length !== this.dim
+      )
         throw new EmbeddingError('bad-response', res.status);
-      out[d.index] = v as number[];
+      out[i] = v as number[];
     }
-    if (out.some((v) => !v)) throw new EmbeddingError('bad-response', res.status);
+    // some() 会跳过数组空洞,这里用 for 逐个检查缺失项
+    for (let i = 0; i < input.length; i++)
+      if (out[i] === undefined) throw new EmbeddingError('bad-response', res.status);
     if (typeof j.usage?.total_tokens === 'number') this.usageTokens += j.usage.total_tokens;
-    return out;
+    return out as number[][];
   }
 }

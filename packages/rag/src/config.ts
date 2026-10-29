@@ -11,6 +11,16 @@ export const DEFAULT_EMBEDDING_MODEL_REVISION = '761b726dd34fb83930e26aab4e9ac38
 export const DASHSCOPE_DEFAULT_BASE_URL = 'https://dashscope.aliyuncs.com/compatible-mode/v1';
 export const DASHSCOPE_DEFAULT_MODEL = 'text-embedding-v3';
 export const DASHSCOPE_DEFAULT_DIM = 1024;
+/** 只允许 https + 官方主机(北京 / 国际);其余在读配置时报错(只报变量名) */
+export const DASHSCOPE_ALLOWED_HOSTS = ['dashscope.aliyuncs.com', 'dashscope-intl.aliyuncs.com'];
+export function isAllowedDashscopeBaseUrl(u: string): boolean {
+  try {
+    const url = new URL(u);
+    return url.protocol === 'https:' && DASHSCOPE_ALLOWED_HOSTS.includes(url.hostname);
+  } catch {
+    return false;
+  }
+}
 /** 官方 v3 单次最多 10 条(2026-10-29 实测 11 条返回 400) */
 export const DASHSCOPE_MAX_BATCH = 10;
 /**
@@ -44,7 +54,7 @@ const Schema = z.object({
   DASHSCOPE_API_KEY: z.preprocess(empty, z.string().optional()),
   DASHSCOPE_EMBEDDING_BASE_URL: z.preprocess(
     empty,
-    z.string().url().default(DASHSCOPE_DEFAULT_BASE_URL),
+    z.string().url().refine(isAllowedDashscopeBaseUrl).default(DASHSCOPE_DEFAULT_BASE_URL),
   ),
   DASHSCOPE_EMBEDDING_MODEL: z.preprocess(empty, z.string().default(DASHSCOPE_DEFAULT_MODEL)),
   DASHSCOPE_EMBEDDING_DIM: z.preprocess(
