@@ -222,9 +222,17 @@ export class LlmGateway {
     let usage: LlmUsage | undefined;
     let truncated = false;
     let estimated = false;
-    // 每次调用恰好一行 llm_usage:成功路径、catch 各写一次并置位;
-    // 调用方在 yield 处 it.return()(如 route 的 finally)时两处都走不到,由外层 finally 补一行 ok=0
+    // 每次调用恰好一行 llm_usage:成功路径在写库成功后置位,catch 写 ok=0 前置位;
+    // 调用方在 yield 处 it.return()(如 route 的 finally)、或成功路径 addSpend/insert 抛错时,
+    // 由外层 finally 补一行 ok=0。补写失败只打日志,不掩盖原错误、不让 return() 抛错
     let recorded = false;
+    const failRowSafe = () =>
+      failRow().catch((e: unknown) => {
+        const msg = 'llm usage failure row write failed';
+        const w = { ...owner, err: e instanceof Error ? e.message : String(e) };
+        if (this.o.log) this.o.log.warn(w, msg);
+        else console.warn(msg, w);
+      });
     try {
       try {
         for await (const ev of this.o.client.stream(call)) {
@@ -241,7 +249,7 @@ export class LlmGateway {
         if (!usage) throw new Error('上游流在 usage 之前结束');
       } catch (err) {
         recorded = true;
-        await failRow();
+        await failRowSafe();
         const aborted = call.signal?.aborted === true;
         throw new LlmError(
           'LLM_UNAVAILABLE',
@@ -265,16 +273,21 @@ export class LlmGateway {
         if (this.o.log) this.o.log.warn(w, msg);
         else console.warn(msg, w);
       }
-      recorded = true;
-      await this.addSpend(cost, taskId);
-      await this.o.usage.insertLlmUsage({
-        ...owner,
-        tokensIn: usage.tokensIn,
-        tokensOut: usage.tokensOut,
-        costMicroUsd: cost,
-        cacheHit: false,
-        ok: true,
-      });
+      try {
+        await this.addSpend(cost, taskId);
+        await this.o.usage.insertLlmUsage({
+          ...owner,
+          tokensIn: usage.tokensIn,
+          tokensOut: usage.tokensOut,
+          costMicroUsd: cost,
+          cacheHit: false,
+          ok: true,
+        });
+        recorded = true;
+      } catch (err) {
+        // 记账失败:统一成 LlmError;recorded 仍为 false,由 finally 补一行 ok=0
+        throw new LlmError('LLM_UNAVAILABLE', 'LLM 用量记账失败', undefined, { cause: err });
+      }
       return {
         text,
         usage,
@@ -287,7 +300,7 @@ export class LlmGateway {
     } finally {
       if (!recorded) {
         recorded = true;
-        await failRow();
+        await failRowSafe();
       }
     }
   }

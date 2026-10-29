@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   API_ERROR_CODES,
   ApiErrorSchema,
+  RATE_LIMITED_REASONS,
   ChatEventSchema,
   ChatRequestSchema,
   CreateRepoRequestSchema,
@@ -433,6 +434,51 @@ describe('API_ERROR_CODES', () => {
   it('包含 BAD_REQUEST,且 ApiErrorSchema 接受它', () => {
     expect(API_ERROR_CODES).toContain('BAD_REQUEST');
     expect(ApiErrorSchema.safeParse({ error: { code: 'BAD_REQUEST', message: 'x' } }).success).toBe(
+      true,
+    );
+  });
+});
+
+describe('契约 v2:done.truncated 与 429 details', () => {
+  const done = (extra: object) => ({
+    event: 'done',
+    data: { sessionId: 1, droppedCitations: 0, usage: { in: 1, out: 1 }, ...extra },
+  });
+  it('done.truncated 可选:旧格式(无 truncated)与 truncated:true 都合法,非布尔拒绝', () => {
+    expect(ChatEventSchema.safeParse(done({})).success).toBe(true);
+    expect(ChatEventSchema.safeParse(done({ truncated: true })).success).toBe(true);
+    expect(ChatEventSchema.safeParse(done({ truncated: 'yes' })).success).toBe(false);
+  });
+  const err = (code: string, details?: object) => ({
+    error: { code, message: 'x', ...(details ? { details } : {}) },
+  });
+  it('RATE_LIMITED:无 details(旧格式)、rate_limit + retryAfterSec、concurrency 都合法', () => {
+    expect(RATE_LIMITED_REASONS).toEqual(['rate_limit', 'concurrency']);
+    for (const e of [
+      err('RATE_LIMITED'),
+      err('RATE_LIMITED', { reason: 'rate_limit', retryAfterSec: 1800 }),
+      err('RATE_LIMITED', { reason: 'rate_limit' }),
+      err('RATE_LIMITED', { reason: 'concurrency' }),
+    ])
+      expect(ApiErrorSchema.safeParse(e).success).toBe(true);
+  });
+  it('拒绝:concurrency 带 retryAfterSec、retryAfterSec 非正整数、reason 与 code 不匹配', () => {
+    for (const e of [
+      err('RATE_LIMITED', { reason: 'concurrency', retryAfterSec: 5 }),
+      err('RATE_LIMITED', { reason: 'rate_limit', retryAfterSec: 0 }),
+      err('RATE_LIMITED', { reason: 'rate_limit', retryAfterSec: 1.5 }),
+      err('RATE_LIMITED', { reason: 'GRAPH_NOT_READY' }),
+      err('REPO_NOT_READY', { reason: 'rate_limit' }),
+      err('RATE_LIMITED', { reason: 'other' }),
+    ])
+      expect(ApiErrorSchema.safeParse(e).success).toBe(false);
+  });
+  it('REPO_NOT_READY 原有 reason 与附加字段仍合法(只增不改)', () => {
+    expect(
+      ApiErrorSchema.safeParse(err('REPO_NOT_READY', { reason: 'GRAPH_NOT_READY', extra: 1 }))
+        .success,
+    ).toBe(true);
+    expect(ApiErrorSchema.safeParse(err('BAD_REQUEST', { fields: ['message'] })).success).toBe(
       true,
     );
   });

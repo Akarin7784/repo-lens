@@ -57,7 +57,16 @@ export interface ChatDeps {
   pingIntervalMs?: number;
   /** CHAT_STREAM_TIMEOUT_MS,默认 90000:整条流(改写 + 检索 + 终答)的总时限 */
   streamTimeoutMs?: number;
+  /** 测试注入点:当前时间(决定 rl:chat 小时桶与 retryAfterSec) */
+  now?: () => Date;
+  /** 测试注入点:覆盖 rl:chat 计数回退(默认用 registerChatRoute 的 unhit) */
+  unhit?: (key: string) => Promise<unknown>;
 }
+
+const HOUR_MS = 3_600_000;
+/** 距下一个 UTC 整点的秒数,向上取整(1–3600);rl:chat 按 UTC 小时分桶,整点后计数换新桶 */
+export const secondsToNextHour = (now: Date): number =>
+  Math.ceil((HOUR_MS - (now.getTime() % HOUR_MS)) / 1000);
 
 /** 路由实际使用的改写函数(测试断言它就是 agent 导出的 rewriteQuery) */
 export const resolveRewrite = (d: Pick<ChatDeps, 'rewrite'>) => d.rewrite ?? rewriteQuery;
@@ -96,7 +105,14 @@ interface Hit {
  */
 export function registerChatRoute(
   app: FastifyInstance,
-  o: { store: Store; hit: Hit; chat: ChatDeps; repoIdOf: (raw: string) => number },
+  o: {
+    store: Store;
+    hit: Hit;
+    /** 回退一次 hit(并发被拒时把刚扣的 rl:chat 计数还回去) */
+    unhit: (key: string) => Promise<unknown>;
+    chat: ChatDeps;
+    repoIdOf: (raw: string) => number;
+  },
 ) {
   const { store, chat } = o;
   const perHour = chat.perHour ?? 30;
@@ -116,12 +132,23 @@ export function registerChatRoute(
     const { message: question, sessionId: reqSession } = parsed.data;
     // 3. 限流(计入之后的 404/409/失败)+ 全局并发
     const ik = ipKey(req.ip);
-    if ((await o.hit(redisKeys.chatLimitIp(ik))) > perHour)
-      throw new HttpError('RATE_LIMITED', `每个 IP 每小时最多提问 ${perHour} 次`);
-    if (metrics.activeStreams >= maxStreams)
-      // 设计 §7 要 details.reason='concurrency',但 ApiErrorSchema 的 reason 只允许 REPO_NOT_READY 枚举;
-      // 共享契约未扩展前不带 details(见 PR「契约缺口」)
-      throw new HttpError('RATE_LIMITED', '当前问答并发已满,请稍后再试');
+    const now = chat.now?.() ?? new Date();
+    // 同一个 key 用于计数与回退,避免跨整点时回退到新桶
+    const lk = redisKeys.chatLimitIp(ik, now);
+    if ((await o.hit(lk)) > perHour)
+      throw new HttpError('RATE_LIMITED', `每个 IP 每小时最多提问 ${perHour} 次`, {
+        reason: 'rate_limit',
+        retryAfterSec: secondsToNextHour(now),
+      });
+    if (metrics.activeStreams >= maxStreams) {
+      // 并发被拒不算一次提问:回退刚扣的计数;回退失败只打日志,不改 429 结果
+      try {
+        await (chat.unhit ?? o.unhit)(lk);
+      } catch (err) {
+        req.log.warn({ err: (err as Error)?.name ?? 'Error' }, 'chat rate-limit rollback failed');
+      }
+      throw new HttpError('RATE_LIMITED', '当前问答并发已满,请稍后再试', { reason: 'concurrency' });
+    }
     metrics.activeStreams++;
     let released = false;
     const release = () => {
@@ -321,6 +348,7 @@ export function registerChatRoute(
       cs = new CitationStream(prompt.snippets);
 
       let usage = { in: 0, out: 0 };
+      let truncated = false;
       let fallback = false;
       let gotToken = false;
       try {
@@ -341,6 +369,8 @@ export function registerChatRoute(
           const r = await race(it.next());
           if (r.done) {
             usage = { in: r.value.usage.tokensIn, out: r.value.usage.tokensOut };
+            // 上游 finish_reason:length;回答照常落库,done 带 truncated:true
+            truncated = r.value.truncated === true;
             break;
           }
           gotToken = true;
@@ -383,6 +413,7 @@ export function registerChatRoute(
           ...(fallback ? { fallback: 'retrieval' as const } : {}),
           retrieval: result.retrieval,
           usage,
+          ...(truncated ? { truncated: true } : {}),
         },
       });
     } catch (err) {

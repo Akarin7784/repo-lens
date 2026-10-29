@@ -215,6 +215,16 @@ describe('DeepSeekClient.stream(本地假 SSE 服务)', () => {
     expect(err.message).not.toMatch(/sk-/);
   });
 
+  it('sk- 正则边界:task-xxx / disk-cache 不误伤,大写 SK- 与 sk-ab****xyz 照样替换', async () => {
+    handler = script([
+      chunk({
+        error: { message: 'task-abcd1 disk-cache1 ask-me12 SK-UPPER123 sk-ab****xyz sk-ab' },
+      }),
+    ]);
+    const err = await failure(collect(client().stream(call())));
+    expect(err.message).toContain('task-abcd1 disk-cache1 ask-me12 *** *** sk-ab');
+  });
+
   it('非 2xx 的部分打码 key 回显也被抹掉', async () => {
     handler = (_rq, rs) => {
       rs.writeHead(401, { 'content-type': 'application/json' });
@@ -380,7 +390,7 @@ describe('网关 → DeepSeekClient.stream → llm_usage', () => {
           usage: { ok: boolean; tokensIn: number; tokensOut: number; costMicroUsd: number }[];
         }
       ).usage;
-    return { g, rows, warns };
+    return { g, rows, warns, usage };
   }
   const greq = { ...call(), purpose: 'chat' as const, repoId: 1, sessionId: 2 };
 
@@ -502,6 +512,53 @@ describe('网关 → DeepSeekClient.stream → llm_usage', () => {
     await failure(drain(s));
     await s.return(undefined as never);
     expect(rows()).toEqual([ok0]);
+  });
+
+  /** 让 insertLlmUsage 按条件抛错(其余照常写进 MemoryStore) */
+  function failInsert(usage: MemoryStore, when: (row: { ok: boolean }) => boolean) {
+    const orig = usage.insertLlmUsage.bind(usage);
+    const boom = new Error('db down');
+    usage.insertLlmUsage = async (row) => {
+      if (when(row)) throw boom;
+      return orig(row);
+    };
+    return boom;
+  }
+
+  it('成功路径 insert 抛错:抛 LlmError(LLM_UNAVAILABLE,cause 为原错误),finally 补一行 ok=0', async () => {
+    handler = script([delta('ok'), usageChunk(), DONE]);
+    const { g, rows, usage } = gw();
+    const boom = failInsert(usage, (r) => r.ok);
+    const err = (await failure(drain(g.stream(greq)))) as LlmError;
+    expect(err).toBeInstanceOf(LlmError);
+    expect(err.code).toBe('LLM_UNAVAILABLE');
+    expect(err.cause).toBe(boom);
+    expect(rows()).toEqual([ok0]);
+  });
+
+  it('catch 里 failRow 抛错:只打 warn,原错误(cause 为流错误)不被掩盖', async () => {
+    handler = script([delta('ok'), finish('stop')]);
+    const { g, rows, usage, warns } = gw();
+    failInsert(usage, () => true);
+    const err = (await failure(drain(g.stream(greq)))) as LlmError;
+    expect(err.code).toBe('LLM_UNAVAILABLE');
+    expect((err.cause as LlmStreamError).reason).toBe('ended-early');
+    expect(rows()).toEqual([]);
+    expect(warns.map((w) => w.msg)).toEqual(['llm usage failure row write failed']);
+  });
+
+  it('it.return() 时 finally 里 failRow 抛错:return() 不抛,只打 warn', async () => {
+    handler = script(
+      Array.from({ length: 50 }, () => delta('.')),
+      { gapMs: 20, end: false },
+    );
+    const { g, usage, warns } = gw();
+    failInsert(usage, () => true);
+    const s = g.stream(greq);
+    expect((await s.next()).value).toEqual({ text: '.' });
+    await expect(s.return(undefined as never)).resolves.toMatchObject({ done: true });
+    expect(warns.map((w) => w.msg)).toEqual(['llm usage failure row write failed']);
+    await vi.waitFor(() => expect(last.closedEarly).toBe(true));
   });
 
   it('坏 SSE 行在网关层是 LLM_UNAVAILABLE(cause 为 bad-sse)', async () => {
