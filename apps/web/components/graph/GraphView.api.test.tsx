@@ -160,4 +160,77 @@ describe('<GraphView> 真实接口:聚合边、边界节点、截断提示', () 
     await new Promise((r) => setTimeout(r, 50));
     expect(calls).toEqual([null]);
   });
+
+  it('suggestedFocus 是文件节点:只处理 module/dir,直接忽略,不请求', async () => {
+    const { src, calls } = focusSource('f:a/r.ts');
+    const engine = await createInlineEngine();
+    render(
+      <div style={{ width: 1000, height: 700 }}>
+        <GraphView source={src} owner="t" repo="t" engine={engine} />
+      </div>,
+    );
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('当前显示 2 节点'));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(calls).toEqual([null]);
+  });
+
+  it('自动下探的请求失败:显示错误并停止,不重试、不继续下探', async () => {
+    const calls: (string | null)[] = [];
+    const src: GraphSource = {
+      repoLabel: 't/t',
+      loadChildren: vi.fn(async (p: string | null) => {
+        calls.push(p);
+        if (p === null) {
+          const s = slice(null, [mod('m:a'), mod('m:b')], []);
+          return { ...s, meta: { ...s.meta, suggestedFocus: 'd:a/src' } };
+        }
+        throw new Error('boom');
+      }),
+    };
+    const engine = await createInlineEngine();
+    render(
+      <div style={{ width: 1000, height: 700 }}>
+        <GraphView source={src} owner="t" repo="t" engine={engine} />
+      </div>,
+    );
+    expect(await screen.findByText(/加载 m:a 失败/)).toBeInTheDocument();
+    await new Promise((r) => setTimeout(r, 100));
+    expect(calls).toEqual([null, 'm:a']);
+    expect(screen.getByRole('button', { name: '展开 a' })).toBeInTheDocument();
+  });
+
+  it('自动请求返回前用户已手动操作:丢弃返回结果,不再自动展开', async () => {
+    const calls: (string | null)[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const src: GraphSource = {
+      repoLabel: 't/t',
+      loadChildren: vi.fn(async (p: string | null) => {
+        calls.push(p);
+        if (p === null) {
+          const s = slice(null, [mod('m:a'), mod('m:b')], []);
+          return { ...s, meta: { ...s.meta, suggestedFocus: 'd:a/src' } };
+        }
+        if (p === 'm:a') {
+          await gate;
+          return slice('m:a', [dir('d:a/src', 'm:a')], []);
+        }
+        return slice('m:b', [file('b/z.ts', 'm:b')], []);
+      }),
+    };
+    const engine = await createInlineEngine();
+    render(
+      <div style={{ width: 1000, height: 700 }}>
+        <GraphView source={src} owner="t" repo="t" engine={engine} />
+      </div>,
+    );
+    await waitFor(() => expect(calls).toEqual([null, 'm:a']));
+    fireEvent.click(await screen.findByRole('button', { name: '展开 b' }));
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('当前显示 3 节点'));
+    release();
+    await new Promise((r) => setTimeout(r, 100));
+    expect(calls).toEqual([null, 'm:a', 'm:b']);
+    expect(screen.getByRole('button', { name: '展开 a' })).toBeInTheDocument();
+    expect(screen.queryByTestId('node-d:a/src')).not.toBeInTheDocument();
+  });
 });

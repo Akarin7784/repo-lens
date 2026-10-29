@@ -514,6 +514,7 @@
     },
     {
       "id": "e:src/request.ts->src/utils/url.ts:static",
+      "inCycle": true,
       "source": "f:src/request.ts",
       "target": "f:src/utils/url.ts",
       "type": "imports",
@@ -712,6 +713,7 @@
     },
     {
       "id": "e:src/utils/url.ts->src/request.ts:type-only",
+      "inCycle": true,
       "source": "f:src/utils/url.ts",
       "target": "f:src/request.ts",
       "type": "imports",

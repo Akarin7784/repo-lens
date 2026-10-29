@@ -10,7 +10,7 @@ import { SAMPLE_REPOS } from '../fixtures';
 import {
   activeLayerEdges,
   aggregateEdges,
-  cycleEdgeKeys,
+  inCycleEdgeKeys,
   assertSliceSize,
   makeVisibility,
   sliceGraph,
@@ -263,7 +263,7 @@ describe('highlightSelection', () => {
   });
 });
 
-describe('cycleEdgeKeys(环边)', () => {
+describe('inCycleEdgeKeys(环边只读 edge.inCycle)', () => {
   const hono = GraphDataSchema.parse(SAMPLE_REPOS.hono.data);
   const parents = new Map(hono.nodes.map((n) => [n.id, n.parentId]));
   const topModule = (id: string): string | null => {
@@ -271,22 +271,34 @@ describe('cycleEdgeKeys(环边)', () => {
     while (cur && parents.get(cur)) cur = parents.get(cur);
     return cur ?? null;
   };
-  it('hono 示例 fixture 带一个合法的示例环', () => {
-    expect(hono.meta.cycles).toEqual([['f:src/request.ts', 'f:src/utils/url.ts']]);
+  it('hono 示例 fixture 的两条环边带 inCycle: true', () => {
+    expect(
+      hono.edges
+        .filter((e) => e.inCycle)
+        .map((e) => e.id)
+        .sort(),
+    ).toEqual([
+      'e:src/request.ts->src/utils/url.ts:static',
+      'e:src/utils/url.ts->src/request.ts:type-only',
+    ]);
   });
-  it('文件层:环上的两条原始边都被标记,其余不标', () => {
-    const keys = cycleEdgeKeys(hono.edges, hono.meta.cycles!, (id) => id);
+  it('文件层:只有 inCycle 为 true 的边被标记', () => {
+    const keys = inCycleEdgeKeys(hono.edges, (id) => id);
     expect([...keys].sort()).toEqual([
       'f:src/request.ts->f:src/utils/url.ts',
       'f:src/utils/url.ts->f:src/request.ts',
     ]);
   });
   it('上卷到 module 层后变成 m:. ⇄ m:src/utils 两条聚合边', () => {
-    const keys = cycleEdgeKeys(hono.edges, hono.meta.cycles!, topModule);
+    const keys = inCycleEdgeKeys(hono.edges, topModule);
     expect([...keys].sort()).toEqual(['m:.->m:src/utils', 'm:src/utils->m:.']);
   });
-  it('环内两端上卷到同一节点时不产生环边', () => {
-    expect(cycleEdgeKeys(hono.edges, hono.meta.cycles!, () => 'm:.').size).toBe(0);
+  it('两端上卷到同一节点时不产生环边', () => {
+    expect(inCycleEdgeKeys(hono.edges, () => 'm:.').size).toBe(0);
+  });
+  it('不再用 meta.cycles 推断:同一分量但没有 inCycle 的边不标记', () => {
+    const plain = hono.edges.map((x) => ({ ...x, inCycle: undefined }));
+    expect(inCycleEdgeKeys(plain, (id) => id).size).toBe(0);
   });
 });
 
@@ -357,27 +369,13 @@ describe('真实接口模式(T-007)', () => {
     expect(makeVisibility(s.nodes, s.expanded).isVisible('m:b')).toBe(true);
   });
 
-  it('cycleEdgeKeys 按强连通分量判定(hono 的 jsx 分量有 4 个成员,不是有序路径)', () => {
-    const comp = [
-      'f:src/jsx/base.ts',
-      'f:src/jsx/context.ts',
-      'd:src/jsx/dom',
-      'd:src/jsx/intrinsic-element',
-    ];
+  it('聚合边同样只读 inCycle(hono:dom → base.ts 在环上,dom → constants.ts 不在)', () => {
     const edges = [
-      e('f:src/jsx/base.ts', 'd:src/jsx/intrinsic-element'),
-      e('d:src/jsx/intrinsic-element', 'f:src/jsx/base.ts'),
-      e('d:src/jsx/dom', 'f:src/jsx/context.ts'),
-      e('f:src/jsx/base.ts', 'f:src/jsx/utils.ts'),
+      { ...e('d:src/jsx/dom', 'f:src/jsx/base.ts'), aggregated: true, weight: 10, inCycle: true },
+      { ...e('d:src/jsx/dom', 'f:src/jsx/constants.ts'), aggregated: true, weight: 3 },
     ];
-    const keys = cycleEdgeKeys(edges, [comp], (id) => id);
-    expect([...keys].sort()).toEqual(
-      [
-        'f:src/jsx/base.ts->d:src/jsx/intrinsic-element',
-        'd:src/jsx/intrinsic-element->f:src/jsx/base.ts',
-        'd:src/jsx/dom->f:src/jsx/context.ts',
-      ].sort(),
-    );
+    const keys = inCycleEdgeKeys(edges, (id) => id);
+    expect([...keys]).toEqual(['d:src/jsx/dom->f:src/jsx/base.ts']);
   });
 });
 

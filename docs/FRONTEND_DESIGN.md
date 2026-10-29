@@ -506,7 +506,7 @@ Tailwind 映射为 `bg-bg / bg-panel / text-fg / text-muted / border-line / bg-a
 边（`<WeightedEdge>`，smoothstep + 闭合小箭头，颜色 `--edge`）：
 - 原始边：1.25px 实线；`kind: type-only` 更淡的圆点线（`1 5`，透明度 0.55），`dynamic` 短虚线（`6 4`）。
 - `aggregated:true`：线宽 `1 + 1.5·log2(weight)`，上限 8px，不透明度 75%；weight>1 时中点显示 `×weight` 小胶囊。
-- 循环依赖：`--accent-strong` 长虚线（`8 4`，比普通边粗 0.75px，对画布 ≥3:1：浅色 4.35、深色 6.37）+ 边中点 `↻` 小标记；优先级高于 kind 线型。数据来自 `meta.cycles`：每项是一个强连通分量（Tarjan SCC）投影到该层可见节点后的成员集合，**不是有序路径**（hono `d:src/jsx` 层有 4 成员分量）。判定规则：原始边上卷到可见层级后，两端落在同一分量里即为环边（T-007 起；T-004 曾按有序路径判断）。各层切片的 cycles 去重累积。图区左下图例列出「依赖 / 仅类型引用 / 循环依赖」，状态条显示可见环边数。
+- 循环依赖：`--accent-strong` 长虚线（`8 4`，比普通边粗 0.75px，对画布 ≥3:1：浅色 4.35、深色 6.37）+ 边中点 `↻` 小标记；优先级高于 kind 线型。数据**只读边上的 `edge.inCycle === true`**（#28 起，后端按强连通分量判定并投影到每层；聚合边只要有一条底层边在环上即为 true，字段仅在 true 时返回）。前端不再用 `meta.cycles` 推断（T-007d 起；T-007 曾按 SCC 成员集合推断，T-004 曾按有序路径判断）。原始边上卷到可见层级后两端不同才画；两端落在同一可见节点则不画。验证（hono `d:src/jsx` 层，本地联调）：`d:src/jsx/dom → f:src/jsx/base.ts`（weight 10）inCycle 为 true、画环边；`dom → constants.ts` 无 inCycle、画普通边，截图见 `docs/assets/hono-jsx-incycle.png`。图区左下图例列出「依赖 / 仅类型引用 / 循环依赖」，状态条「环边 K」数当前画出的边中 inCycle 为 true 的条数（为 0 时不显示）。
 
 高亮：
 - 选中：2px `--accent` 描边 + `--cite-bg` 填充。
