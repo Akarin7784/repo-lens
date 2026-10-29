@@ -649,6 +649,8 @@ zustand（秒出图）和 zod（默认 module 层、按需下钻）不在 3 分�
 - 匹配与排序(`lib/graph/search.ts`,不区分大小写):文件名完全相等 > 文件名前缀 > 文件名包含 > 路径以查询结尾 > 路径包含 > 文件名子序列 > 路径子序列;同分按路径短优先、再按字典序。查询含 `/` 时只按整条路径匹配。最多显示 8 条,每条显示相对路径和类型图标(◆ 模块 / ▤ 目录 / ▢ 文件,带屏幕阅读器文字)。无结果显示「没有匹配的节点」。
 - 键盘:`/` 聚焦(焦点在输入框/可编辑区或带修饰键时不拦截);↑↓ 移动;Enter 定位;Esc 先清空再失焦,并阻止冒泡,不会同时取消图上的选中。
 - 定位:复用详情跳转的 `startJump`——目标未显示时按 `parentId` 链从最外层收起的祖先开始逐层展开(`focus.ts` 的 `nextFocusStep` 修正:祖先被收起时先展开最外层,而不是卡在已加载但不可见的内层容器),然后选中(写入 `?node=`、右栏详情)并 `fitView` 居中到该节点(padding 0.6,maxZoom 1.2)。
-- 无障碍:输入框 `role=combobox` + `aria-expanded/aria-controls/aria-activedescendant`,结果 `role=listbox`/`option` + `aria-selected`。
-- 已知限制:分析进行中顶部居中的进度横幅与搜索框同为 `z-20`,窄屏时可能重叠。
-- 截图:`docs/assets/T-224/`。
+- 无障碍:输入框 `role=combobox` + `aria-expanded/aria-controls/aria-activedescendant`,结果 `role=listbox`/`option` + `aria-selected`。T-224b:`aria-expanded` 只在有结果时为 true(无匹配时虽显示「没有匹配的节点」提示,但没有可选的 option,为 false,也不设 `aria-activedescendant`);输入框旁有常驻的 `aria-live="polite"` 视觉隐藏区,列表打开时播报「N 个匹配的节点」或「没有匹配的节点」(没用 `role=status`,避免和图底部状态条的 status 重名)。
+- 选中序号钳制(T-224b):列表打开期间节点集合可能变化(继续加载、重新分析),结果变少时渲染和回车都用 `min(active, 结果数-1)`;结果为空时序号为 -1,回车不触发,结果恢复后从钳过的位置继续。
+- 进度横幅避让(T-224b):分析进行中的横幅从 `top-3 z-20` 改为 `top-14 z-10`,放在搜索框/按钮那一行下方,单行截断、`pointer-events-none`;搜索结果列表(z-30,位于 z-20 的搜索容器内)始终盖在横幅上。修复前窄屏(390×844)横幅换成两行并压住搜索框和「全部收起」。截图:`docs/assets/T-224b/narrow-before-overlap.png`、`narrow-after-fixed.png`(生产构建 + playwright;「分析进行中」是用 route 拦截 `/api/repos/2` 把已完成任务改成 running 62%、SSE 返回空流模拟的,不是真实进行中的任务)。
+- 未测:Safari、Firefox、深色模式、真机(iOS/Android)均未测试;以上只在 Chromium(playwright)与 jsdom 单测中验证过。
+- 截图:`docs/assets/T-224/`、`docs/assets/T-224b/`。

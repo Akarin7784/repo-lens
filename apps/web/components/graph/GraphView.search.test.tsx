@@ -37,7 +37,7 @@ describe('<GraphView> 路径搜索(T-224)', () => {
     box.focus();
     type(box, 'compose');
     expect(await screen.findByRole('listbox')).toHaveTextContent('没有匹配的节点');
-    expect(box).toHaveAttribute('aria-expanded', 'true');
+    expect(box).toHaveAttribute('aria-expanded', 'false');
     type(box, 'router');
     expect(screen.getAllByRole('option')[0]).toHaveTextContent('src/router');
   });
