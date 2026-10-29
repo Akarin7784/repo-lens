@@ -1,10 +1,11 @@
-import type { ApiError } from '@repolens/shared';
+import type { ApiError, RepoNotReadyReason } from '@repolens/shared';
 
 type Code = ApiError['error']['code'];
 const STATUS: Record<Code, number> = {
   BAD_REQUEST: 400,
   INVALID_REPO_URL: 400,
   REPO_NOT_FOUND: 404,
+  FILE_NOT_FOUND: 404,
   REPO_NOT_READY: 409,
   REPO_TOO_LARGE: 413,
   UNSUPPORTED_LANGUAGE: 422,
@@ -18,11 +19,18 @@ export class HttpError extends Error {
   constructor(
     readonly code: Code,
     message: string,
+    readonly details?: { reason: RepoNotReadyReason },
   ) {
     super(message);
     this.status = STATUS[code];
   }
   body(): ApiError {
-    return { error: { code: this.code, message: this.message } };
+    return {
+      error: {
+        code: this.code,
+        message: this.message,
+        ...(this.details && { details: this.details }),
+      },
+    };
   }
 }

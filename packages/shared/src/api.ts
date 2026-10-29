@@ -28,14 +28,32 @@ export const API_ERROR_CODES = [
   'REPO_TOO_LARGE',
   'REPO_NOT_PUBLIC',
   'REPO_NOT_FOUND',
+  'FILE_NOT_FOUND',
   'REPO_NOT_READY',
   'RATE_LIMITED',
   'INTERNAL',
 ] as const;
 /** BAD_REQUEST(HTTP 400):查询参数格式非法(如 parentId 不合法、start>end);格式合法但资源不存在用 404。*/
 /** 例:422 { error: { code: 'UNSUPPORTED_LANGUAGE', message: '第 1 周仅支持 TypeScript 仓库' } } */
+/**
+ * 409 REPO_NOT_READY 的子原因(`error.details.reason`):
+ * GRAPH_NOT_READY=依赖图尚未生成;SNAPSHOT_MISSING=源码快照缺失或已被清理;
+ * REPOS_DIR_NOT_CONFIGURED=api 未配置 REPOS_DIR。只增不改。
+ */
+export const REPO_NOT_READY_REASONS = [
+  'GRAPH_NOT_READY',
+  'SNAPSHOT_MISSING',
+  'REPOS_DIR_NOT_CONFIGURED',
+] as const;
+export type RepoNotReadyReason = (typeof REPO_NOT_READY_REASONS)[number];
+/** FILE_NOT_FOUND(HTTP 404):仓库存在但快照里没有该文件;REPO_NOT_FOUND 只表示仓库/任务/节点不存在 */
 export const ApiErrorSchema = z.object({
-  error: z.object({ code: z.enum(API_ERROR_CODES), message: z.string() }),
+  error: z.object({
+    code: z.enum(API_ERROR_CODES),
+    message: z.string(),
+    /** 可选细节;目前仅 REPO_NOT_READY 带 reason */
+    details: z.object({ reason: z.enum(REPO_NOT_READY_REASONS) }).optional(),
+  }),
 });
 
 /** GET /api/repos/:id;`repo`/`commitSha` 与 CreateRepoResponse 同名同义;commitSha 优先取最近一次 done 任务的 commit,没有 done 任务时取最新任务的;jobId/status/stage 始终是最新任务的 */

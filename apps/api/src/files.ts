@@ -5,6 +5,7 @@ import {
   FILE_MAX_LINES,
   MAX_SEND_BYTES,
   excludedNotice,
+  excludedReasonOf,
   exclusionRule,
   safeRelPath,
   type FileContent,
@@ -46,7 +47,9 @@ export async function readRepoFile(o: ReadFileOpts): Promise<FileContent> {
     realRoot = await realpath(root);
   } catch (e) {
     if (isNoEnt(e))
-      throw new HttpError('REPO_NOT_READY', '该 commit 的源码快照不可用(未保留或已清理)');
+      throw new HttpError('REPO_NOT_READY', '该 commit 的源码快照不可用(未保留或已清理)', {
+        reason: 'SNAPSHOT_MISSING',
+      });
     throw e;
   }
 
@@ -59,27 +62,30 @@ export async function readRepoFile(o: ReadFileOpts): Promise<FileContent> {
     try {
       st = await lstat(cur);
     } catch (e) {
-      if (isNoEnt(e)) throw new HttpError('REPO_NOT_FOUND', '文件不存在');
+      if (isNoEnt(e)) throw new HttpError('FILE_NOT_FOUND', '文件不存在');
       throw e;
     }
     if (st.isSymbolicLink()) throw new HttpError('BAD_REQUEST', '不跟随符号链接');
     const last = i === segs.length - 1;
-    if (!last && !st.isDirectory()) throw new HttpError('REPO_NOT_FOUND', '文件不存在');
+    if (!last && !st.isDirectory()) throw new HttpError('FILE_NOT_FOUND', '文件不存在');
     if (last && !st.isFile()) throw new HttpError('BAD_REQUEST', '不是普通文件');
   }
   const real = await realpath(cur);
   if (!real.startsWith(realRoot + sep)) throw new HttpError('BAD_REQUEST', '路径越界');
 
   const base = { path: rel, commitSha: o.commitSha };
-  const excluded = (reason: string): FileContent => ({
-    ...base,
-    totalLines: null,
-    start: null,
-    end: null,
-    hasMore: false,
-    content: null,
-    excluded: { reason, notice: excludedNotice(reason) },
-  });
+  const excluded = (rule: string): FileContent => {
+    const reason = excludedReasonOf(rule);
+    return {
+      ...base,
+      totalLines: null,
+      start: null,
+      end: null,
+      hasMore: false,
+      content: null,
+      excluded: { reason, notice: excludedNotice(reason) },
+    };
+  };
   // 先只看路径(.env、*.pem 等):命中直接返回,不读内容
   const byPath = exclusionRule(rel, null);
   if (byPath) return excluded(byPath);

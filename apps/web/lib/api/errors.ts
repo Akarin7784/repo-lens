@@ -10,6 +10,7 @@ export const ERROR_TEXT: Record<ApiErrorCode, string> = {
   REPO_TOO_LARGE: '仓库体积超过上限,暂时无法分析。',
   REPO_NOT_PUBLIC: '只支持公开仓库。',
   REPO_NOT_FOUND: '仓库不存在、不可访问,或分支/提交无效。',
+  FILE_NOT_FOUND: '文件不存在(可能已被删除或路径有误)。',
   REPO_NOT_READY: '依赖图还没生成好,请稍后再试。',
   RATE_LIMITED: '提交太频繁了,请稍后再试。',
   INTERNAL: '服务内部错误,请稍后重试。',

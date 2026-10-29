@@ -17,8 +17,17 @@ export function safeRelPath(p: string): string | null {
   return p;
 }
 
+/** `excluded.reason` 枚举(只增不改):敏感 / 过大 / 二进制 */
+export const EXCLUDED_REASONS = ['sensitive', 'too-large', 'binary'] as const;
+export type ExcludedReason = (typeof EXCLUDED_REASONS)[number];
+
+/** 共享排除规则 id(exclusionRule 的返回值)→ excluded.reason;敏感规则 id 一律归为 sensitive */
+export function excludedReasonOf(rule: string): ExcludedReason {
+  return rule === 'too-large' || rule === 'binary' ? rule : 'sensitive';
+}
+
 /** 已排除文件的提示文案:敏感用 SENSITIVE_PLACEHOLDER,体积/二进制各自说明 */
-export function excludedNotice(reason: string): string {
+export function excludedNotice(reason: ExcludedReason): string {
   if (reason === 'too-large') return '[已排除:文件过大,内容不展示、不送模型、不建索引]';
   if (reason === 'binary') return '[已排除:二进制文件,内容不展示、不送模型、不建索引]';
   return SENSITIVE_PLACEHOLDER;
@@ -40,6 +49,6 @@ export const FileContentSchema = z.object({
   /** 区间内原文(行间以 \n 连接,不含末尾换行);排除时为 null */
   content: z.string().nullable(),
   /** 命中共享排除规则(敏感 / 过大 / 二进制)时非 null,content 一定为 null */
-  excluded: z.object({ reason: z.string().min(1), notice: z.string().min(1) }).nullable(),
+  excluded: z.object({ reason: z.enum(EXCLUDED_REASONS), notice: z.string().min(1) }).nullable(),
 });
 export type FileContent = z.infer<typeof FileContentSchema>;

@@ -664,13 +664,35 @@ describe.skipIf(!hasRedis)('路由(真实 Redis + 内存 Store)', () => {
     await app.close();
   });
 
+  it('409 REPO_NOT_READY 带 details.reason=GRAPH_NOT_READY(仓库已建、图未生成)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'rl-api-nograph-'));
+    const app = make(dir);
+    const repo = await store.upsertRepo({ url: 'https://github.com/o/n', owner: 'o', name: 'n' });
+    for (const u of [`/api/repos/${repo.id}/graph`, `/api/repos/${repo.id}/files?path=a.ts`]) {
+      const r = await app.inject(u);
+      expect(r.statusCode, u).toBe(409);
+      expect(ApiErrorSchema.parse(r.json()).error, u).toMatchObject({
+        code: 'REPO_NOT_READY',
+        details: { reason: 'GRAPH_NOT_READY' },
+      });
+    }
+    await app.close();
+  });
+
   it('GET /api/repos/:id/files(T-213):读快照、.. 400、未知参数 400、无快照 409', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'rl-api-files-'));
     const app = make(dir);
     const { repoId } = await seedGraph();
     const url = (q: string) => `/api/repos/${repoId}/files?${q}`;
+    const err = async (u: string, a = app) => {
+      const r = await a.inject(u);
+      return [r.statusCode, ApiErrorSchema.parse(r.json()).error];
+    };
     // 还没有快照目录
-    expect((await app.inject(url('path=src/a.ts'))).json().error.code).toBe('REPO_NOT_READY');
+    expect(await err(url('path=src/a.ts'))).toEqual([
+      409,
+      expect.objectContaining({ code: 'REPO_NOT_READY', details: { reason: 'SNAPSHOT_MISSING' } }),
+    ]);
     mkdirSync(join(dir, String(repoId), SHA, 'src'), { recursive: true });
     writeFileSync(join(dir, String(repoId), SHA, 'src/a.ts'), 'a\nb\nc\n');
     const ok = await app.inject(url('path=src/a.ts&start=2&end=3'));
@@ -684,11 +706,21 @@ describe.skipIf(!hasRedis)('路由(真实 Redis + 内存 Store)', () => {
       '',
     ])
       expect((await app.inject(url(q))).statusCode, q).toBe(400);
-    expect((await app.inject(url('path=src/none.ts'))).statusCode).toBe(404);
-    expect((await app.inject('/api/repos/999/files?path=a.ts')).statusCode).toBe(404);
+    // 文件不存在用独立的 FILE_NOT_FOUND,仓库不存在仍是 REPO_NOT_FOUND
+    expect(await err(url('path=src/none.ts'))).toEqual([
+      404,
+      expect.objectContaining({ code: 'FILE_NOT_FOUND' }),
+    ]);
+    expect(await err('/api/repos/999/files?path=a.ts')).toEqual([
+      404,
+      expect.objectContaining({ code: 'REPO_NOT_FOUND' }),
+    ]);
     // 未配置 reposDir
     const bare = make();
-    expect((await bare.inject(url('path=src/a.ts'))).statusCode).toBe(409);
+    expect(await err(url('path=src/a.ts'), bare)).toEqual([
+      409,
+      expect.objectContaining({ details: { reason: 'REPOS_DIR_NOT_CONFIGURED' } }),
+    ]);
     await Promise.all([app.close(), bare.close()]);
   });
 

@@ -513,7 +513,7 @@ T-210b（DeepSeek，D1）：
 - README / package.json 进 repo 提示词前先 `lstat`：非普通文件或超过 `MAX_SEND_BYTES` 直接不读，避免大文件整读进内存；读到后再过 `exclusionRule`。
 - 超限与二进制：扫描阶段已跳过 >500KB 与前 8KB 含 NUL 的文件（不成为图节点）；送模型/切块前再用 `exclusionRule` = 敏感规则 → `unsendableContentRule`（用 `TextEncoder` 算 UTF-8 字节数，shared 不依赖 Node `Buffer`；字节数 > `MAX_SEND_BYTES` 500KB 记 `too-large`，含 NUL 记 `binary`）兜一次，命中同样只给规则摘要、不送模型、不切块。
   - embedding / RAG：分析器对命中文件 `chunks = []` 并标 `ParsedFile.sensitive`，因此不会被切块、向量化或作为检索来源；图节点与导入关系保留。
-  - `/files`（T-213）：命中文件不返回内容，`excluded.notice` 为 `SENSITIVE_PLACEHOLDER`「已排除」提示（过大/二进制各有对应提示，见 `excludedNotice`），`excluded.reason` 为规则名。已写进 T-213 测试（`apps/api/src/files.test.ts`）。
+  - `/files`（T-213）：命中文件不返回内容，`excluded.notice` 为 `SENSITIVE_PLACEHOLDER`「已排除」提示（过大/二进制各有对应提示，见 `excludedNotice`），`excluded.reason` 为枚举 `sensitive | too-large | binary`（敏感规则名不外露）。已写进 T-213 测试（`apps/api/src/files.test.ts`）。
   - `.env`、`.pem` 等非源码文件本来就不在扫描结果里，规则表对它们是第二道保险。
 - 测试：
   - `packages/shared/src/sensitive.test.ts`：规则正反例。
