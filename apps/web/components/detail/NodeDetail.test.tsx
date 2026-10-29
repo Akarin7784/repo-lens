@@ -91,6 +91,42 @@ describe('<NodeDetail>', () => {
     expect(api.getNodeDetail).toHaveBeenCalledTimes(2);
   });
 
+  it('分析已完成但 summary 为 null:显示「暂无摘要」,不显示生成中', async () => {
+    const api = { getNodeDetail: vi.fn(async () => detail({ summary: null })) };
+    render(
+      <NodeDetail
+        repoId={1}
+        nodeId="f:src/compose.ts"
+        api={api}
+        doneTick={1}
+        analysisDone
+        onJump={() => {}}
+      />,
+    );
+    expect(await screen.findByText('暂无摘要。')).toBeTruthy();
+    expect(screen.queryByText(/摘要生成中/)).toBeNull();
+    expect(screen.queryByTestId('summary-skeleton')).toBeNull();
+  });
+
+  it('外部包节点(x:)summary 为 null:分析未完成也显示「暂无摘要」', async () => {
+    const api = {
+      getNodeDetail: vi.fn(async () =>
+        detail({
+          id: 'x:react',
+          kind: 'external',
+          path: 'react',
+          summary: null,
+          exports: [],
+          loc: 0,
+          topDependents: [],
+        }),
+      ),
+    };
+    render(<NodeDetail repoId={1} nodeId="x:react" api={api} onJump={() => {}} />);
+    expect(await screen.findByText('暂无摘要。')).toBeTruthy();
+    expect(screen.queryByText(/摘要生成中/)).toBeNull();
+  });
+
   it('切换节点:取消旧请求,过期响应不覆盖新节点', async () => {
     const a = deferred<NodeDetailData>();
     const b = deferred<NodeDetailData>();

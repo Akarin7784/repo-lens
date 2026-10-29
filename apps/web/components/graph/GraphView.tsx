@@ -1,5 +1,5 @@
 'use client';
-import { MAX_NODES_PER_RESPONSE } from '@repolens/shared';
+import { MAX_NODES_PER_RESPONSE, type GraphNode } from '@repolens/shared';
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import {
   Background,
@@ -62,6 +62,14 @@ function revealFocus(id: string): string | null {
   return `d:${i < 0 ? '.' : p.slice(0, i)}`;
 }
 
+/** 跳转目标解析:优先精确 id;面包屑给的 d: 可能对应顶层 module(m:),按路径匹配非文件节点 */
+function resolveJumpTarget(nodes: readonly GraphNode[], want: string): string {
+  const hit =
+    nodes.find((n) => n.id === want) ??
+    nodes.find((n) => n.type !== 'external' && idPath(n.id) === idPath(want) && n.id[0] !== 'f');
+  return hit?.id ?? want;
+}
+
 const defaultEdgeOptions = {
   markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: 'var(--edge)' },
 };
@@ -91,6 +99,8 @@ function Inner({
   const autoFocus = useRef<string | null>(null);
   const autoBusy = useRef(false);
   const [autoTick, setAutoTick] = useState(0);
+  // T-222:等待中的外部跳转目标(见下方跳转 effect)。根层加载回调里也要读,所以声明在这里
+  const pendingJump = useRef<string | null>(null);
   const onRootRef = useRef(onRootLoaded);
   onRootRef.current = onRootLoaded;
 
@@ -104,7 +114,13 @@ function Inner({
         const file = await loadLayoutFile(owner, repo, slice.meta.commitSha);
         if (!alive) return;
         layoutFile.current = file;
-        autoFocus.current = slice.meta.suggestedFocus ?? null;
+        // 挂载时就带着跳转请求(?node= 打开链接):根层返回后按跳转目标展开,不用 suggestedFocus 覆盖它
+        const pending = pendingJump.current
+          ? resolveJumpTarget(slice.nodes, pendingJump.current)
+          : null;
+        if (pending) pendingJump.current = pending;
+        autoFocus.current =
+          (pending ? revealFocus(pending) : null) ?? slice.meta.suggestedFocus ?? null;
         onRootRef.current?.({ commitSha: slice.meta.commitSha, nodes: slice.nodes.length, ms });
         dispatch({
           type: 'init',
@@ -300,24 +316,18 @@ function Inner({
   }, [selKey]);
 
   // T-222:外部跳转。目标已可见直接选中;否则复用 suggestedFocus 的逐层展开,展开到位后选中
-  const pendingJump = useRef<string | null>(null);
   useEffect(() => {
     if (!jumpRequest) return;
     // 面包屑给的是 d:,顶层目录可能是 module(m:):按路径匹配已加载节点
-    const want = jumpRequest.id;
-    const hit =
-      state.nodes.find((n) => n.id === want) ??
-      state.nodes.find(
-        (n) => n.type !== 'external' && idPath(n.id) === idPath(want) && n.id[0] !== 'f',
-      );
-    const id = hit?.id ?? want;
+    const id = resolveJumpTarget(state.nodes, jumpRequest.id);
     if (flow.nodes.some((n) => n.id === id)) {
       pendingJump.current = null;
       setSelectedId(id);
       return;
     }
     pendingJump.current = id;
-    const focus = revealFocus(id);
+    // 根层还没回来时只记下目标,由根层加载回调设置展开焦点(否则会被 suggestedFocus 覆盖)
+    const focus = state.nodes.length > 0 ? revealFocus(id) : null;
     if (focus) {
       autoFocus.current = focus;
       setAutoTick((t) => t + 1);
@@ -325,8 +335,10 @@ function Inner({
     // 只由新的 jumpRequest 触发
   }, [jumpRequest]);
   useEffect(() => {
-    const id = pendingJump.current;
-    if (!id) return;
+    if (!pendingJump.current) return;
+    // 逐层展开后可能出现按路径对应的 m: 节点(面包屑给的是 d:):重新解析
+    const id = resolveJumpTarget(state.nodes, pendingJump.current);
+    pendingJump.current = id;
     if (flow.nodes.some((n) => n.id === id)) {
       pendingJump.current = null;
       setSelectedId(id);

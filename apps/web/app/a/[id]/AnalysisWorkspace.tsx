@@ -169,6 +169,7 @@ export function AnalysisWorkspace({ repoId, jobId, repoLabel, api: apiProp, even
                 api={api}
                 neighbors={sel}
                 doneTick={doneTick}
+                analysisDone={progress.status === 'done'}
                 onJump={jumpTo}
               />
             ) : (

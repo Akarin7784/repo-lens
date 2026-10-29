@@ -264,3 +264,84 @@ describe('<GraphView> 外部跳转与选中回调(T-222)', () => {
     expect(src.calls).toEqual([null, 'm:a']);
   });
 });
+
+describe('<GraphView> 挂载即带 jumpRequest(?node= 直接打开,#43 评审)', () => {
+  const dir = (path: string, parentId: string): GraphNode =>
+    ({ id: `d:${path}`, type: 'dir', parentId, label: path.split('/').pop()!, path }) as GraphNode;
+  /** 根层带 suggestedFocus=m:b(与跳转目标无关);目标 f:a/sub/x.ts 在两层未展开的容器里;根层异步返回 */
+  function nestedSource(): GraphSource & { calls: (string | null)[] } {
+    const calls: (string | null)[] = [];
+    return {
+      repoLabel: 't/t',
+      calls,
+      loadChildren: vi.fn(async (p: string | null) => {
+        calls.push(p);
+        await new Promise((r) => setTimeout(r, 10));
+        if (p === null) {
+          const s = slice(null, [mod('m:a'), mod('m:b')], [agg('m:a', 'm:b', 1)]);
+          return { ...s, meta: { ...s.meta, suggestedFocus: 'm:b' } };
+        }
+        if (p === 'm:a') return slice('m:a', [dir('a/sub', 'm:a'), file('a/y.ts', 'm:a')], []);
+        if (p === 'd:a/sub')
+          return slice(
+            'd:a/sub',
+            [file('a/sub/x.ts', 'd:a/sub'), mod('m:b')],
+            [agg('f:a/sub/x.ts', 'm:b', 1)],
+          );
+        return slice(p, [file('b/z.ts', 'm:b')], []);
+      }),
+    };
+  }
+
+  it('目标在未展开容器里:根层返回后按跳转目标逐层展开并选中,不被 suggestedFocus 覆盖', async () => {
+    const src = nestedSource();
+    const engine = await createInlineEngine();
+    const onSel = vi.fn();
+    render(
+      <div style={{ width: 800, height: 600 }}>
+        <GraphView
+          source={src}
+          owner="t"
+          repo="t"
+          engine={engine}
+          onSelectionChange={onSel}
+          jumpRequest={{ id: 'f:a/sub/x.ts', n: 1 }}
+        />
+      </div>,
+    );
+    await waitFor(() =>
+      expect(onSel).toHaveBeenLastCalledWith({
+        id: 'f:a/sub/x.ts',
+        deps: ['m:b'],
+        dependents: [],
+      }),
+    );
+    // 只沿目标路径请求,suggestedFocus(m:b)这次不生效
+    expect(src.calls).toEqual([null, 'm:a', 'd:a/sub']);
+    expect(screen.queryByText(/图中找不到/)).toBeNull();
+    expect(await screen.findByTestId('node-f:a/sub/x.ts')).toBeInTheDocument();
+  });
+
+  it('面包屑式的 d: 目标对应顶层 module:根层返回后按路径解析为 m: 并选中', async () => {
+    const src = nestedSource();
+    const engine = await createInlineEngine();
+    const onSel = vi.fn();
+    render(
+      <div style={{ width: 800, height: 600 }}>
+        <GraphView
+          source={src}
+          owner="t"
+          repo="t"
+          engine={engine}
+          onSelectionChange={onSel}
+          jumpRequest={{ id: 'd:a', n: 1 }}
+        />
+      </div>,
+    );
+    await waitFor(() =>
+      expect(onSel).toHaveBeenLastCalledWith({ id: 'm:a', deps: ['m:b'], dependents: [] }),
+    );
+    expect(src.calls).toEqual([null]);
+    expect(screen.queryByText(/图中找不到/)).toBeNull();
+  });
+});

@@ -14,6 +14,8 @@ type Props = {
   neighbors?: GraphNeighbors;
   /** 进度流收到 done 时递增:summary 为 null 时据此重取 */
   doneTick?: number;
+  /** 分析已结束(done):此后 summary 仍为 null 就是「暂无摘要」,不再显示「生成中」 */
+  analysisDone?: boolean;
   onJump(nodeId: string): void;
 };
 
@@ -46,7 +48,15 @@ const short = (id: string) => id.replace(/^[a-z]:/, '');
  * 右栏节点详情(T-222)。数据只来自 GET /api/repos/:id/nodes/:nodeId,不造数据。
  * 切换节点时 abort 旧请求,并用请求序号丢弃过期响应。
  */
-export function NodeDetail({ repoId, nodeId, api, neighbors, doneTick = 0, onJump }: Props) {
+export function NodeDetail({
+  repoId,
+  nodeId,
+  api,
+  neighbors,
+  doneTick = 0,
+  analysisDone = false,
+  onJump,
+}: Props) {
   const [load, setLoad] = useState<Load>({ state: 'loading' });
   const [retry, setRetry] = useState(0);
   const seq = useRef(0);
@@ -108,7 +118,7 @@ export function NodeDetail({ repoId, nodeId, api, neighbors, doneTick = 0, onJum
           <Skeleton />
         </div>
       ) : (
-        <Body d={load.data} neighbors={neighbors} onJump={onJump} />
+        <Body d={load.data} neighbors={neighbors} analysisDone={analysisDone} onJump={onJump} />
       )}
     </section>
   );
@@ -131,13 +141,17 @@ function Skeleton() {
 function Body({
   d,
   neighbors,
+  analysisDone,
   onJump,
 }: {
   d: NodeDetailData;
   neighbors?: GraphNeighbors;
+  analysisDone: boolean;
   onJump(id: string): void;
 }) {
   const crumbs = breadcrumbs(d.id, d.path);
+  // 只有分析未完成时 null 才表示「生成中」;外部包节点不生成摘要
+  const pending = d.summary === null && d.kind !== 'external' && !analysisDone;
   return (
     <>
       <header className="flex flex-col gap-2">
@@ -166,12 +180,12 @@ function Body({
 
       <div>
         <h3 className="mb-2 font-serif text-[15px] font-semibold text-fg">摘要</h3>
-        {d.summary === null ? (
+        {pending ? (
           <>
             <Skeleton />
             <p className="mt-2 text-[12px] text-muted">摘要生成中,分析完成后自动刷新。</p>
           </>
-        ) : d.summary.trim() === '' ? (
+        ) : d.summary === null || d.summary.trim() === '' ? (
           <p className="text-[14px] text-muted">暂无摘要。</p>
         ) : (
           <p className="whitespace-pre-wrap text-[14px] leading-6 text-fg">{d.summary}</p>
