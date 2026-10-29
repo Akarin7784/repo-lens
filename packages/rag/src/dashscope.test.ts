@@ -124,6 +124,23 @@ describe('DashscopeEmbedder', () => {
     await expect(mk(n.f).e.embedQuery('q')).rejects.toMatchObject({ kind: 'unavailable' });
   });
 
+  it('读响应体时超时 / 中止归为 timeout 并重试,不当成 bad-response', async () => {
+    for (const name of ['TimeoutError', 'AbortError']) {
+      const t = fakeFetch(() => {
+        const r = new Response('{}', { status: 200 });
+        Object.defineProperty(r, 'json', {
+          value: () => Promise.reject(Object.assign(new Error('x'), { name })),
+        });
+        return r;
+      });
+      await expect(mk(t.f).e.embedQuery('q')).rejects.toMatchObject({
+        kind: 'timeout',
+        retryable: true,
+      });
+      expect(t.calls).toHaveLength(1 + QUERY_CALL.retries);
+    }
+  });
+
   it('错误对象不含第三方原始响应体、请求文本或 key', async () => {
     const leaky = `{"error":{"message":"Incorrect API key provided: ${FAKE_KEY}"},"echo":"SECRET_TEXT"}`;
     for (const status of [400, 401, 429, 500]) {

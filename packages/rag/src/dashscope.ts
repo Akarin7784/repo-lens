@@ -180,8 +180,13 @@ export class DashscopeEmbedder implements Embedder {
     let json: unknown;
     try {
       json = await res.json();
-    } catch {
-      throw new EmbeddingError('bad-response', res.status);
+    } catch (e) {
+      // AbortSignal.timeout 也覆盖读响应体:读体超时 / 中止归为 timeout(可重试),其余才是 bad-response
+      const name = (e as { name?: string } | null)?.name;
+      throw new EmbeddingError(
+        name === 'TimeoutError' || name === 'AbortError' ? 'timeout' : 'bad-response',
+        name === 'TimeoutError' || name === 'AbortError' ? undefined : res.status,
+      );
     }
     const j = json as {
       data?: { index?: number; embedding?: unknown }[];
