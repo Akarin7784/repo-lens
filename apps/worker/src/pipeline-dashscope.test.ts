@@ -56,6 +56,8 @@ async function setup(env: Record<string, string> = {}, extra: Record<string, str
   const embedding = readEmbeddingConfig({
     EMBEDDING_PROVIDER: 'dashscope',
     DASHSCOPE_API_KEY: FAKE_KEY,
+    // 固定 v3:本用例需要 64 维(qwen3.7 不支持),不随默认模型变化
+    DASHSCOPE_EMBEDDING_MODEL: 'text-embedding-v3',
     DASHSCOPE_EMBEDDING_DIM: '64',
     EMBEDDING_BATCH_SIZE: '2',
     ...env,

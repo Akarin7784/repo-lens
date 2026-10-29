@@ -12,7 +12,7 @@
 // 按 embedding digest(模型 + revision + 切块版本 + 文本模板版本 + 每块内容 hash)判断复用,不按块数;
 // 改写缓存在 /tmp/rl-eval-rewrites.json,key = 问题 + 提示词版本 + 模型(同一问题重跑不再调模型)。
 // embedding 提供方(T-214c):EMBEDDING_PROVIDER=local(缺省,行为不变)| dashscope;dashscope 时模型/维度取
-//   DASHSCOPE_EMBEDDING_MODEL(缺省 text-embedding-v3)/ DASHSCOPE_EMBEDDING_DIM(缺省模型默认),
+//   DASHSCOPE_EMBEDDING_MODEL(缺省 qwen3.7-text-embedding)/ DASHSCOPE_EMBEDDING_DIM(缺省模型默认),
 //   key 只读 DASHSCOPE_API_KEY(不打印,输出前抹掉);开始行打印 provider、model、dim、collection。
 //   集合名 eval_<provider>_<model>_<请求维度>;dashscope 的向量缓存按集合名分文件,不与 local 混用。
 //   只用环境变量选择,不新增命令行覆盖参数。示例(key 事先 export 在环境里,不写进命令):
