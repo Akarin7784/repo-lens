@@ -258,12 +258,11 @@ CREATE TABLE llm_usage (
 Collection `code_chunks`（所有仓库共用一个 collection，按 payload 过滤；`repo_id` 建 payload index）：
 ```json
 { "vectors": {"dense": {"size": 384, "distance": "Cosine"}},
-  "sparse_vectors": {"bm25": {}},
-  "payload": {"repo_id":12,"commit":"a1b2c3d","path":"src/db/index.ts","node_id":"f:src/db/index.ts",
-              "symbol":"createPool","kind":"function","start_line":10,"end_line":48,
-              "lang":"ts","chunk_type":"code|summary","content_hash":"…"} }
+  "payload": {"repo_id":12,"commit_sha":"a1b2c3d…(40 位)","path":"src/db/index.ts",
+              "symbol":"createPool","start_line":10,"end_line":48,"content_hash":"…"} }
 ```
-维度 384：D4 定稿为本地 ONNX `multilingual-e5-small`（fp32），查询加 `query: `、文档块加 `passage: ` 前缀；模型在 worker 镜像构建时下载，只在 worker 内运行，峰值内存约 2.5 GB（compose 给 worker `mem_limit: 3g`，演示机整机至少 4 GB）。T-214 第一部分只写 `dense`，`sparse_vectors`、`node_id`/`kind`/`lang`/`chunk_type` 等 payload 字段暂不写（检索见第二部分）。稀疏向量 BM25 需要在应用侧生成，或者用 Qdrant 的 IDF modifier，**待验证**；如果不行就退回 MySQL FULLTEXT（ngram parser）做关键词检索。
+字段以 ARCHITECTURE §5「Qdrant collection」为准(上面是当前实际写入的形状,与之一致;commit 字段统一叫 `commit_sha`,与 MySQL 列同名)。**规划中、尚未写入**(T-214 第二部分再定,加字段只增不改):`node_id`、`kind`、`lang`、`chunk_type: code|summary`,以及稀疏向量 `sparse_vectors.bm25`(是否采用见下)。
+维度 384：D4 定稿为本地 ONNX `multilingual-e5-small`（fp32），查询加 `query: `、文档块加 `passage: ` 前缀；模型在 worker 镜像构建时下载，只在 worker 内运行，峰值内存约 2.5 GB（compose 给 worker `mem_limit: 3g`，演示机整机至少 4 GB）。T-214 第一部分只写 `dense`。向量化状态与检索降级约定见 ARCHITECTURE §5「向量化状态与降级」。稀疏向量 BM25 需要在应用侧生成，或者用 Qdrant 的 IDF modifier，**待验证**；如果不行就退回 MySQL FULLTEXT（ngram parser）做关键词检索。
 
 **`code_chunk` 表（采纳架构师新增的定义，以 `/workspace/architecture/ARCHITECTURE.md` 的 DDL 为准）**：存切块元数据（repo_id、commit_sha、path、symbol、start_line、end_line、content、content_hash、qdrant_point_id），用作 Qdrant point 映射、引用校验时的 `content_hash` 比对来源，以及 MySQL FULLTEXT（ngram）关键词检索的回退。向量只存 Qdrant。重新分析同一个 repo+commit 时先按 `repo_id`+`commit_sha` 删除旧的 chunk 和对应 points。
 

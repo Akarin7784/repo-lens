@@ -641,7 +641,13 @@ describe.skipIf(!hasRedis)('路由(真实 Redis + 内存 Store)', () => {
       progress: 100,
       stats: { files: 5, modules: 3, edges: 7 },
       error: null,
+      embeddingStatus: null,
     });
+    // T-214:worker 写入 stats.embeddingStatus 后透出;旧响应缺省按 null 解析
+    await store.updateTask(jobId, { stats: { files: 5, modules: 3, edges: 7, embeddingStatus: 'failed' } });
+    expect((await app.inject(`/api/repos/${repoId}`)).json().embeddingStatus).toBe('failed');
+    const { embeddingStatus: _drop, ...old } = r;
+    expect(RepoStatusSchema.parse(old).embeddingStatus).toBeNull();
     expect((await app.inject('/api/repos/999')).statusCode).toBe(404);
     await app.close();
   });

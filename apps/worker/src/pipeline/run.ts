@@ -31,6 +31,7 @@ import {
   MAX_SEND_BYTES,
   type GraphNode,
   type ProgressStage,
+  type EmbeddingStatus,
 } from '@repolens/shared';
 import {
   buildChunks,
@@ -318,13 +319,19 @@ export async function runPipeline(
     }
     // embedding 85–99:与摘要同样非关键路径,失败只发 stage_error,任务仍 done;图与摘要照常可用
     stage = 'embedding';
+    // embeddingStatus 写进 task.stats,GET /api/repos/:id 透出;检索侧据此决定是否降级(见 ARCHITECTURE §4)
+    let embeddingStatus: EmbeddingStatus = 'skipped';
     if (!deps.embedder || !deps.vectorStore) {
       await progress('embedding', 85, '未配置向量库,跳过向量化');
     } else {
       await progress('embedding', 85, '切块与向量化');
       try {
-        await progress('embedding', 99, await runEmbedding(data, deps, root, progress));
+        const r = await runEmbedding(data, deps, root, progress);
+        embeddingStatus = r.reused ? 'reused' : 'ready';
+        stats = { ...stats, embeddingChunks: r.chunks };
+        await progress('embedding', 99, r.message);
       } catch (err) {
+        embeddingStatus = 'failed';
         await events.emit({
           event: 'stage_error',
           data: {
@@ -336,7 +343,8 @@ export async function runPipeline(
       }
     }
 
-    await store.updateTask(jobId, { stage: 'done', progress: 100, finishedAt: new Date() });
+    stats = { ...stats, embeddingStatus };
+    await store.updateTask(jobId, { stage: 'done', progress: 100, finishedAt: new Date(), stats });
     await events.emit({ event: 'progress', data: { jobId, stage: 'done', progress: 100 } });
     const numeric = Object.fromEntries(
       Object.entries(stats).filter((e): e is [string, number] => typeof e[1] === 'number'),
@@ -501,7 +509,7 @@ export async function runEmbedding(
   deps: PipelineDeps,
   root: string,
   progress: (s: ProgressStage, pct: number, message?: string) => Promise<void>,
-): Promise<string> {
+): Promise<{ chunks: number; reused: boolean; message: string }> {
   const { store, config } = deps;
   const { repoId, commitSha } = data;
   const ana = readJson<AnalyzeResult>(`${root}.analysis.json`);
@@ -536,7 +544,10 @@ export async function runEmbedding(
       progress('embedding', 85 + Math.floor((done / total) * 14), `向量化 ${done}/${total} 块`),
   );
   const skip = excluded.length ? `,排除 ${excluded.length} 个文件` : '';
-  return r.reused
-    ? `该 commit 已有 ${r.chunks} 个向量,复用${skip}`
-    : `向量化完成:${r.chunks} 块${skip}`;
+  return {
+    ...r,
+    message: r.reused
+      ? `该 commit 已有 ${r.chunks} 个向量,复用${skip}`
+      : `向量化完成:${r.chunks} 块${skip}`,
+  };
 }

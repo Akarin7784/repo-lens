@@ -357,7 +357,17 @@ CREATE TABLE llm_usage (
 ```
 > `code_chunk` 为本文档新增(后端文档未定义),用于 Qdrant point 映射和 MySQL FULLTEXT 关键词回退,待后端确认。
 
-Qdrant collection `code_chunks`:命名向量 `dense`,384 维(multilingual-e5-small),cosine;point id = `code_chunk.qdrant_point_id`;payload `{repo_id, commit_sha, path, symbol, start_line, end_line, content_hash}`,**`repo_id` 作为 filter 字段**并建 payload index(`path` 同建)。重新分析时按 `repo_id`+`commit_sha` 过滤删除旧 points。
+Qdrant collection `code_chunks`:命名向量 `dense`,384 维(multilingual-e5-small),cosine;point id = `code_chunk.qdrant_point_id`;payload `{repo_id, commit_sha, path, symbol, start_line, end_line, content_hash}`,**`repo_id` 作为 filter 字段**并建 payload index(`path` 同建)。重新分析时按 `repo_id`+`commit_sha` 过滤删除旧 points。规划中、尚未写入的 payload 字段:`node_id`、`kind`、`lang`、`chunk_type`(code|summary)与稀疏向量 `bm25`(T-214 第二部分定,只增不改;BACKEND_AI_DESIGN §5 同步此清单)。
+
+**向量化状态与降级(T-214)**:worker 把结果写入 `analysis_task.stats.embeddingStatus`(JSON 字段,无迁移),`GET /api/repos/:id` 以 `embeddingStatus` 透出(与 `commitSha` 同源,取最近已完成任务;旧任务为 `null`):
+| 值 | 含义 |
+|---|---|
+| `ready` | 本次切块并写入 Qdrant |
+| `reused` | 该 commit 已有同数量 points,直接复用 |
+| `skipped` | 未配置向量库(EMBEDDER/QDRANT 未设),未向量化 |
+| `failed` | 向量化出错;已发一次 `stage_error{stage:"embedding"}`,任务仍 `done`,图与摘要可用 |
+
+降级约定:检索只在 `ready|reused` 时走向量路;其余情况(含 `null`)或查询时 Qdrant 不可用,只用关键词/精确匹配路做 RRF,不报错、不返回 5xx;问答 `done` 事件上如何标注本次未用向量检索,在 T-214 第二部分与前端约定(**未定**,不擅自加字段)。
 
 ### 5.4 Redis key 设计
 | Key | 类型 | TTL | 用途 |

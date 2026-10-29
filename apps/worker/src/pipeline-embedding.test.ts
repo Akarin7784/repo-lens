@@ -46,6 +46,10 @@ describe('embedding 阶段(T-214)', () => {
     );
     expect(msgs.at(-1)).toMatch(/^向量化完成:\d+ 块/);
     expect(errs(ev1)).toEqual([]);
+    expect((await store.getTask(data.jobId))?.stats).toMatchObject({
+      embeddingStatus: 'ready',
+      embeddingChunks: vectorStore.points.size,
+    });
 
     // 重跑:删掉解析断点(走图已入库分支),point 数与切块数不同 → 按整文件重建;再跑一次 → 复用
     const root = join(config.workdir, String(data.repoId), data.commitSha);
@@ -56,6 +60,7 @@ describe('embedding 阶段(T-214)', () => {
     await runPipeline(data, { ...deps, events: ev3 });
     expect(spy.mock.calls.length).toBe(after);
     expect(JSON.stringify(ev3.events)).toContain('复用');
+    expect((await store.getTask(data.jobId))?.stats.embeddingStatus).toBe('reused');
     expect([...vectorStore.points.values()].map((p) => p.payload.path)).not.toContain('src/big.ts');
   });
 
@@ -77,6 +82,7 @@ describe('embedding 阶段(T-214)', () => {
       allowFileProtocol: true,
     });
     expect((await store.getTask(data.jobId))?.stage).toBe('done');
+    expect((await store.getTask(data.jobId))?.stats.embeddingStatus).toBe('failed');
     expect(errs(events)).toEqual([
       { jobId: data.jobId, stage: 'embedding', message: expect.stringContaining('向量化失败') },
     ]);
@@ -87,6 +93,7 @@ describe('embedding 阶段(T-214)', () => {
     const events = new MemoryEventSink();
     await runPipeline(data, { store, events, config: testConfig(), allowFileProtocol: true });
     expect(JSON.stringify(events.events)).toContain('未配置向量库,跳过向量化');
+    expect((await store.getTask(data.jobId))?.stats.embeddingStatus).toBe('skipped');
     expect((await store.getTask(data.jobId))?.stage).toBe('done');
   });
 });
