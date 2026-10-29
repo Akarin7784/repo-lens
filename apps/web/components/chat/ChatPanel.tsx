@@ -299,7 +299,11 @@ function AnswerNotes({ a, onRetry }: { a: Answer; onRetry: () => void }) {
     <div className="mt-2 flex flex-wrap items-center gap-2 text-[12px] text-muted">
       {notes}
       {problem && (
-        <span role={a.status === 'aborted' ? undefined : 'alert'} className="text-accent-strong">
+        <span
+          role={a.status === 'aborted' ? 'status' : 'alert'}
+          // 用户主动停止不是错误:中性色、status 角色;其余为错误样式
+          className={a.status === 'aborted' ? 'text-muted' : 'text-accent-strong'}
+        >
           {problem.text}
         </span>
       )}

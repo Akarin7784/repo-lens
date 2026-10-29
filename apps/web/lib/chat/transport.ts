@@ -1,6 +1,6 @@
 import { ChatEventSchema, type ChatEvent, type ChatRequest } from '@repolens/shared';
 import { apiBase } from '../api/config';
-import { ERROR_TEXT, looseError } from '../api/errors';
+import { looseError } from '../api/errors';
 import type { ChatErrorInfo } from './answer';
 import { parseSse } from './sse';
 
@@ -33,7 +33,10 @@ const MARKER = /\[\[S\d+:\d+-\d+\]\]/g;
 const PARTIAL = /\[(?:\[(?:S\d*(?::\d*(?:-\d*(?:\])?)?)?)?)?$/;
 export function stripCitationMarkers(text: string, streaming: boolean): string {
   const t = text.replace(MARKER, '');
-  return streaming ? t.replace(PARTIAL, '') : t;
+  // 流式中连单个 "[" 也先藏;流结束后只藏以 "[[" 开头的残留半截标记,保留正常方括号
+  return streaming
+    ? t.replace(PARTIAL, '')
+    : t.replace(/\[\[(?:S\d*(?::\d*(?:-\d*(?:\])?)?)?)?$/, '');
 }
 
 /** 传输层产出:通过 shared ChatEventSchema 的事件,或一个「不合法事件」标记 */
@@ -89,7 +92,8 @@ export function createFetchTransport(
       if (signal.aborted) return;
       throw new ChatTransportError({ code: 'NETWORK', message: String(e), retryable: true });
     }
-    if (!res.ok || !res.body) {
+    if (!res.ok) {
+      // 开流前错误 = HTTP 状态 + ApiError JSON;解析失败就用通用文案,绝不显示原始响应体
       const body: unknown = await res.json().catch(() => null);
       const err = looseError(body);
       // 404 且没有约定的错误体:路由本身不存在(后端问答 API 未上线)
@@ -97,11 +101,15 @@ export function createFetchTransport(
         throw new ChatTransportError({ code: 'NOT_AVAILABLE', message: '', retryable: false });
       throw new ChatTransportError({
         code: err?.code ?? 'HTTP',
-        message: err
-          ? `${ERROR_TEXT[err.code]}${err.message ? `(${err.message})` : ''}`
-          : `HTTP ${res.status}`,
+        message: err?.message ? err.message.slice(0, 200) : '',
         retryable: res.status >= 500 || res.status === 429 || err?.code === 'REPO_NOT_READY',
       });
+    }
+    // 2xx 也要确认是 SSE:JSON/HTML(如网关错误页、被代理改写)不能按流解析
+    const ctype = (res.headers.get('content-type') ?? '').split(';')[0]!.trim().toLowerCase();
+    if (ctype !== 'text/event-stream' || !res.body) {
+      void res.body?.cancel().catch(() => undefined);
+      throw new ChatTransportError({ code: 'BAD_RESPONSE', message: '', retryable: true });
     }
     try {
       for await (const f of parseSse(res.body, signal)) yield toChatItem(f.event, f.data);
