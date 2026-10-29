@@ -41,6 +41,8 @@ export const redisKeys = {
   rateLimitIp: (ip: string, d = new Date()) => `rl:ip:${ip}:${hourBucket(d)}`,
   /** 宽松总量计数:所有 POST /api/repos 提交 */
   submitLimitIp: (ip: string, d = new Date()) => `rl:sub:${ip}:${hourBucket(d)}`,
+  /** P4:问答限流;调用方传入 ipKey(req.ip),与提交限流分 key */
+  chatLimitIp: (ip: string, d = new Date()) => `rl:chat:${ip}:${hourBucket(d)}`,
   /** LLM 响应缓存,hash = sha256(model + 请求内容) */
   llmCache: (hash: string) => `llm:${hash}`,
   /** 全站当日 LLM 花费(micro-USD,INCRBY) */

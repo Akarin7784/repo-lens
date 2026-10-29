@@ -40,6 +40,14 @@ function numberLines(c: ChunkInput): string {
     .join('\n');
 }
 
+/** 用户问题里像片段分隔符的行前加可见 `\\`,避免伪造 `=== Sn ... ===` 边界;只处理问题文本 */
+export function escapeQuestionSeparators(question: string): string {
+  return question
+    .split('\n')
+    .map((line) => (/^\s*={3,}/.test(line) ? `\\${line}` : line))
+    .join('\n');
+}
+
 export function assemblePrompt(question: string, chunks: readonly ChunkInput[]): AssembledPrompt {
   const snippets: Snippet[] = [];
   const excluded: string[] = [];
@@ -63,7 +71,7 @@ export function assemblePrompt(question: string, chunks: readonly ChunkInput[]):
     snippets.length > 0 ? body : '(无可用片段)',
     '</snippets>',
     '',
-    `问题:${question}`,
+    `问题:${escapeQuestionSeparators(question)}`,
   ].join('\n');
   return { system: CHAT_SYSTEM_PROMPT, user, snippets, excluded };
 }
