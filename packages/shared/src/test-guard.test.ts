@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   describeProbeError,
+  mysqlServerRootUrl,
+  mysqlUrlWithDb,
   onServiceUnavailable,
   probeService,
   requireDbTests,
@@ -28,10 +30,30 @@ describe('onServiceUnavailable', () => {
   });
 });
 
+describe('mysqlServerRootUrl / mysqlUrlWithDb', () => {
+  it('带库名:pathname 置为 /', () => {
+    expect(mysqlServerRootUrl('mysql://root:dev@127.0.0.1:3306/repolens_test')).toBe(
+      'mysql://root:dev@127.0.0.1:3306/',
+    );
+  });
+
+  it('无库名的主机 URL 不会被吃成 mysql://', () => {
+    // 旧 replace(/\/[^/]*$/, '/') 会把 mysql://u:p@h:3306 变成 mysql://
+    expect(mysqlServerRootUrl('mysql://u:p@h:3306')).toBe('mysql://u:p@h:3306/');
+  });
+
+  it('换库名', () => {
+    expect(mysqlUrlWithDb('mysql://root:dev@127.0.0.1:3306/repolens_test', 'repolens_mig_test')).toBe(
+      'mysql://root:dev@127.0.0.1:3306/repolens_mig_test',
+    );
+  });
+});
+
 describe('probeService', () => {
   const fail = (code: string, message: string) => Object.assign(new Error(message), { code });
 
-  it('前 N-1 次失败、最后一次成功:可达,按指数退避等待', async () => {
+  it('前 N-1 次失败、最后一次成功:可达,按指数退避等待,并 warn 第 N 次才连上', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const waits: number[] = [];
     let n = 0;
     const ok = await probeService(
@@ -50,6 +72,21 @@ describe('probeService', () => {
     expect(ok).toBe(true);
     expect(n).toBe(4);
     expect(waits).toEqual([100, 200, 400]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    const msg = String(warn.mock.calls[0]![0]);
+    expect(msg).toMatch(/MySQL 探测第 4 次才连上/);
+    expect(msg).not.toContain('不可达');
+  });
+
+  it('第 1 次即成功:不打「才连上」warn', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const ok = await probeService('Redis', '[t] z', async () => {}, {
+      attempts: 3,
+      sleep: async () => {},
+      env: {},
+    });
+    expect(ok).toBe(true);
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it('全部失败 + REQUIRE_DB_TESTS=1:抛错,信息带 err.code 与 message,不含 URL/口令', async () => {
@@ -102,5 +139,13 @@ describe('describeProbeError', () => {
     expect(describeProbeError(new Error('bad redis://:pw@h:6379/1 x'))).toBe('bad <url> x');
     expect(describeProbeError(new Error('at //root:pw@host'))).toBe('at //<cred>@host');
     expect(describeProbeError('plain')).toBe('plain');
+  });
+
+  it('口令含空格:scheme URL 截断后残留 w@h(现状锁定,不扩脱敏)', () => {
+    expect(describeProbeError(new Error('mysql://u:p w@h/db'))).toBe('<url> w@h/db');
+  });
+
+  it('无 scheme 的 u:p@h 不脱敏(现状锁定)', () => {
+    expect(describeProbeError(new Error('fail u:p@h'))).toBe('fail u:p@h');
   });
 });

@@ -11,11 +11,11 @@ import {
   redisKeys,
 } from './redis-keys.js';
 import type { GraphInput, Store } from './store.js';
-import { probeService } from '@repolens/shared';
+import { mysqlServerRootUrl, probeService } from '@repolens/shared';
 
 const MYSQL_URL = process.env.TEST_MYSQL_URL ?? 'mysql://root:dev@127.0.0.1:3306/repolens_test';
 // 探测只连服务器根(不带库名):另一测试文件可能正在 DROP/CREATE 默认库,带库名会撞上 Unknown database
-const SERVER_URL = MYSQL_URL.replace(/\/[^/]*$/, '/');
+const SERVER_URL = mysqlServerRootUrl(MYSQL_URL);
 const C = 'a'.repeat(40);
 
 const hasMysql = await probeService(
