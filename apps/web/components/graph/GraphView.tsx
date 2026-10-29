@@ -46,13 +46,35 @@ export type GraphViewProps = {
   repo: string;
   /** 测试时注入同步布局引擎;默认走 web worker 里的 elkjs */
   engine?: LayoutEngine;
+  /** 选中变化(含当前可见层级的一跳邻居),供右栏详情使用 */
+  onSelectionChange?: (sel: { id: string; deps: string[]; dependents: string[] } | null) => void;
+  /** 外部请求跳转到某节点(详情面板里点列表/面包屑、URL ?node=):必要时按路径逐层展开后选中。n 变化即触发 */
+  jumpRequest?: { id: string; n: number } | null;
 };
+
+/** 节点 id 的 POSIX 路径(m:/d:/f: 去前缀) */
+const idPath = (id: string) => id.slice(2);
+/** 跳转目标的展开焦点:所在目录(只展开到它可见为止,不展开目标本身) */
+function revealFocus(id: string): string | null {
+  if (!/^[mdf]:/.test(id)) return null;
+  const p = idPath(id);
+  const i = p.lastIndexOf('/');
+  return `d:${i < 0 ? '.' : p.slice(0, i)}`;
+}
 
 const defaultEdgeOptions = {
   markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: 'var(--edge)' },
 };
 
-function Inner({ source, owner, repo, engine, onRootLoaded }: GraphViewProps) {
+function Inner({
+  source,
+  owner,
+  repo,
+  engine,
+  onRootLoaded,
+  onSelectionChange,
+  jumpRequest,
+}: GraphViewProps) {
   const [state, dispatch] = useReducer(graphReducer, initialGraphState);
   const [flow, setFlow] = useState<{ nodes: RepoFlowNode[]; edges: RepoFlowEdge[] }>({
     nodes: [],
@@ -260,6 +282,65 @@ function Inner({ source, owner, repo, engine, onRootLoaded }: GraphViewProps) {
   }, [selectedId, hover]);
   useEffect(() => hover.leave(), [flow, hover]);
   const selectedNode = view.nodes.find((n) => n.id === selectedId);
+
+  // T-222:把选中与一跳邻居告诉右栏(只在内容变化时回调)
+  const onSelRef = useRef(onSelectionChange);
+  onSelRef.current = onSelectionChange;
+  const selKey = useMemo(() => {
+    if (!selectedId || !flow.nodes.some((n) => n.id === selectedId))
+      return selectedId ? `${selectedId}|` : '';
+    const deps = flow.edges.filter((e) => e.source === selectedId).map((e) => e.target);
+    const dependents = flow.edges.filter((e) => e.target === selectedId).map((e) => e.source);
+    return JSON.stringify({ id: selectedId, deps, dependents });
+  }, [flow, selectedId]);
+  useEffect(() => {
+    if (!selKey) return onSelRef.current?.(null);
+    if (selKey.endsWith('|')) return; // 选中节点暂不在可见图里(跳转展开中),保持上一状态
+    onSelRef.current?.(JSON.parse(selKey));
+  }, [selKey]);
+
+  // T-222:外部跳转。目标已可见直接选中;否则复用 suggestedFocus 的逐层展开,展开到位后选中
+  const pendingJump = useRef<string | null>(null);
+  useEffect(() => {
+    if (!jumpRequest) return;
+    // 面包屑给的是 d:,顶层目录可能是 module(m:):按路径匹配已加载节点
+    const want = jumpRequest.id;
+    const hit =
+      state.nodes.find((n) => n.id === want) ??
+      state.nodes.find(
+        (n) => n.type !== 'external' && idPath(n.id) === idPath(want) && n.id[0] !== 'f',
+      );
+    const id = hit?.id ?? want;
+    if (flow.nodes.some((n) => n.id === id)) {
+      pendingJump.current = null;
+      setSelectedId(id);
+      return;
+    }
+    pendingJump.current = id;
+    const focus = revealFocus(id);
+    if (focus) {
+      autoFocus.current = focus;
+      setAutoTick((t) => t + 1);
+    }
+    // 只由新的 jumpRequest 触发
+  }, [jumpRequest]);
+  useEffect(() => {
+    const id = pendingJump.current;
+    if (!id) return;
+    if (flow.nodes.some((n) => n.id === id)) {
+      pendingJump.current = null;
+      setSelectedId(id);
+    } else if (
+      !state.nodes.some((n) => n.id === id) &&
+      !autoFocus.current &&
+      !autoBusy.current &&
+      state.nodes.length > 0
+    ) {
+      // 展开结束仍找不到(不在这棵树上或被截断):停止,状态条提示
+      pendingJump.current = null;
+      setError(`图中找不到 ${idPath(id)}(可能被截断或不在当前图里)`);
+    }
+  }, [flow, state.nodes]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setSelectedId(null);

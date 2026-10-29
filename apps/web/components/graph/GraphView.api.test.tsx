@@ -234,3 +234,33 @@ describe('<GraphView> 真实接口:聚合边、边界节点、截断提示', () 
     expect(screen.queryByTestId('node-d:a/src')).not.toBeInTheDocument();
   });
 });
+
+describe('<GraphView> 外部跳转与选中回调(T-222)', () => {
+  it('jumpRequest 指向未加载的文件:逐层展开所在容器后选中,并回调一跳邻居', async () => {
+    const src = apiSource();
+    const engine = await createInlineEngine();
+    const onSel = vi.fn();
+    const { rerender } = render(
+      <div style={{ width: 800, height: 600 }}>
+        <GraphView source={src} owner="t" repo="t" engine={engine} onSelectionChange={onSel} />
+      </div>,
+    );
+    await waitFor(() => expect(src.calls).toEqual([null]));
+    rerender(
+      <div style={{ width: 800, height: 600 }}>
+        <GraphView
+          source={src}
+          owner="t"
+          repo="t"
+          engine={engine}
+          onSelectionChange={onSel}
+          jumpRequest={{ id: 'f:a/x.ts', n: 1 }}
+        />
+      </div>,
+    );
+    await waitFor(() =>
+      expect(onSel).toHaveBeenLastCalledWith({ id: 'f:a/x.ts', deps: ['m:b'], dependents: [] }),
+    );
+    expect(src.calls).toEqual([null, 'm:a']);
+  });
+});
