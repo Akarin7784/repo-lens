@@ -292,13 +292,34 @@ describe.skipIf(!hasRedis)('路由(真实 Redis + 内存 Store)', () => {
     await app.close();
   });
 
-  it('submitLimitPerHour 可配置', async () => {
-    const app = buildApp({ store, redis, queue, git, logger: false, submitLimitPerHour: 2 });
+  it('两个上限可配置;复用不计新仓库额度但计总量', async () => {
+    const app = buildApp({
+      store,
+      redis,
+      queue,
+      git,
+      logger: false,
+      rateLimitPerHour: 1,
+      submitLimitPerHour: 4,
+    });
     const ip = nextIp();
-    await redis.del(redisKeys.submitLimitIp(ip), redisKeys.rateLimitIp(ip));
+    const [ik, sk] = [redisKeys.rateLimitIp(ip), redisKeys.submitLimitIp(ip)];
+    await redis.del(sk, ik);
     expect((await post(app, 'https://github.com/a/c1', ip)).statusCode).toBe(202);
+    // 复用:新仓库额度(1)已满也仍然 200,且不再增加 rl:ip,但 rl:sub 照计
     expect((await post(app, 'https://github.com/a/c1', ip)).statusCode).toBe(200);
-    expect((await post(app, 'https://github.com/a/c2', ip)).statusCode).toBe(429);
+    expect((await post(app, 'https://github.com/a/c1', ip)).statusCode).toBe(200);
+    expect(await redis.get(ik)).toBe('1');
+    expect(await redis.get(sk)).toBe('3');
+    // 第 2 个新仓库超出 rateLimitPerHour=1
+    const r1 = await post(app, 'https://github.com/a/c2', ip);
+    expect(r1.statusCode).toBe(429);
+    expect(r1.json().error.code).toBe('RATE_LIMITED');
+    // 第 5 次请求超出 submitLimitPerHour=4,复用也被拦
+    const r2 = await post(app, 'https://github.com/a/c1', ip);
+    expect(r2.statusCode).toBe(429);
+    expect(r2.json().error.code).toBe('RATE_LIMITED');
+    expect(await redis.get(sk)).toBe('5');
     await app.close();
   });
 
