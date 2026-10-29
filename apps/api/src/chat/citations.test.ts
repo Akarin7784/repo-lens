@@ -142,4 +142,16 @@ describe('CitationStream', () => {
     const r = run(['尾巴[[S1:12-']);
     expect([r.text, r.cites]).toEqual(['尾巴[[S1:12-', []]);
   });
+  it('约 20 字符的标记在结尾括号前切开仍能识别(缓冲上限不能低于标记长度)', () => {
+    const big = new CitationStream([
+      { n: 1, path: 'src/big.ts', startLine: 1200, endLine: 1400, content: '' },
+    ]);
+    const out = [...big.push('见[[S1:1200-1350]'), ...big.push(']。'), ...big.end()];
+    const text = out.map((o) => (o.type === 'token' ? o.text : '')).join('');
+    expect(text).toBe('见。');
+    expect(out.flatMap((o) => (o.type === 'citation' ? [o.citation] : []))).toEqual([
+      { id: 1, path: 'src/big.ts', startLine: 1200, endLine: 1350, nodeId: 'f:src/big.ts' },
+    ]);
+    expect(big.dropped).toBe(0);
+  });
 });
