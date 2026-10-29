@@ -189,6 +189,7 @@
 - 2026-10-29:v3 一次性评测完成(后端机器,main 559bf08,h3 f0e17808,dashscope qwen3.7-text-embedding@1024,改写 rw-3):top-5 10/10、top-1 8/10,高于事先定的线(top-5≥7/10 且 top-1≥4/10);10 题全为 hybrid,无降级;DashScope 117026 tokens(约 0.059 元,估算)。我的口径:「检索在 v3 十题上过线」,限定:仅 10 题、检索不含 test/docs/examples、非演示机证据,演示机上须重跑演示题;未写成笼统的「已验收」。结果记录(命令与 usage/total 行)由后端另开文档 PR 并入 EMBEDDING_TUNING.md。
 - 2026-10-29:v3 结论补充(架构师认可):v3 已用掉,不再作盲测集,W4/W6 排第 2 不得分析后调参;之后任何检索改动须换新题集(v4,由绿色三角形出)。「问答可用」要等 P4-e 合并并在演示机验证后才能说;README 与界面文案不写「检索已验收」。
 - 2026-10-29:合并 #107(c5a22b6):仅文档,`docs/EMBEDDING_TUNING.md` 并入 v3 记录(命令、start/usage/total 行、逐题名次、费用、限定)与四仓库预分析记录;规则节 hash 不变(e2c1a8d7…0920);无 key/IP。CI 绿。
+- 2026-10-29:合并 #109(341026a):CI 加 mysql:8.4 + redis:7 服务容器,turbo test 透传 `TEST_MYSQL_URL`/`TEST_REDIS_URL`,CI 日志出现「不可达」即失败;main 真实 CI 前后对比 db 10过7跳→17过0跳,api 77过40跳→117过0跳,agent 70/10→80/0,worker 40/11→51/0,rag 91过1跳(onnx,CI 无模型目录)不变;测试默认 Redis 库号已分开(app=1, llm=5, embed-lock=6, queue.int=7, test-utils=8, CI=12),0/9/10/11/13 保留不用;已知缺口:靠日志 grep 防静默跳过而非测试内 REQUIRE 开关,`migrate.test.ts` 跳过时无自己的警告,待架构师决定是否加显式开关;CI 有 MySQL/Redis 之后「CI 绿」才包含数据库测试。
 
 ## 演示检查清单(第 4 周前逐项勾选)
 - [ ] 演示前抽查 hono 的 `embeddingStatus` 为 `ready`(或 `reused`)。

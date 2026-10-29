@@ -38,7 +38,7 @@ export const SAMPLE_REPO = {
 
 export function testConfig(over: Partial<WorkerConfig> = {}): WorkerConfig {
   return {
-    redisUrl: process.env.TEST_REDIS_URL ?? 'redis://127.0.0.1:6379',
+    redisUrl: process.env.TEST_REDIS_URL ?? 'redis://127.0.0.1:6379/8', // 库号占用表见 packages/agent/src/llm/llm.test.ts
     databaseUrl: null,
     workdir: mkdtempSync(join(tmpdir(), 'rl-work-')),
     maxFiles: 5000,

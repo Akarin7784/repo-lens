@@ -5,6 +5,26 @@ on:
 jobs:
   ci:
     runs-on: ubuntu-latest
+    # 集成测试用的 MySQL / Redis(CI 专用临时口令,不是 secret;测试用 fake embedder,不需要任何 key)
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: repolens-ci
+          MYSQL_DATABASE: repolens_test
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -prepolens-ci --silent"
+          --health-interval=5s --health-timeout=5s --health-retries=30
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s --health-timeout=3s --health-retries=20
+    env:
+      TEST_MYSQL_URL: mysql://root:repolens-ci@127.0.0.1:3306/repolens_test
+      TEST_REDIS_URL: redis://127.0.0.1:6379/12
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -14,7 +34,20 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm build
-      - run: pnpm test
+      - name: 证明测试连到服务容器(不打印密码)
+        run: |
+          node -e 'for (const k of ["TEST_MYSQL_URL","TEST_REDIS_URL"]) { const u = new URL(process.env[k]); console.log(k, "host=" + u.hostname + ":" + u.port, "db=" + (u.pathname.slice(1) || "0")); }'
+          docker ps --format '{{.Image}} {{.Ports}}' | grep -E 'mysql|redis'
+          docker exec "$(docker ps -qf ancestor=mysql:8.4)" mysqld --version
+          docker exec "$(docker ps -qf ancestor=redis:7-alpine)" redis-server --version
+      - name: test(MySQL/Redis 集成测试必须真跑)
+        run: |
+          set -o pipefail
+          pnpm test 2>&1 | tee /tmp/test.log
+          # 防静默跳过:各集成测试在服务不可达时只打 warn 并 skip,CI 里视为失败
+          if grep -n '不可达' /tmp/test.log; then
+            echo '::error::MySQL/Redis 集成测试被跳过(服务不可达),CI 要求真跑'; exit 1
+          fi
       - name: docker compose config
         run: cp .env.example .env && docker compose config -q
   smoke:
