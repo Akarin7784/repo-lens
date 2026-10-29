@@ -5,7 +5,7 @@
 ## 里程碑
 | 周 | 目标 | 状态 |
 |---|---|---|
-| W1 | TS 解析与基础图:脚手架、clone 与文件树、`TypeScriptAnalyzer`、依赖图 JSON、前端出图、任务与 SSE 进度 | 进行中 |
+| W1 | TS 解析与基础图:脚手架、clone 与文件树、`TypeScriptAnalyzer`、依赖图 JSON、前端出图、任务与 SSE 进度 | 已完成(2026-10-29,收尾小项见「后续项」) |
 | W2 | 分层摘要、节点详情、Qdrant 索引 | 未开始 |
 | W3 | 代码 RAG 问答、引用校验、图上高亮联动 | 未开始 |
 | W4 | MCP 服务、预解析示例仓库、演示脚本与兜底视频、README | 未开始 |
@@ -18,6 +18,9 @@
 | T-003 | API 与 Worker:`POST /api/repos`、任务 SSE、clone 与文件树 | 后端与AI设计师 | 已合并 | [#10](https://github.com/Akarin7784/repo-lens/pull/10) |
 | T-004 | Web:设计令牌、首页、基于 fixture 的图渲染(React Flow + elkjs) | 前端可视化设计师 | 已合并 | [#8](https://github.com/Akarin7784/repo-lens/pull/8) |
 | T-005 | CI 冒烟任务:真实构建镜像、起 compose、请求 `/health` | 架构师 | 已合并 | [#9](https://github.com/Akarin7784/repo-lens/pull/9) |
+| T-006 | 图接口收尾:聚合边、400 与错误码、`meta.cycles`、`suggestedFocus`、`inCycle`、限流、仓库详情字段 | 后端与AI设计师 | 已合并 | #16、#17、#19、#21、#24、#25、#26、#28 |
+| T-007 | Web 接入真实 API:提交分析、SSE 进度、按层加载、`suggestedFocus` 自动展开 | 前端可视化设计师 | 已合并 | #18、#30 |
+| T-008 | smoke 覆盖真实分析链路、聚合边、经 web 代理 | 架构师 | 已合并 | #14、#20、#22 |
 
 ## 第 1 周未验证项
 - ✅ 已验证(T-005,PR #9,[CI run](https://github.com/Akarin7784/repo-lens/actions/runs/40759576746)):镜像构建和 `docker compose up`,api `/health` 返回 `status:ok`,web 返回 200。
@@ -65,3 +68,4 @@
 - 演示环境把 `RATE_LIMIT_NEW_REPOS_PER_HOUR` 调高(默认 5),避免彩排几次后被限流;同时确认 `RATE_LIMIT_SUBMITS_PER_HOUR`(默认 60)够用。
 - 状态栏的节点数和边数口径要和画布一致,避免被现场对数字(见 2026-10-29 的 84 与 80 讨论)。
 - 暗色、Safari、Firefox、投影仪、大图性能还没验证,演示前在真实设备上过一遍。
+- 2026-10-29 13:3x:#24(提交 9e9b3ba)、#25(提交 2409353)、#26(提交 3c7d529)合并,main 上三次提交的 `ci` 与 `smoke` 都是 success。复验在各自最新提交上串行跑 install、lint、typecheck、build、test 全过(api 53、shared 24、web 61、analyzer 32、worker 16、db 9),三个依次叠到 main 也无冲突。#24:`GET /api/repos/:id` 返回 `repo` 和 `commitSha`,`commitSha` 优先取最近一次已完成任务的 commit,没有已完成任务才取最新任务的。#25:只有仓库地址不合法才用 `INVALID_REPO_URL`,缺 `repoUrl` 和其他校验错误用 `BAD_REQUEST`,框架 4xx 保留 400、413、415 原状态码、错误体 code 统一 `BAD_REQUEST`。#26:`RATE_LIMIT_NEW_REPOS_PER_HOUR`(默认 5)与 `RATE_LIMIT_SUBMITS_PER_HOUR`(默认 60)都由环境变量配置,被拒绝或出错的提交不计 5 次,复用已有结果不计 5 次但计 60 次,超过 60 次返回 429 且不建任务,非法值使 api 启动失败。已知小问题(非阻塞):`limits.ts` 与 `.env.example` 注释里把路由写成 `POST /api/analyze`(实际是 `POST /api/repos`);退回计数时按当前时间重算 key,请求跨整点时会少算一次;超过 5 次后计数值继续上涨(有意)。**第 1 周完成**:从粘贴 GitHub 地址到交互式依赖图的链路在 CI 的真实 MySQL 8.4 + Redis + worker 上走通,前端读真实接口,聚合边、环边、首屏自动下探都已落地。未完成与未验证见「后续项」和「演示检查清单」。下一步:第 2 周(分层摘要、节点详情、Qdrant 索引、环边改读 `inCycle`、状态栏口径),任务拆分交给架构师。
