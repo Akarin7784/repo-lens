@@ -379,7 +379,12 @@ function Inner({
     if (flow.nodes.some((n) => n.id === pendingJump.current)) return;
     pendingJump.current = null;
     if (selectedId && !flow.nodes.some((n) => n.id === selectedId)) setSelectedId(null);
-    // 只由 jumpStopped 触发
+    // 依赖故意只写 jumpStopped:flow / selectedId 只在中止那一刻读一次。若把它们加进依赖,
+    // 跳转进行中每次 flow 变化(逐层展开每层都会变)都会重跑本 effect,在正常展开途中
+    // 就提前清掉 pendingJump,跳转无法完成。
+    // 本仓库的 ESLint 未启用 eslint-plugin-react-hooks,写 eslint-disable-next-line
+    // react-hooks/exhaustive-deps 会报「Definition for rule ... was not found」,所以只留这段说明;
+    // 以后接入该插件时,在这里补上对 react-hooks/exhaustive-deps 的禁用。
   }, [jumpStopped]);
 
   // T-222d:图区尺寸变化(窄屏底部抽屉打开/关闭、窗口缩放)后重新适配视图,避免节点落在可视区外

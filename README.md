@@ -24,7 +24,7 @@ pnpm install
 cp .env.example .env
 docker compose up -d mysql redis qdrant   # 基础设施
 pnpm build && pnpm test && pnpm lint && pnpm typecheck   # 新 clone 必须先 build:api 的 dev 脚本运行的是 dist
-pnpm dev                                   # turbo run dev:web http://localhost:3000 + api(node --watch dist/index.js)
+pnpm dev                                   # turbo run dev → web http://localhost:3000 + api(node --watch dist/index.js)
 ```
 
 > 注意(已实测):turbo 默认 strict env 模式,`pnpm dev` 不会把 shell 里的 `DATABASE_URL`/`REDIS_URL` 等传给 api,api 会报「DATABASE_URL 未设置」退出;worker 没有 dev 脚本。需要后端时在另一个终端直接启动:`DATABASE_URL=... REDIS_URL=... pnpm --filter @repolens/api start`(端口 `API_PORT`,默认 4000)和 `pnpm --filter @repolens/worker start`。
