@@ -379,9 +379,11 @@ Qdrant collection `code_chunks`:向量维度随 `EMBEDDING_MODEL`(text-embedding
 ```yaml
 services:
   web:
-    build: { context: ., dockerfile: apps/web/Dockerfile }
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args: { API_PROXY_TARGET: "http://api:4000" }   # 构建期固定 rewrites 目标
     ports: ["3000:3000"]
-    environment: [API_BASE_URL=http://api:4000]
     depends_on: [api]
   api:
     build: { context: ., dockerfile: apps/api/Dockerfile }
@@ -412,6 +414,8 @@ services:
     # 不对公网暴露端口,仅内网 6333(REST)/6334(gRPC)
 volumes: { repos: {}, mysql: {}, qdrant: {} }
 ```
+
+**web 访问 api 的方式**:浏览器同源请求 `/api/*`,由 Next `rewrites` 转发到 api。`rewrites` 在**构建期**由 `API_PROXY_TARGET` 固定,运行时环境变量对它无效:`apps/web/Dockerfile` 用 `ARG API_PROXY_TARGET=http://api:4000` 注入,compose 的 web 构建通过 `args` 传入,`turbo.json` 的 build 任务声明 `API_PROXY_TARGET` / `NEXT_PUBLIC_API_BASE_URL`(turbo 2 严格 env 模式否则会过滤掉,rewrites 为空)。若改用 `NEXT_PUBLIC_API_BASE_URL` 直连别的域名,api 必须开 CORS,并通过 `Access-Control-Expose-Headers: x-graph-truncated` 暴露截断标记头。PR #22 合并后,CI smoke 会经 web 请求 `/api/repos/999999` 校验转发(详见 docs/FRONTEND_DESIGN.md §7.5)。
 
 ### 6.2 环境变量
 | 变量 | 示例 | 说明 |
