@@ -31,6 +31,12 @@ pnpm dev                                   # turbo run dev → web http://localh
 
 > 注意(已实测):turbo 默认 strict env 模式,`pnpm dev` 不会把 shell 里的 `DATABASE_URL`/`REDIS_URL` 等传给 api,api 会报「DATABASE_URL 未设置」退出;worker 没有 dev 脚本。需要后端时在另一个终端直接启动:`DATABASE_URL=... REDIS_URL=... pnpm --filter @repolens/api start`(端口 `API_PORT`,默认 4000)和 `pnpm --filter @repolens/worker start`。
 
+## 隐私与数据流
+
+启用外部向量服务时,检索所需的代码片段会发送给阿里云百炼;生成摘要和问答时,相关代码片段还会发送给所配置的大模型服务。你输入的问题也会发送给阿里云百炼和大模型服务。发送前会按规则过滤常见的密钥和环境变量文件(如 .env、私钥),但不保证覆盖所有敏感内容,请勿提交含敏感信息的仓库。
+
+> 上面这段与提交页的披露文案(`apps/web/lib/privacy/disclosure.ts` 的 `THIRD_PARTY_DISCLOSURE`)须逐字一致,改一处必须同步另一处(`home.test.tsx` 会检查)。静态文案,未按提供方区分;API 返回 embeddingProvider 后再改为按提供方显示。过滤范围以 `packages/shared/src/sensitive.ts` 的 `exclusionRule` 为准。
+
 ## 目录
 
 | 路径                            | 职责                                                         |
