@@ -408,20 +408,22 @@ async function retrieve(repoId, q) {
 
 **问答 SSE（`POST /api/repos/:id/chat`，照用约定）**
 
-请求体:`{question, sessionId?, contextNodeIds?: string[]}`。`contextNodeIds` 可选,检索时对这些节点所在文件的候选分数加权(重排前乘以系数,待调参)。
+请求体:`{message, sessionId?, contextNodeIds?: string[]}`(shared `ChatRequestSchema`,`.strict()`):`message` trim 后 1..2000;`contextNodeIds` 可选、最多 20 个,**W3 只做格式校验,服务端忽略**(以后可对这些节点所在文件的候选分数加权,待定)。路由尚未实现(P4);`done.retrieval` 服务端每次都填。
 ```
 event: token
 data: {"text":"连接池在 "}
 
 event: citation
-data: {"path":"src/db/index.ts","startLine":10,"endLine":48,"nodeId":"f:src/db/index.ts"}
+data: {"id":1,"path":"src/db/index.ts","startLine":10,"endLine":48,"nodeId":"f:src/db/index.ts","moduleId":"m:src/db"}
 
 event: token
 data: {"text":"中创建，"}
 
 event: done
-data: {"messageId":881,"citations":3,"droppedCitations":1,"retrieval":"hybrid","usage":{"in":5210,"out":402}}
+data: {"messageId":881,"sessionId":7,"droppedCitations":1,"retrieval":"hybrid","usage":{"in":5210,"out":402}}
 ```
+示例与 shared `chat.ts` 一致：`citation` = `{id, path, startLine, endLine, nodeId, moduleId?}`(`id` 是显示编号，不带片段编号);`done` = `{messageId, sessionId?, droppedCitations, fallback?, retrieval?, usage}`,`sessionId` 与 `retrieval` 服务端始终填写。
+错误分两层：开流前(参数非法、仓库不存在 / 未就绪、限流)用 HTTP 状态码 + `ApiError` JSON;开流后才用 SSE `error` 事件。不支持断流续传，SSE 不带事件 `id`,重试就是重新发同一个问题。
 `done.retrieval`（可选，`hybrid` | `keyword-only`，架构师定案）：向量路可用时 `hybrid`；`embeddingStatus` 不是 ready/reused 或查询时 Qdrant 不可用，只用关键词/精确匹配路做 RRF 时为 `keyword-only`，前端在回答下方显示「已降级为关键词检索」。约定见 ARCHITECTURE SSE `done` 一节。
 前端收到 `citation` 就高亮 `nodeId`，再沿 `parentId` 链把祖先节点展开或高亮。
 

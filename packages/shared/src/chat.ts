@@ -23,6 +23,8 @@ export const CitationEventSchema = z.object({ event: z.literal('citation'), data
 
 export const ChatDoneSchema = z.object({
   messageId: z.number().int().positive(),
+  /** 本轮所属 chat_session;schema 上可选(只增不改),服务端始终填写。前端下一轮请求带回它即可续聊 */
+  sessionId: z.number().int().positive().optional(),
   droppedCitations: z.number().int().nonnegative(),
   fallback: z.literal('retrieval').optional(),
   /** T-214 定案:本次检索是否用上向量;keyword-only 时前端显示「已降级为关键词检索」。可选,只增不改 */
