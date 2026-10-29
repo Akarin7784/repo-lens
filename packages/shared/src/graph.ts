@@ -95,6 +95,11 @@ export const GraphMetaSchema = z.object({
   parentId: NodeIdSchema.nullable(),
   language: z.literal('typescript'),
   cycles: z.array(z.array(NodeIdSchema)).optional(),
+  /**
+   * 仅根层请求(无 parentId)可能返回:建议前端直接展示其子节点的节点(module/dir)。
+   * 根层子节点之间的边太少(<3)时,API 沿子树 loc 最大的可展开节点最多下探 3 层;边够用时不返回。
+   */
+  suggestedFocus: NodeIdSchema.optional(),
 });
 
 export const GraphDataSchema = z
@@ -105,6 +110,12 @@ export const GraphDataSchema = z
   })
   .strict()
   .superRefine((g, ctx) => {
+    const f = g.meta.suggestedFocus;
+    if (f !== undefined && (g.meta.parentId !== null || !/^[md]:/.test(f)))
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'suggestedFocus 只出现在根层响应中,且必须是 module/dir 节点',
+      });
     const ids = new Set<string>();
     for (const n of g.nodes) {
       if (ids.has(n.id)) ctx.addIssue({ code: z.ZodIssueCode.custom, message: `重复节点 ${n.id}` });

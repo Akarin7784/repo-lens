@@ -1,35 +1,38 @@
-import Link from 'next/link';
-import { SAMPLE_REPOS } from '../../lib/fixtures';
+'use client';
+import type { ApiClient } from '../../lib/api/client';
+import { useSubmitRepo } from './useSubmitRepo';
 
-const COMING_SOON = ['colinhacks/zod', 'trpc/trpc'];
+/** 演示仓库:点击即提交真实分析(与输入框同一条链路) */
+export const DEMO_REPOS = [
+  { repo: 'honojs/hono', blurb: '主演示:中等规模的 Web 框架' },
+  { repo: 'pmndrs/zustand', blurb: '小规模:快速出图' },
+  { repo: 'colinhacks/zod', blurb: '中等规模的校验库' },
+] as const;
 
-export function DemoRepoList() {
+export function DemoRepoList({ api }: { api?: ApiClient }) {
+  const { submit, pending, hint } = useSubmitRepo(api);
   return (
-    <ul className="flex flex-wrap justify-center gap-2">
-      {Object.entries(SAMPLE_REPOS).map(([id, s]) => (
-        <li key={id}>
-          <Link
-            href={`/a/${id}`}
-            title={s.blurb}
-            className="inline-flex items-center gap-1.5 rounded-full border border-line bg-panel px-3 py-1 text-[13px] text-fg transition-colors duration-200 ease-out hover:border-accent hover:text-accent-strong-hover"
-          >
-            <span className="font-mono">
-              {s.owner}/{s.repo}
-            </span>
-            <span className="text-muted">示例</span>
-          </Link>
-        </li>
-      ))}
-      {COMING_SOON.map((r) => (
-        <li key={r}>
-          <span
-            aria-disabled
-            className="inline-flex items-center gap-1.5 rounded-full border border-dashed border-line px-3 py-1 text-[13px] text-muted"
-          >
-            <span className="font-mono">{r}</span>即将支持
-          </span>
-        </li>
-      ))}
-    </ul>
+    <div className="flex flex-col items-center gap-2">
+      <ul className="flex flex-wrap justify-center gap-2">
+        {DEMO_REPOS.map((d) => (
+          <li key={d.repo}>
+            <button
+              type="button"
+              title={d.blurb}
+              disabled={pending}
+              onClick={() => void submit(d.repo)}
+              className="inline-flex items-center rounded-full border border-line bg-panel px-3 py-1 font-mono text-[13px] text-fg transition-colors duration-200 ease-out hover:border-accent hover:text-accent-strong-hover disabled:opacity-70"
+            >
+              {d.repo}
+            </button>
+          </li>
+        ))}
+      </ul>
+      {hint && (
+        <p role="status" className="text-[13px] text-muted">
+          {hint}
+        </p>
+      )}
+    </div>
   );
 }

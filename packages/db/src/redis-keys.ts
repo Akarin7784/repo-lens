@@ -8,7 +8,7 @@ export const LOCK_TTL_S = 30 * 60;
  * 图投影版本号,写进图缓存 key(graph:v{N}:...)。
  * **改投影逻辑(apps/api/src/projection.ts 的节点/边/截断规则)时必须递增**,
  * 旧版本 key 不再命中、随 TTL 自然过期,不依赖部署后手动清缓存。
- * v1 = #10(无版本前缀);v2 = #12 跨子树聚合边 + 边界节点;v3 = meta.cycles 按 SCC 成员集合投影;v4 预留给 #21(根层 meta.suggestedFocus);v5 = 边的 inCycle(T-003h)。
+ * v1 = #10(无版本前缀);v2 = #12 跨子树聚合边 + 边界节点;v3 = meta.cycles 按 SCC 成员集合投影;v4 = #21 根层 meta.suggestedFocus;v5 = 边的 inCycle(T-003h)。
  */
 export const GRAPH_PROJECTION_VERSION = 5;
 
