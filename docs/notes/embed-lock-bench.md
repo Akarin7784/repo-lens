@@ -20,5 +20,5 @@
 
 ## 结论
 - 持有者每 TTL/3 心跳续期,向量化耗时不再受 TTL 限制,所以 TTL 只决定持有者崩溃后多久释放。默认值从 1800 改为 **300 秒**(崩溃后最多阻塞 5 分钟,心跳间隔 100 秒)。
-- 等待上限 `EMBEDDING_LOCK_MAX_WAIT_SEC` 默认 **3600 秒**。worker 限 1.5 CPU,保守按单核 3.6 块/秒估算,可覆盖约 1.3 万块(约为 hono 的 9 倍)。超时后本任务 `embeddingStatus=failed`,图与摘要照常可用。
-- 未确认:worker 容器内(`cpus: 1.5`)的实际速率;zod 等更大仓库的块数。
+- 等待上限 `EMBEDDING_LOCK_MAX_WAIT_SEC` 默认 **3600 秒**。worker CPU 上限由 `WORKER_CPUS` 配置(默认 2),保守按单核 3.6 块/秒估算,可覆盖约 1.3 万块(约为 hono 的 9 倍)。超时后本任务 `embeddingStatus=failed`,图与摘要照常可用。
+- 未确认:worker 容器内(`cpus: ${WORKER_CPUS:-2}`,ONNX 线程数随之取整)的实际速率;zod 等更大仓库的块数。

@@ -40,3 +40,10 @@ export {
   type SummarizeResult,
 } from './summary/summarize.js';
 export { MemoryLlmKv } from './llm/memory-kv.js';
+export {
+  rewriteQuery,
+  REWRITE_SYSTEM,
+  REWRITE_PROMPT_VERSION,
+  type RewriteLog,
+  type RewriteOptions,
+} from './rewrite/rewrite.js';

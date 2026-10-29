@@ -51,6 +51,14 @@ export type Extractor = (
   opts: { pooling: 'mean'; normalize: boolean },
 ) => Promise<{ tolist(): number[][] }>;
 
+/** pipeline 选项;threads 未给时不设 session_options,沿用 ORT 默认 */
+export function onnxPipelineOptions(threads?: number) {
+  return {
+    dtype: 'fp32' as const,
+    ...(threads ? { session_options: { intraOpNumThreads: threads, interOpNumThreads: 1 } } : {}),
+  };
+}
+
 /**
  * 本地 ONNX(@huggingface/transformers,fp32)。模型在镜像构建时下载到 modelDir,
  * 运行时禁止联网拉模型。只在 worker 进程里使用(峰值内存约 2.5 GB)。
@@ -63,6 +71,7 @@ export class OnnxEmbedder implements Embedder {
     private readonly modelDir: string,
     /** @internal 仅测试:替换模型加载,用来断言实际送进模型的文本;业务代码不要传 */
     loader?: () => Promise<Extractor>,
+    private readonly threads?: number,
   ) {
     if (loader) this.ext = loader();
   }
@@ -71,9 +80,11 @@ export class OnnxEmbedder implements Embedder {
       const t = await import('@huggingface/transformers');
       t.env.localModelPath = this.modelDir.endsWith('/') ? this.modelDir : `${this.modelDir}/`;
       t.env.allowRemoteModels = false;
-      return (await t.pipeline('feature-extraction', this.model, {
-        dtype: 'fp32',
-      })) as unknown as Extractor;
+      return (await t.pipeline(
+        'feature-extraction',
+        this.model,
+        onnxPipelineOptions(this.threads),
+      )) as unknown as Extractor;
     })();
     return this.ext;
   }

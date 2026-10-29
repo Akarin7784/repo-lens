@@ -137,6 +137,16 @@ describe('端到端:含假 key 的仓库跑完整流水线', () => {
     expect(indexed.has('src/index.ts')).toBe(true);
     for (const p of ['src/aws.ts', 'src/tls.ts', '.env', '.npmrc', 'certs/dev.pem'])
       expect(indexed.has(p)).toBe(false);
+
+    // 5) code_chunk(关键词检索数据源,T-214):chunk 层同样排除敏感文件,任何行都不含假 key
+    const rowsCc = await store.listCodeChunks(repo.id, sha);
+    const ccPaths = new Set(rowsCc.map((r) => r.path));
+    expect(ccPaths.has('src/index.ts')).toBe(true);
+    for (const p of ['src/aws.ts', 'src/tls.ts', '.env', '.npmrc', 'certs/dev.pem'])
+      expect(ccPaths.has(p)).toBe(false);
+    for (const r of rowsCc) for (const s of secrets) expect(r.content).not.toContain(s);
+    // code_chunk 与向量库一一对应(qdrant_point_id 相同)
+    expect(new Set(rowsCc.map((r) => r.qdrantPointId))).toEqual(new Set(vectorStore.points.keys()));
   });
 });
 

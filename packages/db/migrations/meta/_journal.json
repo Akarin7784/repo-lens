@@ -22,6 +22,13 @@
       "when": 1793320000000,
       "tag": "0002_summary_input_idx",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "5",
+      "when": 1793400000000,
+      "tag": "0003_code_chunk",
+      "breakpoints": true
     }
   ]
 }

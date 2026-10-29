@@ -66,7 +66,7 @@ flowchart LR
 | API | `apps/api` | REST + SSE;任务创建、查询图、问答流;限流、鉴权(可选) |
 | Worker | `apps/worker` | BullMQ 消费者,执行分析流水线各阶段 |
 | 解析核心 | `packages/analyzer` | `LanguageAnalyzer` 接口 + `TypeScriptAnalyzer` 实现;依赖图、聚类 |
-| 索引/RAG | `packages/rag` | 代码分块(按符号)、embedding 写 Qdrant、BM25(MySQL FULLTEXT)+ 向量混合检索 |
+| 索引/RAG | `packages/rag` | 代码分块(按符号)、embedding 写 Qdrant、进程内 BM25(数据源 MySQL `code_chunk`)+ 向量 RRF 混合检索 |
 | Agent | `packages/agent` | 工具定义、ReAct/function-calling 循环、引用抽取 |
 | MCP | `apps/mcp` | 基于 `@modelcontextprotocol/sdk` 暴露 tools,内部调 API |
 | 存储 | `packages/db` | Drizzle ORM schema、迁移、Redis key 工具 |
@@ -338,12 +338,12 @@ CREATE TABLE summary (
   input_hash CHAR(64) NOT NULL, model VARCHAR(64), source ENUM('llm','rule') NOT NULL DEFAULT 'llm', content TEXT,
   UNIQUE KEY uk_target_commit (repo_id, level, target_id, commit_sha)   -- T-211c
 );
-CREATE TABLE code_chunk (                         -- 分块元数据 + BM25 回退;向量在 Qdrant
+CREATE TABLE code_chunk (                         -- 迁移 0003(T-214):分块元数据 + 关键词检索数据源;向量在 Qdrant
   id BIGINT PRIMARY KEY AUTO_INCREMENT, repo_id BIGINT NOT NULL, commit_sha CHAR(40) NOT NULL,
-  path VARCHAR(1024), symbol VARCHAR(255), start_line INT, end_line INT,
-  content MEDIUMTEXT, content_hash CHAR(64), qdrant_point_id CHAR(36),
-  KEY idx_repo_path (repo_id, path(191)),
-  FULLTEXT KEY ft_content (content, symbol) WITH PARSER ngram
+  path VARCHAR(1024) NOT NULL, symbol VARCHAR(255), start_line INT NOT NULL, end_line INT NOT NULL,
+  content MEDIUMTEXT NOT NULL, content_hash CHAR(64) NOT NULL, qdrant_point_id CHAR(36) NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_repo_commit (repo_id, commit_sha)
 );
 CREATE TABLE chat_session (
   id BIGINT PRIMARY KEY AUTO_INCREMENT, repo_id BIGINT NOT NULL, user_key VARCHAR(64),
@@ -363,7 +363,9 @@ CREATE TABLE llm_usage (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 ```
-> `code_chunk` 为本文档新增(后端文档未定义),用于 Qdrant point 映射和 MySQL FULLTEXT 关键词回退,待后端确认。
+> `code_chunk` 由迁移 0003 落地(T-214 PR-2,可重复执行,CI smoke 连跑两遍断言列与索引)。与最初草案的偏差:**不建 FULLTEXT**(MariaDB 没有 ngram 解析器,默认解析器对中文和 camelCase 无效),关键词打分改为按 (repo, commit) 读出全部切块后在进程内做 BM25(路径/符号权重 ×3)+ 符号精确匹配;索引由 `idx_repo_path` 改为 `idx_repo_commit`(读写都按 repo+commit)。worker 在向量化之前写入,**向量化被跳过或失败时仍写**,所以关键词检索不依赖 embedding;敏感/超大/二进制文件在 chunk 层同样被排除(与向量库同一套 `exclusionRule`)。
+
+> **现状(T-214 PR-2)**:检索库(hybridSearch、rewriteQuery)与评测脚本已完成,问答链路未接入;API 目前不发 done.retrieval,仅 shared schema 有该字段。
 
 Qdrant collection `code_chunks`:命名向量 `dense`,384 维(multilingual-e5-small),cosine;point id = `code_chunk.qdrant_point_id`;payload `{repo_id, commit_sha, path, symbol, start_line, end_line, content_hash}`,**`repo_id` 作为 filter 字段**并建 payload index(`path` 同建)。重新分析时按 `repo_id`+`commit_sha` 过滤删除旧 points。规划中、尚未写入的 payload 字段:`node_id`、`kind`、`lang`、`chunk_type`(code|summary)与稀疏向量 `bm25`(T-214 第二部分定,只增不改;BACKEND_AI_DESIGN §5 同步此清单)。
 
@@ -384,7 +386,9 @@ Qdrant collection `code_chunks`:命名向量 `dense`,384 维(multilingual-e5-sma
 
 与架构师口径 `ok|failed|skipped` 的对应:`ready`、`reused` 都算 **ok**(向量可用),`failed`→failed,`skipped`→skipped;细分 ready/reused 只为观测复用率。
 
-降级约定:检索只在 `ready|reused` 时走向量路;其余情况(含 `null`)或查询时 Qdrant 不可用,只用关键词/精确匹配路做 RRF,不报错、不返回 5xx;问答 `done` 事件上如何标注本次未用向量检索,在 T-214 第二部分与前端约定(**未定**,不擅自加字段)。
+降级约定:检索只在 `ready|reused` 时走向量路;其余情况(含 `null`)或查询时 Qdrant 不可用,只用关键词/精确匹配路做 RRF,不报错、不返回 5xx;问答 `done` 事件用可选字段 `retrieval: "hybrid" | "keyword-only"` 标注(见 SSE `done` 一节,shared `chat.ts` 已加)。降级原因只进日志,不进响应:`status:<embeddingStatus>`、`no-vector-store`、`vector-error`。
+
+**查询改写(T-214 PR-2)**:中文问题先经 LLM(DeepSeek,`purpose: chat`,提示词版本 `rw-1`)改写为英文关键词串,改写结果用于向量查询,关键词路用「改写结果 + 原问题」;非中文问题不改写。改写失败一律回退原问题、不报错、不新增错误码,回退原因只记日志:`not-chinese`、`budget`(超出 LLM 预算)、`breaker`(熔断打开,`LLM_UNAVAILABLE` 且 cause 为 `CircuitOpenError`)、`unavailable`、`empty`、`error`。
 
 ### 5.4 Redis key 设计
 | Key | 类型 | TTL | 用途 |
@@ -420,7 +424,7 @@ Qdrant collection `code_chunks`:命名向量 `dense`,384 维(multilingual-e5-sma
 
 ## 6. 部署方案
 
-> **api 与 worker 必须同版本一起升级(T-211c 起)**。迁移 0001 之后 summary 表多了 `commit_sha`(默认 `''`)与 `source`(默认 `llm`);滚动发布期间如果旧 worker 还在跑,它写入的行会是 `commit_sha=''`、`source='llm'`(规则摘要也被标成 llm),新 api 按 commit 读不到这些行。顺序:先跑迁移(按编号依次 0001、0002,api 启动时自动执行;手动执行也必须按此顺序)→ 停旧 worker → 同时发布新 api 与新 worker;不要只升一个。如已产生 `commit_sha=''` 的行,按 BACKEND_AI_DESIGN「summary 孤儿行清理」手动处理。
+> **api 与 worker 必须同版本一起升级(T-211c 起)**。迁移 0001 之后 summary 表多了 `commit_sha`(默认 `''`)与 `source`(默认 `llm`);滚动发布期间如果旧 worker 还在跑,它写入的行会是 `commit_sha=''`、`source='llm'`(规则摘要也被标成 llm),新 api 按 commit 读不到这些行。顺序:先跑迁移(按编号依次 0001、0002、0003,api 启动时自动执行;手动执行也必须按此顺序)→ 停旧 worker → 同时发布新 api 与新 worker;不要只升一个。如已产生 `commit_sha=''` 的行,按 BACKEND_AI_DESIGN「summary 孤儿行清理」手动处理。
 
 ### 6.1 docker-compose
 ```yaml
@@ -517,7 +521,7 @@ volumes: { repos: {}, mysql: {}, qdrant: {} }
 |---|---|---|---|
 | **W1:TS 解析 + 基础图(仅 TypeScript)** | monorepo 脚手架、docker-compose(含 mysql/redis/qdrant);clone + 文件树;`LanguageAnalyzer` 接口 + `TypeScriptAnalyzer`(Tree-sitter 符号/切分 + ts-morph import 路径);依赖图 JSON;React Flow + elkjs(前端布局)渲染文件/目录图;BullMQ 任务 + SSE 进度 | zustand 60s 内、hono 3 分钟内出图;zod 能出图且默认只展示 module 层、单次 ≤300 节点;内部依赖解析准确率人工抽查 ≥ 90%(含 paths 别名);**非 TS 仓库返回 422 `UNSUPPORTED_LANGUAGE`** | ts-morph 慢/内存高/失败 → 降级纯 Tree-sitter;elk 布局慢 → dagre |
 | **W2:聚类 + 摘要 + 可视化打磨** | 模块聚类;LLM 自底向上摘要;模块视图↔文件视图下钻;节点详情面板、搜索、高亮、循环依赖标红;MySQL 持久化与缓存复用 | zustand/hono/zod 模块划分合理(人工评审);zod 大图默认折叠、下钻流畅;重复分析同 commit < 1s 返回 | 聚类结果难看 → 回退纯目录分组;LLM 慢 → 摘要异步补齐,图先出 |
-| **W3:RAG + Agent 问答** | 按符号分块 + embedding 写 Qdrant;BM25(MySQL FULLTEXT)+ Qdrant 向量 RRF 混合检索;Agent 5 工具;SSE 流式回答;引用校验(仅下发通过项,`done.droppedCitations` 计数)与图节点高亮联动 | 自建 20 题评测集,引用文件命中率 ≥ 80%;首 token < 3s;下发的引用点击 100% 能定位节点;droppedCitations 占比 ≤ 20% | 工具调用不稳 → 降级为单轮 RAG(检索后直接回答);embedding 成本 → 本地 bge-m3 |
+| **W3:RAG + Agent 问答** | 按符号分块 + embedding 写 Qdrant;进程内 BM25(按 repo+commit 读切块,不用 MySQL FULLTEXT)+ Qdrant 向量 RRF 混合检索;Agent 5 工具;SSE 流式回答;引用校验(仅下发通过项,`done.droppedCitations` 计数)与图节点高亮联动 | 自建 20 题评测集,引用文件命中率 ≥ 80%;首 token < 3s;下发的引用点击 100% 能定位节点;droppedCitations 占比 ≤ 20% | 工具调用不稳 → 降级为单轮 RAG(检索后直接回答);embedding 成本 → 本地 bge-m3 |
 | **W4:MCP + 部署 + Demo** | MCP server(5 tools);线上部署;限流/预算熔断/安全加固;README(GIF、架构图)、预缓存 zustand/hono/zod(trpc 备选)、**录制 hono 兜底视频**;**加分:JS 支持**(复用 TS analyzer 开 `allowJs`) | Cursor/Claude Desktop 能调用 `ask_repo`;公网 URL 可用;3 分钟 demo 彩排 3 次无故障 | 时间不足 → 砍 MCP HTTP 只保留 stdio,砍多语言;线上不稳 → 打开预解析缓存 → 播放 hono 兜底视频 |
 
 后续(第 5 周+):Python/Go analyzer(Tree-sitter)、影响面分析、私有仓库 OAuth、增量分析。

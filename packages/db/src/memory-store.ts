@@ -1,4 +1,5 @@
 import type {
+  CodeChunkRow,
   GraphInput,
   LlmUsageInput,
   LlmUsageRow,
@@ -18,6 +19,16 @@ const GRAPH_STAGES = new Set(['graph_ready', 'summarizing', 'embedding', 'done']
 
 /** 内存实现(单元测试 / 无 MySQL 时);语义与 MysqlStore 保持一致 */
 export class MemoryStore implements Store {
+  readonly codeChunks = new Map<string, CodeChunkRow[]>();
+  async replaceCodeChunks(repoId: number, commitSha: string, rows: CodeChunkRow[]) {
+    this.codeChunks.set(
+      `${repoId}:${commitSha}`,
+      rows.map((r) => ({ ...r })),
+    );
+  }
+  async listCodeChunks(repoId: number, commitSha: string) {
+    return (this.codeChunks.get(`${repoId}:${commitSha}`) ?? []).map((r) => ({ ...r }));
+  }
   private repos = new Map<number, RepoRow>();
   private tasks = new Map<string, TaskRow>();
   private graphs = new Map<string, { g: StoredGraph; symbols: Map<number, SymbolInput[]> }>();

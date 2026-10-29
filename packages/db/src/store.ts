@@ -174,7 +174,22 @@ export interface Store {
   loadGraph(repoId: number, commitSha: string): Promise<StoredGraph>;
   /** 文件的导出符号名 */
   exportsOf(fileRowId: number): Promise<string[]>;
+  /** T-214:同一事务内删除 (repo, commit) 旧切块再批量写入 */
+  replaceCodeChunks(repoId: number, commitSha: string, rows: CodeChunkRow[]): Promise<void>;
+  /** T-214:(repo, commit) 的全部切块,按 id 升序(关键词检索在进程内打分) */
+  listCodeChunks(repoId: number, commitSha: string): Promise<CodeChunkRow[]>;
   close(): Promise<void>;
+}
+
+/** code_chunk 一行(不含自增 id 与 repo/commit) */
+export interface CodeChunkRow {
+  path: string;
+  symbol: string | null;
+  startLine: number;
+  endLine: number;
+  content: string;
+  contentHash: string;
+  qdrantPointId: string;
 }
 
 export const LLM_PURPOSES = ['summary', 'embed', 'chat', 'rerank', 'verify'] as const;

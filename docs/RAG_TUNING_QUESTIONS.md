@@ -16,3 +16,7 @@ T-214 调参用的题目,来自 embedding 基准(hono @ `ed1d5f72135ccf7e09c17d6
 | 英4 | how does the app handle errors and not found | `src/hono-base.ts` 的 `errorHandler` / `notFoundHandler` |
 | 英5 | compress response with gzip | `src/middleware/compress/index.ts` 的 `compress` |
 | 英6 | validate request body with a validator | `src/validator/validator.ts` 的 `validator` |
+
+## 待修 bug 记录(2026-10-29 架构师裁定)
+
+- S1「路由匹配在哪个文件?」(原为演示冒烟题)并入调参集,作为待修 bug 记录;诊断见 [`RAG_EVAL_T214.md`](./RAG_EVAL_T214.md)「S1 诊断」。修复另开 PR,用新题复验。

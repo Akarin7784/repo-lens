@@ -11,6 +11,8 @@ const Schema = z.object({
   EMBEDDING_MODEL: z.preprocess(empty, z.string().default(DEFAULT_EMBEDDING_MODEL)),
   EMBEDDING_MODEL_DIR: z.preprocess(empty, z.string().default('/app/models')),
   EMBEDDING_BATCH_SIZE: z.preprocess(empty, z.coerce.number().int().min(1).max(256).default(16)),
+  EMBEDDING_THREADS: z.preprocess(empty, z.coerce.number().int().min(1).max(64).optional()),
+  WORKER_CPUS: z.preprocess(empty, z.coerce.number().positive().optional()),
   EMBEDDING_LOCK_TTL_SEC: z.preprocess(
     empty,
     z.coerce.number().int().min(60).default(DEFAULT_EMBED_LOCK_TTL_SEC),
@@ -39,6 +41,11 @@ export interface EmbeddingConfig {
   lockTtlSec: number;
   /** 等待同 commit 另一任务的最长秒数;缺省 DEFAULT_EMBED_LOCK_MAX_WAIT_SEC(3600) */
   lockMaxWaitSec: number;
+  /**
+   * ONNX 推理线程数(intraOp)。显式 EMBEDDING_THREADS 优先;否则按容器 CPU 配额
+   * WORKER_CPUS 向下取整(至少 1),避免默认按宿主机核数开线程、超配额被限流;都没有时 undefined(用 ORT 默认)
+   */
+  threads?: number;
   qdrant: { url: string; apiKey?: string; collection: string } | null;
 }
 
@@ -56,6 +63,9 @@ export function readEmbeddingConfig(env: NodeJS.ProcessEnv = process.env): Embed
     batchSize: e.EMBEDDING_BATCH_SIZE,
     lockTtlSec: e.EMBEDDING_LOCK_TTL_SEC,
     lockMaxWaitSec: e.EMBEDDING_LOCK_MAX_WAIT_SEC,
+    threads:
+      e.EMBEDDING_THREADS ??
+      (e.WORKER_CPUS !== undefined ? Math.max(1, Math.floor(e.WORKER_CPUS)) : undefined),
     qdrant: e.QDRANT_URL
       ? { url: e.QDRANT_URL, apiKey: e.QDRANT_API_KEY, collection: e.QDRANT_COLLECTION }
       : null,

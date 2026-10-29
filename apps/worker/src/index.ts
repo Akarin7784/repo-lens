@@ -38,7 +38,9 @@ const gateway = new LlmGateway({
 // embedding 只在 worker 里跑(本地 ONNX 峰值约 2.5 GB);未配置 QDRANT_URL 时跳过向量化阶段
 const emb = config.embedding;
 const baseEmbedder: Embedder =
-  emb.provider === 'onnx' ? new OnnxEmbedder(emb.model, emb.modelDir) : new FakeEmbedder();
+  emb.provider === 'onnx'
+    ? new OnnxEmbedder(emb.model, emb.modelDir, undefined, emb.threads)
+    : new FakeEmbedder();
 const embedder = new CachedEmbedder(baseEmbedder, redis);
 const vectorStore = emb.qdrant ? new QdrantVectorStore(emb.qdrant) : undefined;
 console.log(
