@@ -2,16 +2,26 @@
 
 本目录字体均为 SIL Open Font License 1.1,允许随软件再分发。文件取自 npm 上 fontsource 的可变字体包(latin 子集、wght 轴、normal 样式),未做修改。
 
-| 文件                                     | 字体           | 来源包                                      | 字重    | 大小(字节) | sha256              |
-| ---------------------------------------- | -------------- | ------------------------------------------- | ------- | ---------- | ------------------- |
-| `inter-latin-wght-normal.woff2`          | Inter          | `@fontsource-variable/inter@5.3.0`          | 100–900 | 48256      | `3100e775e8616cd2…` |
-| `source-serif-4-latin-wght-normal.woff2` | Source Serif 4 | `@fontsource-variable/source-serif-4@5.3.1` | 200–900 | 50936      | `382475f38242c52d…` |
-| `jetbrains-mono-latin-wght-normal.woff2` | JetBrains Mono | `@fontsource-variable/jetbrains-mono@5.3.0` | 100–800 | 40404      | `18be452724bfdc23…` |
+| 文件                                     | 字体           | 来源包                                      | 字重    | 大小(字节) | sha256                                                             |
+| ---------------------------------------- | -------------- | ------------------------------------------- | ------- | ---------- | ------------------------------------------------------------------ |
+| `inter-latin-wght-normal.woff2`          | Inter          | `@fontsource-variable/inter@5.3.0`          | 100–900 | 48256      | `3100e775e8616cd2611beecfa23a4263d7037586789b43f035236a2e6fbd4c62` |
+| `source-serif-4-latin-wght-normal.woff2` | Source Serif 4 | `@fontsource-variable/source-serif-4@5.3.1` | 200–900 | 50936      | `382475f38242c52d42a3e5ff8dc69b5d73f10d0d21e4550b5fe232984688779a` |
+| `jetbrains-mono-latin-wght-normal.woff2` | JetBrains Mono | `@fontsource-variable/jetbrains-mono@5.3.0` | 100–800 | 40404      | `18be452724bfdc236c074ca94a249a7f41a86752c7d04ab258ce9ed5651f6a7e` |
+
+## 版权与保留字体名(T-225b 核对)
+
+以下内容用 fonttools 读取各 woff2 的 name 表得到:nameID 0 是版权,nameID 13 是许可说明,nameID 14 是许可链接。保留字体名(Reserved Font Name)只在版权行里声明。三个文件的 nameID 13 都是空的。sha256 用 `sha256sum` 复核过,和文件一致。
+
+| 字体           | 版权(nameID 0,原文)                                                                                 | 保留字体名 | 许可链接(nameID 14)         |
+| -------------- | --------------------------------------------------------------------------------------------------- | ---------- | --------------------------- |
+| Inter          | Copyright 2016 The Inter Project Authors (https://github.com/rsms/inter)                            | 无         | https://openfontlicense.org |
+| Source Serif 4 | © 2014 - 2021 Adobe Systems Incorporated (http://www.adobe.com/), with Reserved Font Name ‘Source’. | `Source`   | http://scripts.sil.org/OFL  |
+| JetBrains Mono | Copyright 2020 The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono)      | 无         | https://scripts.sil.org/OFL |
 
 ## Inter
 
 ```text
-Copyright 2016 The Inter Project Authors (https://github.com/rsms/inter) Inter-Italic[opsz,wght].ttf: Copyright 2016 The Inter Project Authors (https://github.com/rsms/inter)
+Copyright 2016 The Inter Project Authors (https://github.com/rsms/inter)
 
 This Font Software is licensed under the SIL Open Font License, Version 1.1.
 This license is copied below, and is also available with a FAQ at:
@@ -109,7 +119,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
 ## Source Serif 4
 
 ```text
-Google Inc.
+© 2014 - 2021 Adobe Systems Incorporated (http://www.adobe.com/), with Reserved Font Name ‘Source’.
 
 This Font Software is licensed under the SIL Open Font License, Version 1.1.
 This license is copied below, and is also available with a FAQ at:
@@ -207,7 +217,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
 ## JetBrains Mono
 
 ```text
-Copyright 2020 The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono) JetBrainsMono-Italic[wght].ttf: Copyright 2020 The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono)
+Copyright 2020 The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono)
 
 This Font Software is licensed under the SIL Open Font License, Version 1.1.
 This license is copied below, and is also available with a FAQ at:
