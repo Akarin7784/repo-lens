@@ -413,7 +413,11 @@ describe('RepoStatusSchema', () => {
     error: null,
   };
   it('含 repo(owner/name)与 commitSha,与 CreateRepoResponse 同名', () => {
-    expect(RepoStatusSchema.parse(ok)).toEqual(ok);
+    // T-214 只增不改:旧响应无 embeddingStatus 时按 null 解析
+    expect(RepoStatusSchema.parse(ok)).toEqual({ ...ok, embeddingStatus: null });
+    for (const v of ['ready', 'reused', 'skipped', 'failed'])
+      expect(RepoStatusSchema.parse({ ...ok, embeddingStatus: v }).embeddingStatus).toBe(v);
+    expect(RepoStatusSchema.safeParse({ ...ok, embeddingStatus: 'done' }).success).toBe(false);
     expect(
       Object.keys(CreateRepoResponseSchema.shape).filter((k) => !(k in RepoStatusSchema.shape)),
     ).toEqual([]);

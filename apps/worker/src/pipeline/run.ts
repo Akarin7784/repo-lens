@@ -31,7 +31,15 @@ import {
   MAX_SEND_BYTES,
   type GraphNode,
   type ProgressStage,
+  type EmbeddingStatus,
 } from '@repolens/shared';
+import {
+  buildChunks,
+  indexChunks,
+  type ChunkSourceFile,
+  type Embedder,
+  type VectorStore,
+} from '@repolens/rag';
 import type { WorkerConfig } from '../config.js';
 import type { EventSink } from '../events.js';
 import { cloneAtCommit } from './clone.js';
@@ -54,6 +62,9 @@ export interface PipelineDeps {
   onGraphPersisted?: (repoId: number, commitSha: string) => Promise<void>;
   /** LLM 网关;不传时按 config.llm 建一个进程内缓存的网关(测试用) */
   gateway?: LlmGateway;
+  /** embedding(T-214);与 vectorStore 都给了才跑向量化,否则跳过该阶段 */
+  embedder?: Embedder;
+  vectorStore?: VectorStore;
   /** 仅测试:允许 file:// 克隆源 */
   allowFileProtocol?: boolean;
 }
@@ -306,9 +317,34 @@ export async function runPipeline(
         },
       });
     }
-    await progress('embedding', 85, '向量化尚未实现(W2),跳过');
+    // embedding 85–99:与摘要同样非关键路径,失败只发 stage_error,任务仍 done;图与摘要照常可用
+    stage = 'embedding';
+    // embeddingStatus 写进 task.stats,GET /api/repos/:id 透出;检索侧据此决定是否降级(见 ARCHITECTURE §4)
+    let embeddingStatus: EmbeddingStatus = 'skipped';
+    if (!deps.embedder || !deps.vectorStore) {
+      await progress('embedding', 85, '未配置向量库,跳过向量化');
+    } else {
+      await progress('embedding', 85, '切块与向量化');
+      try {
+        const r = await runEmbedding(data, deps, root, progress);
+        embeddingStatus = r.reused ? 'reused' : 'ready';
+        stats = { ...stats, embeddingChunks: r.chunks };
+        await progress('embedding', 99, r.message);
+      } catch (err) {
+        embeddingStatus = 'failed';
+        await events.emit({
+          event: 'stage_error',
+          data: {
+            jobId,
+            stage: 'embedding',
+            message: `向量化失败,已跳过:${err instanceof Error ? err.message : String(err)}`,
+          },
+        });
+      }
+    }
 
-    await store.updateTask(jobId, { stage: 'done', progress: 100, finishedAt: new Date() });
+    stats = { ...stats, embeddingStatus };
+    await store.updateTask(jobId, { stage: 'done', progress: 100, finishedAt: new Date(), stats });
     await events.emit({ event: 'progress', data: { jobId, stage: 'done', progress: 100 } });
     const numeric = Object.fromEntries(
       Object.entries(stats).filter((e): e is [string, number] => typeof e[1] === 'number'),
@@ -461,4 +497,57 @@ export async function runSummaries(
     ? `LLM ${r.budget.scope === 'task' ? '单任务' : '日'}预算已用尽,${r.budget.degraded} 个节点改用规则摘要`
     : null;
   return { text, warn };
+}
+
+/**
+ * 切块 + 向量化(T-214 第一部分)。切块来源优先用解析断点 `${root}.analysis.json` 里的
+ * 顶层声明块;断点不在(图已入库、跳过解析的重跑)时按图里的文件整文件一块。
+ * 所有文件先过共享排除规则(敏感 / 超大 / 二进制),命中的不产出切块、不送 embedding、不进向量库。
+ */
+export async function runEmbedding(
+  data: AnalyzeJobData,
+  deps: PipelineDeps,
+  root: string,
+  progress: (s: ProgressStage, pct: number, message?: string) => Promise<void>,
+): Promise<{ chunks: number; reused: boolean; message: string }> {
+  const { store, config } = deps;
+  const { repoId, commitSha } = data;
+  const ana = readJson<AnalyzeResult>(`${root}.analysis.json`);
+  let files: ChunkSourceFile[];
+  if (ana) {
+    files = ana.parsed.map((p) => ({ path: p.path, chunks: p.chunks, sensitive: p.sensitive }));
+  } else {
+    const g = await store.loadGraph(repoId, commitSha);
+    files = g.files.map((f) => ({
+      path: f.path,
+      chunks: f.loc > 0 ? [{ symbol: null, startLine: 1, endLine: f.loc }] : [],
+    }));
+  }
+  const readSource = async (p: string) => {
+    const rel = safeRelPath(p);
+    if (!rel) return null;
+    try {
+      // 与摘要一致:先 lstat,非普通文件(符号链接等)和超过 MAX_SEND_BYTES 的不读
+      const st = await lstat(join(root, rel));
+      if (!st.isFile() || st.size > MAX_SEND_BYTES) return null;
+      return await readFile(join(root, rel), 'utf8');
+    } catch {
+      return null;
+    }
+  };
+  const { chunks, excluded } = await buildChunks(files, readSource);
+  const r = await indexChunks(
+    { repoId, commitSha, chunks, batchSize: config.embedding.batchSize },
+    deps.embedder!,
+    deps.vectorStore!,
+    (done, total) =>
+      progress('embedding', 85 + Math.floor((done / total) * 14), `向量化 ${done}/${total} 块`),
+  );
+  const skip = excluded.length ? `,排除 ${excluded.length} 个文件` : '';
+  return {
+    ...r,
+    message: r.reused
+      ? `该 commit 已有 ${r.chunks} 个向量,复用${skip}`
+      : `向量化完成:${r.chunks} 块${skip}`,
+  };
 }

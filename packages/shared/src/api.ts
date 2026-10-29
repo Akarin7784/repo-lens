@@ -2,6 +2,10 @@ import { z } from 'zod';
 import { CommitShaSchema, NodeIdSchema } from './ids.js';
 import { ProgressStageSchema } from './progress.js';
 
+/** T-214 向量化状态 */
+export const EmbeddingStatusSchema = z.enum(['ready', 'reused', 'skipped', 'failed']);
+export type EmbeddingStatus = z.infer<typeof EmbeddingStatusSchema>;
+
 const GITHUB_URL = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+?(\.git)?\/?$/;
 
 /** POST /api/repos */
@@ -46,6 +50,13 @@ export const RepoStatusSchema = z.object({
   progress: z.number().min(0).max(100),
   stats: z.object({ files: z.number(), modules: z.number(), edges: z.number() }).partial(),
   error: z.string().nullable(),
+  /**
+   * T-214:commitSha 对应任务的向量化状态。ready=本次写入,reused=复用已有向量,
+   * skipped=未配置向量库,failed=向量化失败(图与摘要照常可用)。旧任务或尚未跑到该阶段为 null。
+   * 检索(T-214 第二部分 / W3 /chat)只有 ready|reused 时用向量检索,否则降级为纯关键词检索,不报错。
+   * 只增不改:缺省按 null 解析。
+   */
+  embeddingStatus: EmbeddingStatusSchema.nullable().default(null),
 });
 
 /** GET /api/repos/:id/graph?parentId= */

@@ -11,6 +11,7 @@ import {
 } from '@repolens/agent';
 import { analyzeRepo, scanSourceFiles } from '@repolens/analyzer';
 import { MemoryStore, publicJobId } from '@repolens/db';
+import { FakeEmbedder, MemoryVectorStore } from '@repolens/rag';
 import { MemoryEventSink } from './events.js';
 import { runPipeline } from './pipeline/run.js';
 import { makeGitRepo, SAMPLE_REPO, testConfig } from './test-utils.js';
@@ -73,9 +74,22 @@ describe('端到端:含假 key 的仓库跑完整流水线', () => {
       taskBudgetCents: 1_000,
     });
     const config = testConfig();
+    const embedder = new FakeEmbedder();
+    const embedded: string[] = [];
+    const orig = embedder.embedDocuments.bind(embedder);
+    embedder.embedDocuments = async (t) => (embedded.push(...t), orig(t));
+    const vectorStore = new MemoryVectorStore();
     await runPipeline(
       { jobId, repoId: repo.id, repoUrl: url, commitSha: sha },
-      { store, events: new MemoryEventSink(), config, gateway, allowFileProtocol: true },
+      {
+        store,
+        events: new MemoryEventSink(),
+        config,
+        gateway,
+        embedder,
+        vectorStore,
+        allowFileProtocol: true,
+      },
     );
     expect((await store.getTask(jobId))?.stage).toBe('done');
 
@@ -115,6 +129,14 @@ describe('端到端:含假 key 的仓库跑完整流水线', () => {
         for (const s of secrets) expect(text).not.toContain(s);
       }
     }
+
+    // 4) 向量化(T-214):敏感文件不进 chunk、不送 embedding、不进向量库
+    expect(embedded.length).toBeGreaterThan(0);
+    for (const t of embedded) for (const s of secrets) expect(t).not.toContain(s);
+    const indexed = new Set([...vectorStore.points.values()].map((p) => p.payload.path));
+    expect(indexed.has('src/index.ts')).toBe(true);
+    for (const p of ['src/aws.ts', 'src/tls.ts', '.env', '.npmrc', 'certs/dev.pem'])
+      expect(indexed.has(p)).toBe(false);
   });
 });
 

@@ -36,6 +36,10 @@ export function GraphSearch({
   const listId = useId();
   const hits = useMemo(() => searchNodes(nodes, q, limit), [nodes, q, limit]);
   const showList = open && q.trim() !== '';
+  // T-224b:nodes 在搜索框打开期间可能变化(加载/重新分析),结果变少时 active 会越界;
+  // 渲染与回车都用钳过的序号,无结果时为 -1(不指向任何 option)
+  const activeIdx = hits.length === 0 ? -1 : Math.min(active, hits.length - 1);
+  const expanded = showList && hits.length > 0;
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -60,10 +64,10 @@ export function GraphSearch({
         type="text"
         role="combobox"
         aria-label="按路径搜索节点"
-        aria-expanded={showList}
+        aria-expanded={expanded}
         aria-controls={listId}
         aria-autocomplete="list"
-        aria-activedescendant={showList && hits[active] ? `${listId}-${active}` : undefined}
+        aria-activedescendant={expanded && activeIdx >= 0 ? `${listId}-${activeIdx}` : undefined}
         placeholder="搜索路径  /"
         autoComplete="off"
         spellCheck={false}
@@ -82,10 +86,10 @@ export function GraphSearch({
             if (!hits.length) return;
             setOpen(true);
             const d = e.key === 'ArrowDown' ? 1 : -1;
-            setActive((a) => (a + d + hits.length) % hits.length);
+            setActive(() => (Math.max(activeIdx, 0) + d + hits.length) % hits.length);
           } else if (e.key === 'Enter') {
             e.preventDefault();
-            if (showList) pick(hits[active]);
+            if (showList && activeIdx >= 0) pick(hits[activeIdx]);
           } else if (e.key === 'Escape') {
             // 不冒泡到 GraphView 的全局 Esc(那里是取消选中)
             e.stopPropagation();
@@ -96,6 +100,10 @@ export function GraphSearch({
           }
         }}
       />
+      {/* 读屏播报:无匹配 / 匹配数量;始终挂载,内容变化才会被 polite 读出。不用 role=status,避免与图状态条重名 */}
+      <div aria-live="polite" aria-atomic="true" className="sr-only" data-testid="search-live">
+        {showList ? (hits.length === 0 ? '没有匹配的节点' : `${hits.length} 个匹配的节点`) : ''}
+      </div>
       {showList && (
         <ul
           id={listId}
@@ -113,8 +121,8 @@ export function GraphSearch({
                 key={h.id}
                 id={`${listId}-${i}`}
                 role="option"
-                aria-selected={i === active}
-                className={`flex cursor-pointer items-center gap-2 px-3 py-1.5 ${i === active ? 'bg-cite text-fg' : 'text-fg'}`}
+                aria-selected={i === activeIdx}
+                className={`flex cursor-pointer items-center gap-2 px-3 py-1.5 ${i === activeIdx ? 'bg-cite text-fg' : 'text-fg'}`}
                 // mousedown 先于 input 的 blur,阻止默认避免列表在点击前就关闭
                 onMouseDown={(e) => e.preventDefault()}
                 onMouseEnter={() => setActive(i)}
