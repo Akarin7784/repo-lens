@@ -17,6 +17,7 @@ import {
 } from '../../../lib/api/jobEvents';
 import { createApiSource } from '../../../lib/graph/source';
 import { createFetchTransport, type ChatTransport } from '../../../lib/chat/transport';
+import type { EmbeddingProvider } from '../../../lib/privacy/disclosure';
 
 type Props = {
   repoId: number;
@@ -47,6 +48,8 @@ export function AnalysisWorkspace({
   const [progress, dispatch] = useReducer(jobProgressReducer, initialJobProgress);
   const [init, setInit] = useState<Init>({ jobId: jobId ?? null, error: null });
   const [reconnecting, setReconnecting] = useState(false);
+  // T-234:问答面板的披露按提供方显示;未取到(或字段缺省)= 未知
+  const [embeddingProvider, setEmbeddingProvider] = useState<EmbeddingProvider | undefined>();
   const [rootInfo, setRootInfo] = useState<{ commitSha: string; nodes: number; ms: number } | null>(
     null,
   );
@@ -59,6 +62,7 @@ export function AnalysisWorkspace({
       .getRepoStatus(repoId)
       .then((s) => {
         if (!alive) return;
+        setEmbeddingProvider(s.embeddingProvider);
         if (s.status === 'failed') {
           dispatch({
             event: 'stage_error',
@@ -83,6 +87,20 @@ export function AnalysisWorkspace({
       alive = false;
     };
   }, [api, repoId, jobId]);
+
+  // 刚提交(带 jobId)时提供方要等任务完成后才写入 stats:done 后补查一次状态;失败保持「未知」
+  const doneNow = progress.status === 'done';
+  useEffect(() => {
+    if (!jobId || !doneNow) return;
+    let alive = true;
+    Promise.resolve()
+      .then(() => api.getRepoStatus(repoId))
+      .then((s) => alive && setEmbeddingProvider(s?.embeddingProvider))
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [api, repoId, jobId, doneNow]);
 
   // 订阅进度流,直到 done
   useEffect(() => {
@@ -232,6 +250,7 @@ export function AnalysisWorkspace({
               <ChatPanel
                 repoId={repoId}
                 transport={transport}
+                embeddingProvider={embeddingProvider}
                 onCitationClick={(c) => {
                   // 只跳到文件:选中文件节点 → 图上逐层展开到可见层并高亮节点与一跳边,右栏显示文件预览。
                   // 行号高亮依赖 FRONTEND_DESIGN 9.1.2 的 line/endLine,W3 后端 PR 前未实现。

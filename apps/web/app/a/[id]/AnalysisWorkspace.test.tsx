@@ -4,6 +4,7 @@ import { AnalysisWorkspace } from './AnalysisWorkspace';
 import { ApiRequestError } from '../../../lib/api/errors';
 import type { ApiClient } from '../../../lib/api/client';
 import { FakeES } from '../../../test/fakeEventSource';
+import { PROVIDER_DISCLOSURE } from '../../../lib/privacy/disclosure';
 
 const SHA = '382d29c485e67018c06e75ec7235130d0968522c';
 const jobId = `1:${SHA}`;
@@ -75,6 +76,51 @@ describe('<AnalysisWorkspace>', () => {
     expect(banner.className).not.toContain('absolute');
     act(() => FakeES.last!.emit('done', { jobId, status: 'done' }));
     expect(screen.queryByTestId('progress-banner')).toBeNull();
+  });
+
+  it.each([
+    ['local', PROVIDER_DISCLOSURE.local],
+    [undefined, PROVIDER_DISCLOSURE.unknown],
+  ] as const)(
+    'T-234:GET /api/repos/:id 的 embeddingProvider=%s → 问答面板披露按它显示',
+    async (provider, text) => {
+      const api = fakeApi({
+        getRepoStatus: vi.fn(async () => ({
+          repoId: 1,
+          jobId,
+          status: 'done',
+          stage: 'done',
+          progress: 100,
+          ...(provider ? { embeddingProvider: provider } : {}),
+        })) as unknown as ApiClient['getRepoStatus'],
+      });
+      render(<AnalysisWorkspace repoId={1} api={api} eventSource={(u) => new FakeES(u)} />);
+      await waitFor(() => expect(screen.getByTestId('chat-disclosure')).toHaveTextContent(text));
+    },
+  );
+
+  it('刚提交(带 jobId):done 后补查状态,拿到 dashscope 再显示对应披露', async () => {
+    const api = fakeApi({
+      getRepoStatus: vi.fn(async () => ({
+        repoId: 1,
+        jobId,
+        status: 'done',
+        stage: 'done',
+        progress: 100,
+        embeddingProvider: 'dashscope',
+      })) as unknown as ApiClient['getRepoStatus'],
+    });
+    render(
+      <AnalysisWorkspace repoId={1} jobId={jobId} api={api} eventSource={(u) => new FakeES(u)} />,
+    );
+    act(() => FakeES.last!.emit('graph_ready', { jobId, repoId: 1, graphUrl: '/g' }));
+    expect(screen.getByTestId('chat-disclosure')).toHaveTextContent(PROVIDER_DISCLOSURE.unknown);
+    act(() => FakeES.last!.emit('done', { jobId, status: 'done' }));
+    await waitFor(() =>
+      expect(screen.getByTestId('chat-disclosure')).toHaveTextContent(
+        PROVIDER_DISCLOSURE.dashscope,
+      ),
+    );
   });
 
   it('非正整数 repo id → 后端 400 BAD_REQUEST → 中文提示', async () => {
