@@ -4,6 +4,9 @@ import { drizzle, type MySql2Database } from 'drizzle-orm/mysql2';
 import mysql from 'mysql2/promise';
 import * as schema from './schema.js';
 import type {
+  ChatMessageInput,
+  ChatMessageRow,
+  ChatSessionRow,
   CodeChunkRow,
   GraphInput,
   LlmUsageInput,
@@ -418,6 +421,89 @@ export class MysqlStore implements Store {
       .where(and(eq(schema.symbol.fileId, fileRowId), eq(schema.symbol.exported, 1)));
     return rows.map((r) => r.name);
   }
+
+  async createChatSession(input: {
+    repoId: number;
+    userKey: string | null;
+    title: string | null;
+  }): Promise<ChatSessionRow> {
+    const title =
+      input.title == null
+        ? null
+        : input.title.length > 255
+          ? input.title.slice(0, 255)
+          : input.title;
+    const res = await this.db.insert(schema.chatSession).values({
+      repoId: input.repoId,
+      userKey: input.userKey,
+      title,
+    });
+    const id = Number(res[0].insertId);
+    const row = await this.getChatSession(id);
+    if (!row) throw new Error(`chat_session ${id} 插入后读不到`);
+    return row;
+  }
+  async getChatSession(id: number): Promise<ChatSessionRow | null> {
+    const [r] = await this.db
+      .select()
+      .from(schema.chatSession)
+      .where(eq(schema.chatSession.id, id));
+    if (!r) return null;
+    return {
+      id: r.id,
+      repoId: r.repoId,
+      userKey: r.userKey ?? null,
+      title: r.title ?? null,
+      createdAt: r.createdAt ?? new Date(),
+    };
+  }
+  async insertChatMessage(input: ChatMessageInput): Promise<ChatMessageRow> {
+    const res = await this.db.insert(schema.chatMessage).values({
+      sessionId: input.sessionId,
+      role: input.role,
+      content: input.content,
+      citations: input.citations ?? null,
+      droppedCitations: input.droppedCitations ?? 0,
+      retrievalIds: input.retrievalIds ?? null,
+      latencyMs: input.latencyMs ?? null,
+    });
+    const id = Number(res[0].insertId);
+    const [r] = await this.db
+      .select()
+      .from(schema.chatMessage)
+      .where(eq(schema.chatMessage.id, id));
+    if (!r) throw new Error(`chat_message ${id} 插入后读不到`);
+    return {
+      id: r.id,
+      sessionId: r.sessionId,
+      role: r.role,
+      content: r.content ?? '',
+      citations: r.citations ?? null,
+      droppedCitations: r.droppedCitations ?? 0,
+      retrievalIds: r.retrievalIds ?? null,
+      latencyMs: r.latencyMs ?? null,
+      createdAt: r.createdAt ?? new Date(),
+    };
+  }
+  async listChatMessages(sessionId: number): Promise<ChatMessageRow[]> {
+    const rows = await this.db
+      .select()
+      .from(schema.chatMessage)
+      .where(eq(schema.chatMessage.sessionId, sessionId))
+      .orderBy(schema.chatMessage.id);
+    return rows.map((r) => ({
+      id: r.id,
+      sessionId: r.sessionId,
+      role: r.role,
+      content: r.content ?? '',
+      citations: r.citations ?? null,
+      droppedCitations: r.droppedCitations ?? 0,
+      retrievalIds: r.retrievalIds ?? null,
+      latencyMs: r.latencyMs ?? null,
+      createdAt: r.createdAt ?? new Date(),
+    }));
+  }
+
   async close() {
     await this.pool.end();
   }

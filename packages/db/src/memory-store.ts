@@ -1,4 +1,7 @@
 import type {
+  ChatMessageInput,
+  ChatMessageRow,
+  ChatSessionRow,
   CodeChunkRow,
   GraphInput,
   LlmUsageInput,
@@ -32,9 +35,62 @@ export class MemoryStore implements Store {
   private repos = new Map<number, RepoRow>();
   private tasks = new Map<string, TaskRow>();
   private graphs = new Map<string, { g: StoredGraph; symbols: Map<number, SymbolInput[]> }>();
-  private seq = { repo: 0, task: 0, file: 0, usage: 0 };
+  private seq = { repo: 0, task: 0, file: 0, usage: 0, session: 0, message: 0 };
   private usage: LlmUsageRow[] = [];
   private summaries = new Map<number, Map<string, SummaryRow>>();
+  private sessions = new Map<number, ChatSessionRow>();
+  private messages = new Map<number, ChatMessageRow[]>();
+
+  async createChatSession(input: { repoId: number; userKey: string | null; title: string | null }) {
+    const title =
+      input.title == null
+        ? null
+        : input.title.length > 255
+          ? input.title.slice(0, 255)
+          : input.title;
+    const row: ChatSessionRow = {
+      id: ++this.seq.session,
+      repoId: input.repoId,
+      userKey: input.userKey,
+      title,
+      createdAt: new Date(),
+    };
+    this.sessions.set(row.id, row);
+    this.messages.set(row.id, []);
+    return { ...row, createdAt: new Date(row.createdAt) };
+  }
+  async getChatSession(id: number) {
+    const r = this.sessions.get(id);
+    return r ? { ...r, createdAt: new Date(r.createdAt) } : null;
+  }
+  async insertChatMessage(input: ChatMessageInput) {
+    if (!this.sessions.has(input.sessionId))
+      throw new Error(`chat_session ${input.sessionId} 不存在`);
+    const row: ChatMessageRow = {
+      id: ++this.seq.message,
+      sessionId: input.sessionId,
+      role: input.role,
+      content: input.content,
+      citations: input.citations ?? null,
+      droppedCitations: input.droppedCitations ?? 0,
+      retrievalIds: input.retrievalIds ?? null,
+      latencyMs: input.latencyMs ?? null,
+      createdAt: new Date(),
+    };
+    this.messages.get(input.sessionId)!.push(row);
+    return {
+      ...row,
+      citations: row.citations,
+      retrievalIds: row.retrievalIds,
+      createdAt: new Date(row.createdAt),
+    };
+  }
+  async listChatMessages(sessionId: number) {
+    return (this.messages.get(sessionId) ?? []).map((r) => ({
+      ...r,
+      createdAt: new Date(r.createdAt),
+    }));
+  }
 
   async listSummaries(repoId: number) {
     return [...(this.summaries.get(repoId)?.values() ?? [])].map((r) => ({ ...r }));
