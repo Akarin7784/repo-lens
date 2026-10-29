@@ -14,6 +14,8 @@ import {
   type LlmClient,
   type LlmRequest,
   type LlmResult,
+  type LlmStreamChunk,
+  type LlmUsage,
 } from './types.js';
 
 /** 网关用到的 Redis 子集(ioredis 实例可直接传入) */
@@ -178,6 +180,73 @@ export class LlmGateway {
       LLM_CACHE_TTL_S,
     );
     return { ...res, model: call.model, costMicroUsd: cost, cacheHit: false };
+  }
+
+  /**
+   * 流式调用(问答终答用):预算检查 → 流式调用 → 按服务商 usage 记账。不读写缓存(问答缓存不在 W3 范围)。
+   * - 预算超限抛 LlmError('BUDGET_EXCEEDED'),不调用模型、不写 llm_usage。
+   * - 客户端不支持流式抛 LlmError('LLM_UNAVAILABLE')。熔断打开时 cause 为 CircuitOpenError。
+   * - 建连失败 / 中途断流 / 没给 usage 就结束:写 ok=0 的 llm_usage,抛 LlmError('LLM_UNAVAILABLE')。
+   *   已经吐出的正文不收回,由调用方决定怎么收尾。熔断计数由 BreakerClient 负责。
+   * - 用户中止(signal.aborted):写 ok=0、不计花费,抛 LlmError('LLM_UNAVAILABLE', 'LLM 调用已取消')。
+   * - 正常结束时 generator 的返回值是 LlmResult(text 为全文)。
+   */
+  async *stream(req: LlmRequest): AsyncGenerator<LlmStreamChunk, LlmResult> {
+    const { purpose, repoId, taskId, sessionId, ...call } = req;
+    const price = priceOf(this.o.prices, call.model);
+    const owner = { purpose, model: call.model, repoId, taskId, sessionId };
+    if (!this.o.client.stream)
+      throw new LlmError('LLM_UNAVAILABLE', `LLM 客户端不支持流式(${this.o.client.provider})`);
+    await this.checkBudget(taskId);
+    if (call.signal?.aborted) {
+      throw new LlmError('LLM_UNAVAILABLE', 'LLM 调用已取消', undefined, {
+        cause: call.signal.reason,
+      });
+    }
+    const failRow = () =>
+      this.o.usage.insertLlmUsage({
+        ...owner,
+        tokensIn: 0,
+        tokensOut: 0,
+        costMicroUsd: 0,
+        cacheHit: false,
+        ok: false,
+      });
+
+    let text = '';
+    let usage: LlmUsage | undefined;
+    try {
+      for await (const ev of this.o.client.stream(call)) {
+        if (ev.type === 'usage') usage = ev.usage;
+        else if (ev.text) {
+          text += ev.text;
+          yield { text: ev.text };
+        }
+      }
+      if (call.signal?.aborted) throw call.signal.reason ?? new Error('aborted');
+      if (!usage) throw new Error('上游流在 usage 之前结束');
+    } catch (err) {
+      await failRow();
+      const aborted = call.signal?.aborted === true;
+      throw new LlmError(
+        'LLM_UNAVAILABLE',
+        aborted ? 'LLM 调用已取消' : `LLM 流式调用失败(${this.o.client.provider})`,
+        undefined,
+        { cause: aborted ? (call.signal?.reason ?? err) : err },
+      );
+    }
+
+    const cost = costMicroUsd(price, usage.tokensIn, usage.tokensOut, usage.cachedTokensIn ?? 0);
+    await this.addSpend(cost, taskId);
+    await this.o.usage.insertLlmUsage({
+      ...owner,
+      tokensIn: usage.tokensIn,
+      tokensOut: usage.tokensOut,
+      costMicroUsd: cost,
+      cacheHit: false,
+      ok: true,
+    });
+    return { text, usage, model: call.model, costMicroUsd: cost, cacheHit: false };
   }
 
   private async checkBudget(taskId?: number) {
