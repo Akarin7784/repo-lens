@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { API_ERROR_CODES } from '@repolens/shared';
 import { createApiClient } from './client';
-import { ApiRequestError, ERROR_TEXT, toApiError, userMessageOf } from './errors';
+import { ApiRequestError, ERROR_TEXT, looseError, toApiError, userMessageOf } from './errors';
 import { initialJobProgress, jobProgressReducer, subscribeJobEvents } from './jobEvents';
 import { FakeES } from '../../test/fakeEventSource';
 
@@ -162,5 +162,32 @@ describe('subscribeJobEvents', () => {
     expect(invalid).toHaveLength(2);
     expect(errs).toBe(1);
     expect(es.closed).toBe(true);
+  });
+});
+
+describe('looseError:details.retryAfterSec 边界(T-236)', () => {
+  const parse = (retryAfterSec: unknown) =>
+    looseError({
+      error: {
+        code: 'RATE_LIMITED',
+        message: 'x',
+        details: { reason: 'rate_limit', retryAfterSec },
+      },
+    });
+  it.each([
+    ['0', 0],
+    ['负数', -5],
+    ['小数 1.5', 1.5],
+    ['字符串 "30"', '30'],
+    ['NaN', Number.NaN],
+    ['Infinity', Number.POSITIVE_INFINITY],
+  ])('%s → undefined(不当成合法秒数)', (_n, v) => {
+    const e = parse(v);
+    expect(e).not.toBeNull();
+    expect(e!.reason).toBe('rate_limit');
+    expect(e!.retryAfterSec).toBeUndefined();
+  });
+  it('正整数 30 → 30(对照)', () => {
+    expect(parse(30)!.retryAfterSec).toBe(30);
   });
 });
