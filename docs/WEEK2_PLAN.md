@@ -42,7 +42,8 @@
 
 | 编号 | 负责 | 内容 | 依赖 | 验收 | 不做什么 |
 |---|---|---|---|---|---|
-| T-210 | 后端与AI设计师 | **LLM 客户端与记账**:`packages/agent`(或新 `packages/llm`,由负责人定)里实现 OpenAI 兼容客户端,读 `LLM_BASE_URL`/`LLM_API_KEY`/`LLM_SUMMARY_MODEL`;每次调用写 `llm_usage`;Redis `llm:{sha256}` 响应缓存;`DAILY_LLM_BUDGET_CENTS` 熔断;提供 `FakeLlm`(确定性输出)供测试和 CI 用 | 决策 D1、D2 | 单测覆盖缓存命中、超预算抛 `BUDGET_EXCEEDED`;CI 不需要真实 key | 不做多供应商自动切换、重排、流式(W3) |
+| T-210a | 后端与AI设计师 | **LLM 接口、FakeLlm、记账与预算熔断**(第一步,已由 #36 合并):`packages/agent` 的 `LlmClient` 接口、`FakeLlm`、`llm_usage` 记账、`DAILY_LLM_BUDGET_CENTS` / `LLM_TASK_BUDGET_CENTS` 熔断,`readLlmConfig` 目前只接受 `LLM_PROVIDER=fake` | 无 | 已合并(#36) | 不接真实接口 |
+| T-210b | 后端与AI设计师 | **真实 OpenAI 兼容客户端(DeepSeek)+ 手动冒烟脚本**(第二步):`readLlmConfig` 接受 `LLM_PROVIDER=deepseek`,读 `DEEPSEEK_API_KEY`、`DEEPSEEK_BASE_URL`(默认 `https://api.deepseek.com`)和模型 id;provider=deepseek 而缺 key 时启动报错(错误信息不得含 key);按 DeepSeek 官方文档核对价格表和 usage 字段(含缓存命中计费字段),在 PR 里写明文档链接与核对日期;另附手动冒烟脚本(发一次极短请求,只打印 model、tokens、费用,不打印 key) | T-210a、D1 | 单测只用 mock HTTP,**不调真实接口**,CI 不放 key;手动:冒烟脚本在 box 上跑通一次,PR 贴脱敏输出 | 不做多供应商自动切换、重排、流式(W3);不在代码里硬编码未核对的价格 |
 | T-211 | 后端与AI设计师 | **分层摘要(file → dir → module → repo)**:实现 worker 的 `summarizing` 阶段,写 `summary` 表,`input_hash` 复用;fanIn 前 200 个文件做文件摘要,其余只做规则摘要(文件名+导出名);失败发 `stage_error`,图照常可用 | T-210 | smoke 在 `FakeLlm` 下跑通:`done` 之后 `GET /nodes/m:src/middleware` 的 `summary` 非空;同 commit 重跑不新增 `llm_usage` 记录;手动:hono 用真实模型跑一次,记录成本和耗时 | 不做 function 层摘要(列为可选,时间够再加);不做增量(W3) |
 | T-212 | 后端与AI设计师 | **节点详情接口补全**:`/nodes/*` 返回真实 `summary`、`exports`、`inDegree/outDegree`、`topDependents`、`inCycle`(以 shared 现有字段为准,缺的字段先改 shared,只增不减) | T-211(summary 部分);其余字段可先做 | `ci` 中 api 测试覆盖;smoke 断言 file 节点有 `loc`、度数 | 不做 `/chat` |
 | T-213 | 后端与AI设计师 | **代码预览接口** `GET /api/repos/:id/files?path=&start=&end=`:路径规范化、拒绝 `..` 和符号链接、单次 ≤ 2000 行;源码来自 worker 保留的快照目录(保留策略见决策 D5) | D5 | api 测试覆盖 `..` 返回 400;smoke 读 zustand `src/vanilla.ts` 前 20 行成功 | 不做语法高亮(前端 Shiki) |
@@ -71,12 +72,12 @@
 ## 3. 执行顺序与并行
 
 ```
-第 1 天:T-201 T-202 T-204(架构师) ‖ T-203 T-220(前端,#32 合并后) ‖ T-210(后端) ‖ T-205(面试助手)
+第 1 天:T-201 T-202 T-204(架构师) ‖ T-203 T-220(前端,#32 合并后) ‖ T-210b(后端) ‖ T-205(面试助手)
 第 2-3 天:T-211 → T-212(后端) ‖ T-221 → T-222(前端,先对 mock) ‖ T-213(后端,与 T-211 并行)
 第 4 天:T-214(后端) ‖ T-223 T-224(前端) ‖ T-216
 第 5 天:T-215 评审、T-225(可选)、T-209 文档对齐、周末全链路(T-230)
 ```
-- 关键路径:T-210 → T-211 → T-212 → T-222(右栏摘要)。
+- 关键路径:T-210b → T-211 → T-212 → T-222(右栏摘要)。
 - 前端 T-220、T-221 改同一组文件(`WeightedEdge.tsx`、`selection.ts`),串行。
 - shared 类型改动(T-212、T-214)先单独小 PR 合并,前后端再并行。
 
@@ -84,10 +85,10 @@
 
 | # | 决策 | 我的建议默认值 | 状态 |
 |---|---|---|---|
-| D1 | LLM 供应商与模型 | 只接 OpenAI 兼容接口(已有 `LLM_BASE_URL`);摘要用 `gpt-4o-mini`,repo 层和 W3 问答用 `gpt-4o`;供应商最终由 Eva 定(**待确认**,涉及 API key 和费用) | 待 Eva 确认 |
-| D2 | 成本上限 | `DAILY_LLM_BUDGET_CENTS=500`(每天 $5),单仓库分析上限 $0.30(超出后剩余文件只做规则摘要);CI 一律用 Fake,不调真实模型、不放 key | 建议采纳 |
+| D1 | LLM 供应商与模型 | **已决:DeepSeek**(Eva 2026-10-29 决定)。模型 id `deepseek-flash`(显示名 DeepSeek-V4.1-Flash),上下文 1048576、最大输出 393216,输入文字和图片、输出仅文字;走 OpenAI 兼容接口,base URL 默认 `https://api.deepseek.com`,可用 `DEEPSEEK_BASE_URL` 覆盖;key 只从环境变量 `DEEPSEEK_API_KEY` 读取,不进仓库、PR、日志。摘要与问答是否都用 `deepseek-flash` 由 T-210b 定。注意:上下文大不等于便宜,摘要仍按 D8 控制输入量(导出签名 + 前 80 行、fanIn 前 200 文件)。价格和 usage 字段以 T-210b 核对的官方文档为准,本文不写价格 | 已决 |
+| D2 | 成本上限 | 不变:`DAILY_LLM_BUDGET_CENTS=500`(每天 $5),`LLM_TASK_BUDGET_CENTS=30`(每任务 $0.30,超出后剩余文件只做规则摘要);CI 一律用 `LLM_PROVIDER=fake`,不调真实模型、不放 key;费用按 T-210b 核对的 DeepSeek 价格(含缓存命中价)计算 | 已决 |
 | D3 | 向量库部署 | 沿用 compose 内 Qdrant v1.12.4,只走内网 6333,带 `QDRANT_API_KEY`;每个仓库 commit 用 payload 过滤(`repoId`+`commitSha`),共用一个 collection | 建议采纳 |
-| D4 | embedding 模型与维度 | `text-embedding-3-small`(1536 维);本地 bge-m3 只作为 W3 降级备选,W2 不做 | 建议采纳 |
+| D4 | embedding 模型与维度 | **待确认**。D1 选了 DeepSeek,但 DeepSeek 是否提供 embedding 接口未核实,原定 OpenAI `text-embedding-3-small`(1536 维)需重新评估(多一个供应商和 key)。默认:CI 继续用假向量(FakeEmbedding),真实 embedding 供应商在 T-214 前另行决定(候选:OpenAI、本地 bge-m3 等),collection 维度随所选模型 | 待确认 |
 | D5 | 源码快照保留 | ARCHITECTURE §6.5 写「完成后删除工作目录」,但 `/files` 和 W3 引用校验需要原文。建议:按 `repoId-commitSha` 保留快照,只保留最近 N=10 个 commit,LRU 清理;或只为四个演示仓库保留(**待确认**) | 需拍板 |
 | D6 | 摘要失败降级 | LLM 失败或 JSON 解析失败重试 1 次,再失败用规则摘要;整个 summarizing 失败只发 `stage_error`,任务仍 `done`,图可用 | 建议采纳 |
 | D7 | 引用校验失败降级(W3 实现,W2 先定) | 沿用 ARCHITECTURE §8:失败引用丢弃并计 `done.droppedCitations`;一条都不过就重试一次,仍失败用检索 top 片段作引用并标 `fallback:"retrieval"` | 建议采纳 |
