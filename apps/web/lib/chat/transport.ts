@@ -1,30 +1,35 @@
-import { ChatEventSchema, type ChatEvent, type ChatRequest } from '@repolens/shared';
+import {
+  CHAT_CONTEXT_NODES_MAX,
+  ChatEventSchema,
+  ChatRequestSchema,
+  NodeIdSchema,
+  type ChatEvent,
+  type ChatRequest,
+} from '@repolens/shared';
 import { apiBase } from '../api/config';
-import { ERROR_TEXT, looseError } from '../api/errors';
+import { looseError } from '../api/errors';
 import type { ChatErrorInfo } from './answer';
 import { parseSse } from './sse';
 
-/** 输入框上限(trim 后非空);架构师裁定可能收紧 shared 到 ≤2000,前端先按 2000 */
-export const CHAT_MESSAGE_MAX = 2000;
-/** W3 后端只做格式校验、不影响检索;前端最多传 20 个 */
-export const CHAT_CONTEXT_MAX = 20;
-
 /**
- * 请求体唯一构造点:字段名只在这里出现。当前按 main 上 shared ChatRequestSchema 用 `message`;
- * 若裁定改名(如 `question`)或 P1 收紧 schema,只改这一处。
- * 返回 null 表示问题为空或超长,不发请求。
+ * 请求体唯一构造点:字段名只在这里出现,校验直接用 shared ChatRequestSchema
+ * (message trim 后 1–CHAT_MESSAGE_MAX、contextNodeIds ≤ CHAT_CONTEXT_NODES_MAX、strict)。
+ * 不带 sessionId:多轮会话等后端 P4 真正填写 done.sessionId 后再做。
+ * 不合法的节点 id 先丢弃(只是上下文提示,不应让整条问题发不出去),再截前 CHAT_CONTEXT_NODES_MAX 个。
+ * 返回 null 表示问题不合法(trim 后为空或超长),不发请求。
  */
 export function buildChatRequest(
   question: string,
   contextNodeIds?: readonly string[],
 ): ChatRequest | null {
-  const q = question.trim();
-  if (!q || q.length > CHAT_MESSAGE_MAX) return null;
-  const ctx = contextNodeIds?.slice(0, CHAT_CONTEXT_MAX);
-  return {
-    message: q,
-    ...(ctx?.length ? { contextNodeIds: ctx as ChatRequest['contextNodeIds'] } : {}),
-  };
+  const ctx = contextNodeIds
+    ?.filter((id) => NodeIdSchema.safeParse(id).success)
+    .slice(0, CHAT_CONTEXT_NODES_MAX);
+  const r = ChatRequestSchema.safeParse({
+    message: question,
+    ...(ctx?.length ? { contextNodeIds: ctx } : {}),
+  });
+  return r.success ? r.data : null;
 }
 
 /** 回答文本里模型输出的 [[Sn:a-b]] 标记:路径/行号一律以 citation 事件为准,原始标记不显示 */
@@ -33,7 +38,10 @@ const MARKER = /\[\[S\d+:\d+-\d+\]\]/g;
 const PARTIAL = /\[(?:\[(?:S\d*(?::\d*(?:-\d*(?:\])?)?)?)?)?$/;
 export function stripCitationMarkers(text: string, streaming: boolean): string {
   const t = text.replace(MARKER, '');
-  return streaming ? t.replace(PARTIAL, '') : t;
+  // 流式中连单个 "[" 也先藏;流结束后只藏以 "[[" 开头的残留半截标记,保留正常方括号
+  return streaming
+    ? t.replace(PARTIAL, '')
+    : t.replace(/\[\[(?:S\d*(?::\d*(?:-\d*(?:\])?)?)?)?$/, '');
 }
 
 /** 传输层产出:通过 shared ChatEventSchema 的事件,或一个「不合法事件」标记 */
@@ -89,7 +97,8 @@ export function createFetchTransport(
       if (signal.aborted) return;
       throw new ChatTransportError({ code: 'NETWORK', message: String(e), retryable: true });
     }
-    if (!res.ok || !res.body) {
+    if (!res.ok) {
+      // 开流前错误 = HTTP 状态 + ApiError JSON;解析失败就用通用文案,绝不显示原始响应体
       const body: unknown = await res.json().catch(() => null);
       const err = looseError(body);
       // 404 且没有约定的错误体:路由本身不存在(后端问答 API 未上线)
@@ -97,11 +106,15 @@ export function createFetchTransport(
         throw new ChatTransportError({ code: 'NOT_AVAILABLE', message: '', retryable: false });
       throw new ChatTransportError({
         code: err?.code ?? 'HTTP',
-        message: err
-          ? `${ERROR_TEXT[err.code]}${err.message ? `(${err.message})` : ''}`
-          : `HTTP ${res.status}`,
+        message: err?.message ? err.message.slice(0, 200) : '',
         retryable: res.status >= 500 || res.status === 429 || err?.code === 'REPO_NOT_READY',
       });
+    }
+    // 2xx 也要确认是 SSE:JSON/HTML(如网关错误页、被代理改写)不能按流解析
+    const ctype = (res.headers.get('content-type') ?? '').split(';')[0]!.trim().toLowerCase();
+    if (ctype !== 'text/event-stream' || !res.body) {
+      void res.body?.cancel().catch(() => undefined);
+      throw new ChatTransportError({ code: 'BAD_RESPONSE', message: '', retryable: true });
     }
     try {
       for await (const f of parseSse(res.body, signal)) yield toChatItem(f.event, f.data);

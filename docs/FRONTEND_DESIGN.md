@@ -260,33 +260,50 @@ interface NodeDetail {
 
 ### 6.1 SSE 事件处理
 
+事件类型以 `packages/shared/src/chat.ts` 的 `ChatEventSchema` 为准（本节只是摘抄，二者不一致时以 shared 为准）。每帧 SSE 的 `event:` 行是事件名，`data:` 行是 JSON；前端把它们拼成 `{ event, data }` 再用 `ChatEventSchema` 校验，判别字段是 `event`，不是 `type`。
+
 ```ts
+// 摘自 packages/shared/src/chat.ts（只读）
 type ChatErrorCode = "LLM_UNAVAILABLE" | "BUDGET_EXCEEDED" | "REPO_NOT_READY" | "RATE_LIMITED";
 type ChatEvent =
-  | { type: "tool"; name: string; args: Record<string, unknown> }      // 可选：显示「正在读取 xxx.ts」
-  | { type: "token"; text: string }
-  | { type: "citation"; id: number; path: string; startLine: number; endLine: number; nodeId: string; moduleId?: string } // 只会收到已校验的引用
-  | { type: "done"; messageId: number; droppedCitations: number; fallback?: "retrieval"; usage: { in: number; out: number } }
-  | { type: "error"; code: ChatErrorCode; message: string; retryable: boolean };  // 替代 done，之后流立即结束
+  | { event: "tool"; data: { name: string; args: Record<string, unknown> } }   // 可选，W3 不发；收到时显示「正在读取 xxx.ts」
+  | { event: "token"; data: { text: string } }
+  | { event: "citation"; data: { id: number; path: string; startLine: number; endLine: number; nodeId: string; moduleId?: string } } // 只会收到已校验的引用；id 即显示编号
+  | { event: "done"; data: {
+      messageId: number; droppedCitations: number;
+      fallback?: "retrieval";                    // 预算/服务不可用时只给检索结果，没有生成回答
+      retrieval?: "hybrid" | "keyword-only";     // keyword-only → 显示「已降级为关键词检索」
+      usage: { in: number; out: number } } }
+  | { event: "error"; data: { code: ChatErrorCode; message: string; retryable: boolean } };  // 替代 done，之后流立即结束
 
 const CLIENT_TIMEOUT_MS = 20_000;   // 前端兜底：20 秒内既没有 token，也没有 done/error
+```
 
-async function chat(repoId: number, sessionId: number, message: string, contextNodeIds: string[], signal: AbortSignal) {
-  const s = useStore.getState();
+**错误分两段，前端先看 `response.ok` 和 `content-type`**（实现见 `apps/web/lib/chat/transport.ts`）：
+- **开流前错误**：HTTP 非 2xx，响应体是通用 `ApiError` JSON（`{ error: { code, message } }`）。前端按 ApiError 解析并显示其 `message`；解析不了就用通用文案「问答请求失败，请稍后重试」，不显示原始响应体。404 且没有 ApiError 体，视为问答服务未上线。
+- **2xx 但 `content-type` 不是 `text/event-stream`**（比如 JSON 或 HTML 错误页）：不按流解析，显示「服务返回的不是问答流，无法显示回答，请稍后重试」，可重试，也不显示原始响应体。
+- **开流后错误**：通过 SSE `error` 事件下发（见下表）；之后不会再有 `done`。如果流在 `done`/`error` 之前断开（上游断流、网络中断），显示「回答中途断开，已保留已输出内容，可重试」。
+- **用户点「停止」**：前端 abort 请求，只显示中性的「已停止」，不按错误处理，也不计入后端熔断。
+- **不支持断流续传**：SSE 没有事件 id。「重试」= 用同一问题重新发一次请求，从头生成。
+
+```ts
+async function chat(repoId: number, req: ChatRequest, signal: AbortSignal) {
   s.startAnswer();                     // 统一进入 thinking：显示「正在思考…」，第一个 token 到达即切为正文
-  let timer = setTimeout(() => s.timeoutAnswer(), CLIENT_TIMEOUT_MS);
-  await fetchEventSource(`/api/repos/${repoId}/chat`, {
-    method: "POST", body: JSON.stringify({ sessionId, message, contextNodeIds }), signal,
-    onmessage(ev) {
-      const data = JSON.parse(ev.data);
-      if (ev.event === "tool") s.setToolHint(data.name, data.args);
-      else if (ev.event === "token") { clearTimeout(timer); s.appendToken(data.text); }
-      else if (ev.event === "citation") s.addCitation(data);
-      else if (ev.event === "done") { clearTimeout(timer); s.finish(data); }
-      else if (ev.event === "error") { clearTimeout(timer); s.failAnswer(data); }   // 不会再收到 done
-    },
-    onerror(err) { clearTimeout(timer); s.failAnswer({ code: "NETWORK", message: String(err), retryable: true }); throw err; },
-  });
+  let timer = setTimeout(() => { abort(); s.timeoutAnswer(); }, CLIENT_TIMEOUT_MS);
+  const res = await fetch(`/api/repos/${repoId}/chat`, { method: "POST", body: JSON.stringify(req), signal });
+  if (!res.ok) return s.failAnswer(fromApiError(await res.json().catch(() => null), res.status)); // 开流前
+  if (!isEventStream(res.headers.get("content-type"))) return s.failAnswer({ code: "BAD_RESPONSE", retryable: true });
+  for await (const { event, data } of parseSse(res.body, signal)) {
+    const r = ChatEventSchema.safeParse({ event, data: JSON.parse(data) });   // 不合法的帧丢弃
+    if (!r.success) continue;
+    const e = r.data;
+    if (e.event === "tool") s.setToolHint(e.data.name, e.data.args);
+    else if (e.event === "token") { clearTimeout(timer); s.appendToken(e.data.text); }
+    else if (e.event === "citation") s.addCitation(e.data);   // 在原位追加 [id]；同 id 不新增列表项
+    else if (e.event === "done") { clearTimeout(timer); return s.finish(e.data); }
+    else if (e.event === "error") { clearTimeout(timer); return s.failAnswer(e.data); }   // 开流后
+  }
+  s.interrupted();                     // 流在 done/error 前结束
 }
 ```
 
