@@ -1,7 +1,10 @@
 import hono from '../../fixtures/hono.sample.graph.json';
 import zustand from '../../fixtures/zustand.sample.graph.json';
 
-/** 示例仓库(示例数据,见 fixtures/README.md)。zod、trpc 待后端预解析后加入 */
+/**
+ * 示例数据(手写 fixture,见 fixtures/README.md),**只用于单元/组件测试**,页面不再引用。
+ * 线上图页一律走真实接口(lib/api/client.ts)。
+ */
 export const SAMPLE_REPOS = {
   hono: {
     owner: 'honojs',

@@ -119,11 +119,11 @@ suite(
 describe('redis keys', () => {
   it('与文档一致', () => {
     expect(redisKeys.jobEvents('1:abc')).toBe('job:1:abc:events');
-    expect(GRAPH_PROJECTION_VERSION).toBe(3);
-    expect(redisKeys.graph(1, C, null)).toBe(`graph:v3:1:${C}:root`);
-    expect(redisKeys.graph(1, C, 'm:src', true)).toBe(`graph:v3:1:${C}:m:src:ext`);
+    expect(GRAPH_PROJECTION_VERSION).toBe(4);
+    expect(redisKeys.graph(1, C, null)).toBe(`graph:v4:1:${C}:root`);
+    expect(redisKeys.graph(1, C, 'm:src', true)).toBe(`graph:v4:1:${C}:m:src:ext`);
     expect(redisKeys.graph(1, C, null, false, 2)).toBe(`graph:v2:1:${C}:root`);
-    expect(redisKeys.graphPattern(1, C)).toBe(`graph:v3:1:${C}:*`);
+    expect(redisKeys.graphPattern(1, C)).toBe(`graph:v4:1:${C}:*`);
     expect(redisKeys.rateLimitIp('1.2.3.4', new Date('2026-10-29T03:05:00Z'))).toBe(
       'rl:ip:1.2.3.4:2026102903',
     );

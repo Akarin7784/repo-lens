@@ -140,7 +140,50 @@ export interface ProjectionInfo {
  * 名额顺序:x: 外部包(includeExternal 时,≤50)→ P 的子节点按 weight 截断 → 剩余名额按 weight 给边界节点。
  * 即边界节点永远排在 P 的子节点之后;子节点自身超 300 时照旧截断并标记 truncated。
  */
-export function projectGraphWithInfo(ix: GraphIndex, o: ProjectOptions): ProjectionInfo | null {
+export const FOCUS_MIN_EDGES = 3;
+export const FOCUS_MAX_DEPTH = 3;
+
+/** 子树 loc 总和(file 节点即自身 loc) */
+function subtreeLoc(ix: GraphIndex, id: string): number {
+  return ix.filesUnder(id).reduce((s, f) => s + (f.type === 'file' ? (f.loc ?? 0) : 0), 0);
+}
+
+/** 投影后,本层两端都是 P 的(可见)直接子节点的边条数;不含边界节点与 x: 边 */
+export function layerEdgeCount(ix: GraphIndex, o: ProjectOptions, parentId: string | null): number {
+  const g = projectGraphWithInfo(
+    ix,
+    { ...o, parentId, includeExternal: false, cycles: [] },
+    false,
+  )!.graph;
+  const kids = new Set(g.nodes.filter((n) => (n.parentId ?? null) === parentId).map((n) => n.id));
+  return g.edges.filter((e) => kids.has(e.source) && kids.has(e.target)).length;
+}
+
+/**
+ * 根层建议焦点:从根层开始,若当前层子节点之间的边 < 3,就下探到其中子树 loc 最大的
+ * 可展开子节点(module/dir;loc 相同取 id 小的),最多下探 3 层;
+ * 停在边数 ≥3 的那一层,或没有可下探节点时。返回停下那层的节点;停在根层返回 undefined。
+ */
+export function suggestFocus(ix: GraphIndex, o: ProjectOptions): string | undefined {
+  let cur: string | null = null;
+  for (let depth = 0; depth < FOCUS_MAX_DEPTH; depth++) {
+    if (layerEdgeCount(ix, o, cur) >= FOCUS_MIN_EDGES) break;
+    const next: readonly [string, number] | undefined = (ix.children.get(cur) ?? [])
+      .map((id) => ix.nodes.get(id)!)
+      .filter((n) => n.type !== 'file')
+      .map((n) => [n.id, subtreeLoc(ix, n.id)] as const)
+      .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))[0];
+    if (!next) break;
+    cur = next[0];
+  }
+  return cur ?? undefined;
+}
+
+export function projectGraphWithInfo(
+  ix: GraphIndex,
+  o: ProjectOptions,
+  withFocus = true,
+): ProjectionInfo | null {
   if (o.parentId && !ix.nodes.has(o.parentId)) return null;
   if (o.parentId && ix.nodes.get(o.parentId)!.type === 'file') return null;
   const max = o.maxNodes ?? MAX_NODES_PER_RESPONSE;
@@ -289,6 +332,8 @@ export function projectGraphWithInfo(ix: GraphIndex, o: ProjectOptions): Project
       ...(cycles.length ? { cycles: cycles as never } : {}),
     },
   };
+  const focus = !o.parentId && withFocus ? suggestFocus(ix, o) : undefined;
+  if (focus) graph.meta.suggestedFocus = focus as never;
   return {
     graph,
     truncated: shown.length < kids.length,

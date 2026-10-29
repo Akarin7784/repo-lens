@@ -40,6 +40,17 @@ export const WeightedEdge = memo(function WeightedEdge(props: EdgeProps<RepoFlow
           strokeLinecap: typeOnly ? 'round' : undefined,
         }}
       />
+      {aggregated && (
+        <path
+          d={path}
+          fill="none"
+          stroke="transparent"
+          strokeWidth={14}
+          data-testid={`agg-hit-${props.id}`}
+        >
+          <title>{`聚合边:${weight} 条依赖`}</title>
+        </path>
+      )}
       {cycle && hl !== 'dim' && (
         <EdgeLabelRenderer>
           <div
@@ -57,6 +68,8 @@ export const WeightedEdge = memo(function WeightedEdge(props: EdgeProps<RepoFlow
       {aggregated && weight > 1 && hl !== 'dim' && (
         <EdgeLabelRenderer>
           <div
+            data-testid={`agg-weight-${props.id}`}
+            title={`聚合 ${weight} 条依赖`}
             className="pointer-events-none absolute rounded-full border border-line bg-panel px-1.5 text-[10px] text-muted"
             style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
           >
