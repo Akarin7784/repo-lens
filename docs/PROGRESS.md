@@ -26,13 +26,17 @@
 - 语法错误文件数(tree-sitter-typescript 不支持部分语法):zustand 5 个、hono 8 个(共 450 个文件)、zod 4 个(共 522 个文件)。import 仍能提取,只影响这些文件的符号和切块。
 
 - ✅ 已验证(T-003,PR #10,[CI run](https://github.com/Akarin7784/repo-lens/actions/runs/40764333935)):真实 `mysql:8.4` 上 api 迁移通过,api 监听 4000,worker 进入队列监听;启动顺序靠 healthcheck、`service_healthy`、有限次重试和 `waitForSchema` 保证。
-- 已验证(PR #14,CI smoke):api → MySQL 8.4 → Redis(BullMQ)→ worker 的真实业务链路。提交 zustand 固定 commit `382d29c`,SSE 收到 `graph_ready` 与 `done`(约 2s,stats 23 节点/23 边),再逐层请求图接口并校验 id 前缀、边类型、`srcFileId`、端点在 nodes 内。仍未覆盖:Qdrant、真实 LLM(summarizing/embedding 目前是空阶段)、问答(`/chat`)、聚合边(#12 未做)、web 接真实接口。
+- 已验证(PR #14,CI smoke):api → MySQL 8.4 → Redis(BullMQ)→ worker 的真实业务链路。提交 zustand 固定 commit `382d29c`,SSE 收到 `graph_ready` 与 `done`(约 2s,stats 23 节点/23 边),再逐层请求图接口并校验 id 前缀、边类型、`srcFileId`、端点在 nodes 内。仍未覆盖:Qdrant、真实 LLM(summarizing/embedding 目前是空阶段)、问答(`/chat`)、web 接真实接口。聚合边断言已在 CI smoke 覆盖(ci/smoke-aggregated-edges,展开 zustand `m:src/middleware`);非法参数返回 400 的断言待 #17 合并后补。
 
 ## 后续项(来自 T-003 评审)
 - [#12](https://github.com/Akarin7784/repo-lens/issues/12):请求 `parentId` 时返回跨子树聚合边(`aggregated:true`、`weight`,外端为 LCA(P,Y) 的直接子节点,外端节点要放进 nodes)。验证例子用 zustand 的 `m:src/middleware`(hono 根层没有跨模块边,需换一个展开例子)。负责:后端与AI设计师。
 - 非法图查询改返回 400(`BAD_REQUEST` 已在 [#13](https://github.com/Akarin7784/repo-lens/pull/13) 加入 shared),后端另开 PR。
-- ~~smoke 业务步骤~~:PR [#14](https://github.com/Akarin7784/repo-lens/pull/14) 已合并(提交 1ada2f0)。#12 合并后在 smoke 里补聚合边断言。
+- ~~smoke 业务步骤~~:PR [#14](https://github.com/Akarin7784/repo-lens/pull/14) 已合并(提交 1ada2f0)。聚合边断言已补(PR [#20](https://github.com/Akarin7784/repo-lens/pull/20),注意其「恰好一端在 P 内」只适用于子节点是文件的展开,扩到目录展开时放宽为至少一端在 P 内);400 断言待 #17 合并后补;仍未覆盖 Qdrant、LLM、`/chat`。
+- 经 web 代理访问 api 已加入 smoke(分支 ci/smoke-via-web,`scripts/ci-smoke-web-proxy.mjs`):经 `http://localhost:3000/api/repos/999999` 必须得到 api 的 404 `REPO_NOT_FOUND` JSON。当前 main 上预期红(web 镜像构建时未传 `API_PROXY_TARGET`),待 #18 修复 Dockerfile/compose 并合并后验证为绿。
 - 仓库体积限制:`MAX_REPO_MB` 统一为 300(#11 与本次);worker 扫描后另设 `MAX_SOURCE_MB`(默认 50),并给克隆目录加体积上限(目前只有超时保护)。
+- 限流:重复提交已分析完成的同一仓库、同一 commit(复用结果、没有新任务入队)不计入每小时 5 次限额,只有真正入队的新任务才计数,PR 要带测试。负责:后端与AI设计师(与 `meta.cycles` 同一个小 PR)。
+- `meta.cycles` 按强连通分量的成员集合处理,不是有序路径;同时修 `projection.ts` 并在文档写明,用 hono 的 5 个环验证;前端把分量内部的边都标成环边。负责:后端与AI设计师、前端可视化设计师。
+- 首屏自动下探:hono 的 module 层只有 9 个节点、0 条边,首屏会是一排互不相连的方块。`GraphData.meta` 增加可选字段 `suggestedFocus?: NodeId`,根层请求时若当前层子节点之间的边少于 3 条,就下探到其中 loc 最大的节点,最多重复 3 层,边数达到 3 条或没有可下探节点时停止;边够用时不返回该字段。预期 hono 落在 `d:src` 或其下一级。前端首次加载时自动展开它,根层 module 作为面包屑保留,用户手动折叠后不再自动展开。要求在第 2 周开始前合并,是第 1 周收尾项。负责:后端与AI设计师(shared、实现、测试、文档),前端可视化设计师(接入)。
 - 前端接真实图接口,替换示例数据并去掉「示例数据」标签;用 hono 的 5 个环验证环边样式。负责:前端可视化设计师。
 
 ## 日志
