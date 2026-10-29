@@ -141,6 +141,8 @@
 
 - 2026-10-29 17:2x:#65 合并(worker `cpus` 可配置,提交 2511234)。docker-compose 里 worker 的 `cpus` 由写死 1.5 改为 `${WORKER_CPUS:-2}`(未设或空串都得 2),`.env.example`、README、ARCHITECTURE 同步,并把过时的 `mem_limit 2g` 更正为 3g,只改配置和文档。我在 head e88a6e6 上独立重跑 install、lint、typecheck、build、全量测试全过,在最新 main 上试合并无冲突,`ci` 与 `smoke` 均绿;用 yaml 库解析 compose 并检查了未设、空串、1、4 的插值结果。未验证:本机没有 Docker,未跑 `docker compose config`,docker 实际接受该值、超过宿主机核数时的行为都未实测;容器内真实向量化速度未测,文档里 3.6 / 7.0 块/秒是 taskset 绑核的本地基准。遗留(不阻塞):ONNX 线程数没有与 `WORKER_CPUS` 关联,cpus=2 时线程数可能超出配额被限流,容器内实测时一并确认,必要时加 `EMBEDDING_THREADS`;`docs/notes/embed-lock-bench.md` 仍写「worker 限 1.5 CPU」,待更新。
 
+- 2026-10-29 17:3x:#66 合并(T-223b 文件预览的性能与断网验证,提交 f184562)。只改 `errors.ts` 注释、`docs/FRONTEND_DESIGN.md` 和一张截图,无逻辑改动。我在 head 64e81f6 上独立重跑 install、lint、typecheck、build、全量测试(web 160 等,全过),在最新 main 上试合并无冲突,`ci` 与 `smoke` 均绿;构建产物无 `.wasm`,也无 CDN 引用。文档里的耗时和断网实验是前端在本机无头 Chromium 上的实测数据,我没有复跑,不代表演示机或投影机;types.ts 约 732 ms 的主线程卡顿如实写明未修;节流下 chunk 单独耗时、`next start` 是否启用 gzip 均未测。遗留(不阻塞):文档对 `next/font/google` 只写了「运行时不访问 Google」,没写「构建需要外网」,应在 T-225(改 `next/font/local`)的 PR 里更正。
+
 ## 演示检查清单(第 4 周前逐项勾选)
 - [ ] 演示前抽查 hono 的 `embeddingStatus` 为 `ready`(或 `reused`)。
 - [ ] 「镜像构建下载模型」:CI 已验证(GitHub 环境直连 huggingface.co,手动 workflow `worker-model-build.yml` run 40838998679,5 个文件 `sha256sum -c` 全 OK,镜像内 ONNX embedding 维度 384,构建约 58 秒);**演示机(国内网络)上的构建仍待验证**:演示前先在演示机构建好镜像,下载慢时设 `EMBEDDING_MODEL_BASE_URL` 为镜像站(哈希校验不变)。
