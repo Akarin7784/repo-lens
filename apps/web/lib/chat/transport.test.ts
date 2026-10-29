@@ -1,3 +1,4 @@
+import { chatErrorText } from './errors';
 import { describe, expect, it, vi } from 'vitest';
 import {
   buildChatRequest,
@@ -68,6 +69,65 @@ describe('createFetchTransport', () => {
     );
   });
 
+  it.each([
+    ['application/json', '{"answer":"<b>x</b>"}'],
+    ['text/html; charset=utf-8', '<html><body>Gateway</body></html>'],
+    [null, 'event: token\ndata: {"text":"x"}\n\n'],
+  ])('2xx 但 content-type=%s → BAD_RESPONSE,不按流解析、不显示原始响应体', async (ct, body) => {
+    const t = createFetchTransport('', async () => {
+      const r = new Response(body, { status: 200 });
+      if (ct) r.headers.set('content-type', ct);
+      else r.headers.delete('content-type');
+      return r;
+    });
+    const e = await drain(t(1, { message: 'q' }, new AbortController().signal)).catch((x) => x);
+    expect(e).toBeInstanceOf(ChatTransportError);
+    expect(e.info).toMatchObject({ code: 'BAD_RESPONSE', retryable: true });
+    const text = chatErrorText(e.info);
+    expect(text).toBe('服务返回的不是问答流,无法显示回答,请稍后重试');
+    expect(text).not.toContain(body.slice(0, 6));
+  });
+
+  it('content-type 带参数也认(text/event-stream; charset=utf-8)', async () => {
+    const t = createFetchTransport(
+      '',
+      async () =>
+        new Response('event: token\ndata: {"text":"x"}\n\n', {
+          headers: { 'content-type': 'Text/Event-Stream; charset=utf-8' },
+        }),
+    );
+    expect(await drain(t(1, { message: 'q' }, new AbortController().signal))).toHaveLength(1);
+  });
+
+  it('非 2xx 带 ApiError JSON → 显示其 message', async () => {
+    const t = createFetchTransport(
+      '',
+      async () =>
+        new Response(JSON.stringify({ error: { code: 'INTERNAL', message: '检索服务异常' } }), {
+          status: 500,
+          headers: { 'content-type': 'application/json' },
+        }),
+    );
+    const e = await drain(t(1, { message: 'q' }, new AbortController().signal)).catch((x) => x);
+    expect(e.info).toMatchObject({ code: 'INTERNAL', message: '检索服务异常', retryable: true });
+    expect(chatErrorText(e.info)).toBe('问答请求失败:检索服务异常');
+  });
+
+  it('非 2xx 非 JSON → 通用文案,不显示原始响应体', async () => {
+    const t = createFetchTransport(
+      '',
+      async () =>
+        new Response('<html>502 Bad Gateway nginx</html>', {
+          status: 502,
+          headers: { 'content-type': 'text/html' },
+        }),
+    );
+    const e = await drain(t(1, { message: 'q' }, new AbortController().signal)).catch((x) => x);
+    expect(e.info).toMatchObject({ code: 'HTTP', message: '', retryable: true });
+    expect(chatErrorText(e.info)).toBe('问答请求失败,请稍后重试');
+    expect(chatErrorText(e.info)).not.toContain('nginx');
+  });
+
   it('已 abort 时 fetch 抛 AbortError 不当作错误', async () => {
     const ac = new AbortController();
     ac.abort();
@@ -96,5 +156,7 @@ describe('stripCitationMarkers', () => {
     expect(stripCitationMarkers('见 [[S1:1', true)).toBe('见 ');
     expect(stripCitationMarkers('数组 a[0]', true)).toBe('数组 a[0]');
     expect(stripCitationMarkers('末尾 [', false)).toBe('末尾 [');
+    expect(stripCitationMarkers('结束后残留 [[S3:', false)).toBe('结束后残留 ');
+    expect(stripCitationMarkers('结束后残留 [[', false)).toBe('结束后残留 ');
   });
 });

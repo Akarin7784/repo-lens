@@ -12,7 +12,8 @@ import type { Citation, ChatEvent } from '@repolens/shared';
  * 顺序/异常处理:
  * - 终止态(done/error/interrupted/timeout/aborted)之后到达的任何事件都忽略(后端承诺 error 后不再发 done)。
  * - citation 可以在第一个 token 之前到达(定位类问题后端缓冲后一次性下发):先记下,角标插在当时的正文末尾。
- * - 同一 id 的 citation 重复到达只保留第一次(防重放/代理重发)。
+ * - citation.id 就是显示编号:每次到达都在原位追加 [id] 角标;同一 id 重复到达不新增引用列表项(列表保留第一次的位置信息)。
+ * - 引用列表按首次到达顺序排列,不按 id 排序(乱序到达时如 [2] 先于 [1])。
  * - tool 事件只更新「正在读取 xxx」提示,不影响正文。
  */
 export type ChatErrorInfo = {
@@ -99,10 +100,11 @@ export function answerReducer(a: Answer, act: AnswerAction): Answer {
           return { ...a, status: 'streaming', segments: segs, toolHint: null };
         }
         case 'citation':
-          if (a.citations.some((c) => c.id === e.data.id)) return a;
           return {
             ...a,
-            citations: [...a.citations, e.data],
+            citations: a.citations.some((c) => c.id === e.data.id)
+              ? a.citations
+              : [...a.citations, e.data],
             segments: [...a.segments, { kind: 'cite', id: e.data.id }],
           };
         case 'done': {

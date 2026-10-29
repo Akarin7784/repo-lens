@@ -34,8 +34,36 @@ describe('answerReducer', () => {
     expect(run([tok('x')], a).segments[0]).toEqual({ kind: 'cite', id: 1 });
   });
 
-  it('同 id 引用重复到达只保留一次', () => {
-    expect(run([cite(1), cite(1)]).citations).toHaveLength(1);
+  it('首次出现:citation.id 作显示编号,在到达处追加 [id] 角标并新增列表项', () => {
+    const a = run([tok('甲'), cite(3)]);
+    expect(a.segments).toEqual([
+      { kind: 'text', text: '甲' },
+      { kind: 'cite', id: 3 },
+    ]);
+    expect(a.citations.map((c) => c.id)).toEqual([3]);
+  });
+
+  it('重复引用:同一 id 每次到达都追加角标,但不新增列表项', () => {
+    const a = run([tok('甲'), cite(1), tok('乙'), cite(1), cite(1)]);
+    expect(a.segments.filter((s) => s.kind === 'cite')).toEqual([
+      { kind: 'cite', id: 1 },
+      { kind: 'cite', id: 1 },
+      { kind: 'cite', id: 1 },
+    ]);
+    expect(a.citations).toHaveLength(1);
+  });
+
+  it('乱序到达:[2] 先于 [1] 时按到达位置插角标,列表按首次到达顺序', () => {
+    const a = run([tok('甲'), cite(2), tok('乙'), cite(1), tok('丙'), cite(2)]);
+    expect(a.segments).toEqual([
+      { kind: 'text', text: '甲' },
+      { kind: 'cite', id: 2 },
+      { kind: 'text', text: '乙' },
+      { kind: 'cite', id: 1 },
+      { kind: 'text', text: '丙' },
+      { kind: 'cite', id: 2 },
+    ]);
+    expect(a.citations.map((c) => c.id)).toEqual([2, 1]);
   });
 
   it('终止后的迟到事件全部忽略:error 之后的 done/token 不改变状态', () => {

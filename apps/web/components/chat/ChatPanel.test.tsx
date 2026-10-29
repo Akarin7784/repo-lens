@@ -150,6 +150,24 @@ describe('<ChatPanel>(假流,未接真实后端)', () => {
     expect(screen.getByRole('button', { name: /src\/db\/index\.ts:10–48/ })).toBeTruthy();
   });
 
+  it('断流后出现「重试」按钮,点击用同一问题重发', async () => {
+    const reqs: unknown[] = [];
+    render(
+      <ChatPanel
+        repoId={1}
+        transport={createFakeTransport(DEMO_SCRIPT.slice(0, 4), { onRequest: (r) => reqs.push(r) })}
+      />,
+    );
+    ask('【假数据】示例问题');
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('回答中途断开'));
+    const retry = screen.getByRole('button', { name: '重试' });
+    expect(retry).toBeEnabled();
+    fireEvent.click(retry);
+    await waitFor(() => expect(reqs).toHaveLength(2));
+    expect(reqs[1]).toEqual(reqs[0]);
+    expect(reqs[1]).toMatchObject({ message: '【假数据】示例问题' });
+  });
+
   it('传输层网络错误 → 中断提示与重试', async () => {
     render(
       <ChatPanel
@@ -250,5 +268,47 @@ describe('<ChatPanel>(假流,未接真实后端)', () => {
     fireEvent.click(screen.getByRole('button', { name: '停止' }));
     await waitFor(() => expect(lastAnswer().dataset.status).toBe('aborted'));
     expect(screen.getByRole('button', { name: '重试' })).toBeTruthy();
+  });
+
+  it('用户点停止 → 显示「已停止」,不是错误样式/文案', async () => {
+    render(<ChatPanel repoId={1} transport={createFakeTransport([{ hang: true }])} />);
+    ask();
+    fireEvent.click(screen.getByRole('button', { name: '停止' }));
+    const st = await within(lastAnswer()).findByRole('status');
+    expect(st).toHaveTextContent(/^已停止$/);
+    expect(st).not.toHaveClass('text-accent-strong');
+    expect(within(lastAnswer()).queryByRole('alert')).toBeNull();
+    expect(lastAnswer()).not.toHaveTextContent(/出错|失败|中断|断开|超时/);
+  });
+
+  it('同一 id 重复引用:每次追加角标,引用卡片只一张', async () => {
+    const c = (id: number) =>
+      ({
+        event: 'citation',
+        data: { id, path: `src/${id}.ts`, startLine: 1, endLine: 2, nodeId: `f:src/${id}.ts` },
+      }) as ChatEvent;
+    render(
+      <ChatPanel
+        repoId={1}
+        transport={createFakeTransport([
+          { event: 'token', data: { text: '甲' } },
+          c(2),
+          { event: 'token', data: { text: '乙 [[S1:1-2]]' } },
+          c(1),
+          c(2),
+          { event: 'token', data: { text: '丙 [[S' } },
+          {
+            event: 'done',
+            data: { messageId: 1, droppedCitations: 0, usage: { in: 1, out: 1 } },
+          },
+        ])}
+      />,
+    );
+    ask();
+    await waitFor(() => expect(lastAnswer().dataset.status).toBe('done'));
+    const sups = lastAnswer().querySelectorAll('sup');
+    expect([...sups].map((x) => x.textContent)).toEqual(['[2]', '[1]', '[2]']);
+    expect(within(lastAnswer()).getAllByRole('button', { name: /src\/2\.ts/ })).toHaveLength(3);
+    expect(lastAnswer().textContent).not.toContain('[[');
   });
 });
