@@ -1,5 +1,6 @@
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { readLlmConfig, type LlmConfig } from '@repolens/agent';
 
 export interface WorkerConfig {
   redisUrl: string;
@@ -12,6 +13,8 @@ export interface WorkerConfig {
   parseTimeoutMs: number;
   parseConcurrency: number;
   concurrency: number;
+  /** LLM 配置(T-210);非法时 loadConfig 直接抛错,worker 启动失败 */
+  llm: LlmConfig;
 }
 
 const num = (v: string | undefined, d: number) => (v && Number.isFinite(Number(v)) ? Number(v) : d);
@@ -27,5 +30,6 @@ export function loadConfig(env = process.env): WorkerConfig {
     parseTimeoutMs: num(env.PARSE_TIMEOUT_MS, 5000),
     parseConcurrency: num(env.PARSE_CONCURRENCY, 8),
     concurrency: num(env.WORKER_CONCURRENCY, 2),
+    llm: readLlmConfig(env),
   };
 }

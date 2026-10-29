@@ -35,6 +35,9 @@ importers:
 
   apps/api:
     dependencies:
+      '@repolens/agent':
+        specifier: workspace:*
+        version: link:../../packages/agent
       '@repolens/db':
         specifier: workspace:*
         version: link:../../packages/db
@@ -110,6 +113,9 @@ importers:
 
   apps/worker:
     dependencies:
+      '@repolens/agent':
+        specifier: workspace:*
+        version: link:../../packages/agent
       '@repolens/analyzer':
         specifier: workspace:*
         version: link:../../packages/analyzer

@@ -10,6 +10,7 @@ import { costMicroUsd, priceOf, type PriceTable } from './pricing.js';
 import {
   LlmError,
   type LlmCall,
+  type LlmCallResult,
   type LlmClient,
   type LlmRequest,
   type LlmResult,
@@ -55,9 +56,33 @@ export function cacheHash(req: LlmCall): string {
   return createHash('sha256').update(`${req.model}\n${body}`).digest('hex');
 }
 
+const isCount = (n: unknown): n is number => typeof n === 'number' && Number.isInteger(n) && n >= 0;
+
+/** 解析缓存内容;内容损坏或结构不对时返回 null,按未命中处理(之后的成功调用会覆盖它) */
+export function parseCached(raw: string | null): LlmCallResult | null {
+  if (!raw) return null;
+  try {
+    const v = JSON.parse(raw) as Partial<LlmCallResult> | null;
+    if (
+      v &&
+      typeof v.text === 'string' &&
+      v.usage &&
+      isCount(v.usage.tokensIn) &&
+      isCount(v.usage.tokensOut)
+    ) {
+      return { text: v.text, usage: { tokensIn: v.usage.tokensIn, tokensOut: v.usage.tokensOut } };
+    }
+  } catch {
+    // 损坏的 JSON:当作未命中
+  }
+  return null;
+}
+
 /**
  * 统一 LLM 网关(BACKEND_AI_DESIGN §7):缓存 → 预算检查 → 调用 → 记账。
  * - 缓存命中不检查预算、不计花费,但记一条 cache_hit=1 的 llm_usage。
+ * - 缓存内容损坏(非 JSON 或缺字段)按未命中处理,正常走预算检查和调用,成功后覆盖。
+ * - dailyBudgetCents = 0 表示禁止一切模型调用(只允许缓存命中);taskBudgetCents = 0 同理只作用于带 taskId 的调用。
  * - 预算超限抛 LlmError('BUDGET_EXCEEDED'),不调用模型、不写 llm_usage。
  * - 模型调用失败写 ok=0 的 llm_usage,抛 LlmError('LLM_UNAVAILABLE');重试与规则降级由调用方(T-211)决定。
  * 预算是「调用前检查、调用后累加」,并发时最多超出(并发数 - 1)次调用的花费。
@@ -88,9 +113,8 @@ export class LlmGateway {
     const owner = { purpose, model: call.model, repoId, taskId, sessionId };
     const cacheKey = this.k(redisKeys.llmCache(cacheHash(call)));
 
-    const cached = await this.o.kv.get(cacheKey);
-    if (cached) {
-      const hit = JSON.parse(cached) as Pick<LlmResult, 'text' | 'usage'>;
+    const hit = parseCached(await this.o.kv.get(cacheKey));
+    if (hit) {
       await this.o.usage.insertLlmUsage({
         ...owner,
         ...hit.usage,
