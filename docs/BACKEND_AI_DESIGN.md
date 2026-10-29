@@ -111,9 +111,10 @@ Query 示例（TS，字段名需要对照语法的 `node-types.json` 核实，**
 - **跨子树聚合(#12)**:带 `parentId=P` 时,一端在 P 子树内、另一端 Y 在子树外的边也返回:外端取 Y 在 `LCA(P,Y)` 下的直接子节点(Y 的祖先),内端按上条上卷到可见节点,合并为 `a:<src>-><tgt>`(`type:'imports'`、`aggregated:true`、`weight`=合并的 import 数、`kind` 取最多的一种);同一对端点按方向分别合并,自环不返回,两端都在子树外的边不返回。外端节点(边界节点)一并放进 `nodes`。
   - **边界节点识别**:shared 不加专门字段;前端以 `node.parentId !== P`(请求的 parentId)判断边界节点(P 的直接子节点 `parentId === P`)。
   - **300 名额顺序**:`x:` 外部包(仅 includeExternal,≤50)→ P 的子节点按 `weight` 降序 → 剩余名额按 `weight` 降序给边界节点,被裁掉的边界节点连同其边一起丢弃。P 的子节点自身超过 300 时沿用原截断规则,响应头 `x-graph-truncated: true`(否则 `false`;缓存命中时同样返回)。
+  - **`x-graph-truncated` 的含义**:**只表示 P 的直接子节点(不带 parentId 时为根层 module)因 300 上限被截断**。边界节点因名额不足被丢弃、`x:` 外部包只取前 50 个,都**不**算截断,此时仍为 `false`。前端据此提示"子节点未显示完整",不能用它判断边界节点是否完整。
   - 例:从 `m:packages/core` 展开,`packages/core/src/index.ts` → `packages/utils/src/a.ts` 的 LCA 为根,外端取 `m:packages/utils`,返回 `d:packages/core/src → m:packages/utils`(`aggregated:true`,`weight`=合并的 import 数);反方向 `utils → core` 另成一条。
 - `includeExternal=true` 时由 `file.external_deps` 派生 `x:<包名>` 节点(按引用文件数取前 50,占用 300 名额)及 `x:<src>->x:<pkg>` 边。
-- `meta.cycles` 为分析器检测到的环投影到本层可见节点后的结果。结果 gzip 后缓存在 `graph:v{N}:{repoId}:{commit}:{parentId|root}[:ext]`,TTL 7d;图重新入库时 SCAN 删除该 commit 当前版本的缓存。`N` = `GRAPH_PROJECTION_VERSION`(packages/db `redis-keys.ts`,当前为 2):**改投影逻辑时递增版本**,旧版本 key 不再命中、随 TTL 过期,不依赖部署后手动清缓存。
+- **`meta.cycles` 语义**:分析器用 Tarjan 求 file 层**强连通分量(SCC)**,每一项是一个 SCC 的**成员集合**(按 id 排序,**无序、不是环路径**,首尾不重复;单文件自引用也算一项)。API 投影时把每个成员映射到本次返回的节点(可见子节点,或子树外成员对应的边界节点),去重后按 id 排序;**至少一个成员位于本层子树内**(只落在边界节点上的环与本层无关,不返回)且映射后不同节点 ≥2 才返回(全部落进同一节点表示环在该节点内部);本层没有环时省略 `cycles` 字段;相同集合只返回一次。前端应把它当作"这些节点互相在同一个环里"高亮,不能按顺序连线。**环边标记的已知限制**:前端把"两端都在同一分量集合内的边"标为环边只是近似。投影后的边是聚合边(例如 `d:dom → f:base.ts` 由 dom 下多个文件聚合而来),其中不一定有 SCC 成员之间的 file 边,所以可能多标。精确标记需要额外数据(见 T-003d PR 的方案),当前 shared 未提供。结果 gzip 后缓存在 `graph:v{N}:{repoId}:{commit}:{parentId|root}[:ext]`,TTL 7d;图重新入库时 SCAN 删除该 commit 当前版本的缓存。`N` = `GRAPH_PROJECTION_VERSION`(packages/db `redis-keys.ts`,当前为 3):**改投影逻辑时递增版本**,旧版本 key 不再命中、随 TTL 过期,不依赖部署后手动清缓存。
 
 **增量解析**
 - 文件级增量：`file.content_hash = sha256(内容)`。重新分析时先 `git diff --name-only old..new`，只重新解析变化的文件；相关的边按 `src_file_id` 删掉再重建。
@@ -131,6 +132,13 @@ Query 示例（TS，字段名需要对照语法的 `node-types.json` 核实，**
 | 二进制 | 前 8KB 里出现 NUL 字节就视为二进制，跳过 |
 
 ---
+
+**错误码(API 层,T-003c)**
+错误体统一为 `{error:{code,message}}`(shared `ApiErrorSchema`)。原则:**格式非法 → 400 `BAD_REQUEST`;格式合法但资源不存在 → 404 `REPO_NOT_FOUND`**。
+- 非正整数 repo id(`abc`、`0`、`1.5` 等)在**所有**带 `:id` 的路由都返回 400;格式合法但不存在的 id(如 `999999`)返回 404。
+- `GET /api/repos/:id/nodes/*`:nodeId 不符合 `NodeIdSchema`(如 `bad`)返回 400;格式合法但不存在(如 `f:nope.ts`)返回 404。
+- `GET /api/repos/:id/graph` 使用 **strict** 校验(`GraphQuerySchema.strict()`,`.strict()` 放在 api 侧,shared 的 schema 不变):**只接受 `parentId` 与 `includeExternal`**,其它任何参数(`depth`、`level`,以及 `_t=` 这类缓存破坏参数)一律返回 400;`parentId` 格式非法(无前缀、未知前缀、空串)或 `includeExternal` 不是 `true`/`false` 时也返回 400。格式合法但节点不存在(`m:nope`),或者节点不可展开(file),返回 404。
+- 其余:图未生成 409 `REPO_NOT_READY`,限流 429 `RATE_LIMITED`(见各接口)。
 
 ## 2. 数据库设计
 
@@ -214,7 +222,7 @@ CREATE TABLE llm_usage (
 | 图缓存 | `graph:v{N}:{repoId}:{commitSha}:{parentId|root}`(N=投影版本,改投影逻辑时递增) | String(JSON, gzip)，TTL 7d |
 | LLM 响应缓存 | `llm:{sha256(model+prompt)}` | String，TTL 30d |
 | Embedding 缓存 | `emb:{model}:{contentHash}` | String(base64 float32)，TTL 30d |
-| 限流 | `rl:ip:{ip}:{yyyyMMddHH}` | INCR，TTL 1h |
+| 限流 | `rl:ip:{ip}:{yyyyMMddHH}` | INCR，TTL 1h;**只计真正入队的提交**(新任务或 failed 重试);同仓库同 commit 已有 done/queued/running 任务时直接复用,不计数(T-003d)。超限返回 429 `RATE_LIMITED`,不建任务 |
 | 预算 | `budget:day:{yyyyMMdd}`、`budget:repo:{repoId}` | INCRBY(微美元) |
 | 熔断状态 | `cb:llm:{provider}` | Hash {state, failCount, openedAt} |
 
@@ -252,7 +260,8 @@ sequenceDiagram
   participant W as Worker
   participant R as Redis Stream
   C->>A: POST /api/repos {url}
-  A->>A: 校验URL / 限流 / ls-remote 取 commit
+  A->>A: 校验URL / ls-remote 取 commit / 查已有任务
+  A->>A: 仅当需要入队(新任务或 failed 重试)时限流计数
   A->>Q: add('analyze', {repoId, commit}, {jobId: repoId+':'+commit})
   A-->>C: {repoId, jobId}
   C->>A: GET /api/jobs/:id/events (SSE)

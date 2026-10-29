@@ -253,17 +253,24 @@ export function projectGraphWithInfo(ix: GraphIndex, o: ProjectOptions): Project
     });
   }
 
-  // 环投影到可见节点,去掉连续重复,至少两个不同节点才保留
+  // meta.cycles:分析器给的是强连通分量(SCC)的**成员集合**(按 id 排序,不是有序路径)。
+  // 投影:每个成员映射到本次返回的节点(可见子节点,或子树外成员对应的边界节点),
+  // 去重后按 id 排序;至少一个成员在本层子树内、且映射后不同节点 ≥2 才保留(全部落进同一节点 = 该节点内部的环,本层不画)。
+  const returned = new Set<string>([...shown, ...boundary].map((n) => n.id));
   const cycles: string[][] = [];
   const seen = new Set<string>();
   for (const c of o.cycles ?? []) {
-    const p: string[] = [];
+    const members = new Set<string>();
+    let hasVisible = false;
     for (const id of c) {
-      const v = visOf(id);
-      if (v && p.at(-1) !== v) p.push(v);
+      const vis = visOf(id);
+      if (vis) hasVisible = true;
+      const v = vis ?? outsideOf(id);
+      if (v && returned.has(v)) members.add(v);
     }
-    if (p.length > 1 && p[0] === p.at(-1)) p.pop();
-    if (new Set(p).size < 2 || new Set(p).size !== p.length) continue;
+    // 至少一个成员在本层子树内(否则是与本层无关、只落在边界节点上的环)
+    if (!hasVisible || members.size < 2) continue;
+    const p = [...members].sort();
     const key = p.join('|');
     if (!seen.has(key)) {
       seen.add(key);

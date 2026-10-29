@@ -196,6 +196,43 @@ describe.skipIf(!hasRedis)('路由(真实 Redis + 内存 Store)', () => {
     await app.close();
   });
 
+  it('限流只计真正入队:复用已有任务不计数,新任务与 failed 重试计数,超限 429', async () => {
+    const app = make();
+    const ip = nextIp();
+    await redis.del(redisKeys.rateLimitIp(ip));
+    const k = redisKeys.rateLimitIp(ip);
+    // 新任务:计数 1
+    const first = await post(app, 'https://github.com/a/reuse', ip);
+    expect(first.statusCode).toBe(202);
+    expect(await redis.get(k)).toBe('1');
+    // 已分析完成的同仓库同 commit:重复提交 10 次都复用,不计数
+    await store.updateTask(first.json().jobId, { stage: 'done', progress: 100 });
+    for (let i = 0; i < 10; i++) {
+      const r = await post(app, 'https://github.com/a/reuse', ip);
+      expect(r.statusCode).toBe(200);
+      expect(r.json().jobId).toBe(first.json().jobId);
+    }
+    expect(await redis.get(k)).toBe('1');
+    // 排队中的任务也复用、不计数
+    const q = await post(app, 'https://github.com/a/queued', ip);
+    expect(q.statusCode).toBe(202);
+    expect((await post(app, 'https://github.com/a/queued', ip)).statusCode).toBe(200);
+    expect(await redis.get(k)).toBe('2');
+    // failed 重试会重新入队:计数
+    await store.updateTask(q.json().jobId, { stage: 'failed' });
+    expect((await post(app, 'https://github.com/a/queued', ip)).statusCode).toBe(202);
+    expect(await redis.get(k)).toBe('3');
+    // 再来两个新任务到 5,第 6 个新任务 429,且不建任务、不入队
+    for (const n of ['n4', 'n5'])
+      expect((await post(app, `https://github.com/a/${n}`, ip)).statusCode).toBe(202);
+    const over = await post(app, 'https://github.com/a/n6', ip);
+    expect(over.statusCode).toBe(429);
+    expect(over.json().error.code).toBe('RATE_LIMITED');
+    // 超限后,复用已完成任务仍然 200
+    expect((await post(app, 'https://github.com/a/reuse', ip)).statusCode).toBe(200);
+    await app.close();
+  });
+
   async function seedGraph() {
     const repo = await store.upsertRepo({ url: 'https://github.com/o/g', owner: 'o', name: 'g' });
     const jobId = publicJobId(repo.id, SHA);
@@ -402,6 +439,53 @@ describe.skipIf(!hasRedis)('路由(真实 Redis + 内存 Store)', () => {
     expect((await app.inject(`/api/repos/${repoId}/graph?parentId=d:nope`)).statusCode).toBe(404);
     expect((await app.inject(`/api/repos/${repoId}/graph?parentId=f:main.ts`)).statusCode).toBe(
       404,
+    );
+    await app.close();
+  });
+
+  it('非法图查询 → 400 BAD_REQUEST;格式合法但不存在 → 404', async () => {
+    const app = make();
+    const { repoId } = await seedGraph();
+    const bad = [
+      `/api/repos/${repoId}/graph?parentId=nope`, // 无前缀
+      `/api/repos/${repoId}/graph?parentId=q:x`, // 未知前缀
+      `/api/repos/${repoId}/graph?parentId=`, // 空
+      `/api/repos/${repoId}/graph?includeExternal=yes`,
+      `/api/repos/${repoId}/graph?depth=abc`, // 未定义参数
+      `/api/repos/${repoId}/graph?level=-1`,
+      `/api/repos/${repoId}/graph?_t=123`, // 缓存破坏参数同样 400(strict)
+      `/api/repos/${repoId}/graph?parentId=m:src/a&depth=1`, // 合法参数 + 未知参数
+      `/api/repos/abc`, // 所有带 :id 的路由
+      `/api/repos/abc/graph`, // repo id 格式非法
+      `/api/repos/0/graph`,
+      `/api/repos/1.5/graph`,
+      `/api/repos/${repoId}/nodes/bad`, // 节点 id 格式非法
+      `/api/repos/abc/nodes/f:a.ts`,
+    ];
+    for (const url of bad) {
+      const r = await app.inject(url);
+      expect({ url, status: r.statusCode, code: r.json().error.code }).toEqual({
+        url,
+        status: 400,
+        code: 'BAD_REQUEST',
+      });
+    }
+    for (const url of [
+      `/api/repos/${repoId}/graph?parentId=d:nope`,
+      `/api/repos/${repoId}/graph?parentId=m:nope`,
+      `/api/repos/${repoId}/nodes/f:nope.ts`,
+      `/api/repos/999999/graph`,
+    ]) {
+      const r = await app.inject(url);
+      expect({ url, status: r.statusCode, code: r.json().error.code }).toEqual({
+        url,
+        status: 404,
+        code: 'REPO_NOT_FOUND',
+      });
+    }
+    // 合法参数仍 200
+    expect((await app.inject(`/api/repos/${repoId}/graph?includeExternal=false`)).statusCode).toBe(
+      200,
     );
     await app.close();
   });
