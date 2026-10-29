@@ -6,6 +6,8 @@ const run = promisify(execFile);
 export interface RepoInfo {
   sizeKb: number | null;
   language: string | null;
+  /** GitHub `private` 字段;拿不到时为 null */
+  private: boolean | null;
 }
 
 /** 远端仓库访问;测试注入假实现 */
@@ -64,8 +66,16 @@ export function createGitHost(opts: { timeoutMs?: number; githubToken?: string }
           signal: AbortSignal.timeout(5000),
         });
         if (!res.ok) return null;
-        const j = (await res.json()) as { size?: number; language?: string | null };
-        return { sizeKb: j.size ?? null, language: j.language ?? null };
+        const j = (await res.json()) as {
+          size?: number;
+          language?: string | null;
+          private?: boolean;
+        };
+        return {
+          sizeKb: j.size ?? null,
+          language: j.language ?? null,
+          private: typeof j.private === 'boolean' ? j.private : null,
+        };
       } catch {
         return null;
       }

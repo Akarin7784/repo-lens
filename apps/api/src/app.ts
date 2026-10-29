@@ -124,6 +124,9 @@ export function buildApp(deps?: AppDeps): FastifyInstance {
     const commitSha = await git.lsRemote(url, body.data.ref);
     if (!commitSha) throw new HttpError('REPO_NOT_FOUND', '仓库不存在、不可访问或 ref 无效');
     const info = await git.repoInfo(owner!, name!);
+    // 只分析公开仓库:GitHub 明确返回 private:true 时在建仓库/任务之前拒绝。
+    // repoInfo 404/失败返回 null,不在这里判断;不存在由 ls-remote 给 REPO_NOT_FOUND,不透露私有仓库是否存在。
+    if (info?.private === true) throw new HttpError('REPO_NOT_PUBLIC', '只支持公开仓库');
     if (info?.sizeKb && info.sizeKb > maxRepoKb)
       throw new HttpError('REPO_TOO_LARGE', `仓库超过 ${maxRepoKb / 1024}MB 上限`);
     if (info?.language && !SUPPORTED_LANGS.has(info.language))

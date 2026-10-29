@@ -11,6 +11,7 @@ import {
   NodeDetailSchema,
   RepoStatusSchema,
   CreateRepoResponseSchema,
+  ApiErrorSchema,
 } from '@repolens/shared';
 import {
   GRAPH_PROJECTION_VERSION,
@@ -89,7 +90,7 @@ describe.skipIf(!hasRedis)('路由(真实 Redis + 内存 Store)', () => {
   let jobs: AnalyzeJobData[];
   let git: GitHost & {
     sha: string | null;
-    info: { sizeKb: number | null; language: string | null } | null;
+    info: { sizeKb: number | null; language: string | null; private?: boolean | null } | null;
   };
   const queue: JobQueue = {
     enqueue: async (d) => void jobs.push(d),
@@ -103,7 +104,7 @@ describe.skipIf(!hasRedis)('路由(真实 Redis + 内存 Store)', () => {
       sha: SHA,
       info: { sizeKb: 100, language: 'TypeScript' },
       lsRemote: async () => git.sha,
-      repoInfo: async () => git.info,
+      repoInfo: async () => git.info && { private: null, ...git.info },
     };
   });
   afterAll(() => redis.disconnect());
@@ -212,6 +213,33 @@ describe.skipIf(!hasRedis)('路由(真实 Redis + 内存 Store)', () => {
     });
     expect([r413.statusCode, r413.json().error.code]).toEqual([413, 'BAD_REQUEST']);
     expect(jobs).toHaveLength(0);
+    await app.close();
+  });
+
+  it('repoInfo 返回 private:true → 422 REPO_NOT_PUBLIC,不建仓库不建任务不入队', async () => {
+    const app = make();
+    git.info = { sizeKb: 1, language: 'TypeScript', private: true };
+    const r = await post(app, 'https://github.com/a/secret');
+    expect(r.statusCode).toBe(422);
+    expect(ApiErrorSchema.parse(r.json())).toEqual({
+      error: { code: 'REPO_NOT_PUBLIC', message: '只支持公开仓库' },
+    });
+    expect(jobs).toHaveLength(0);
+    expect(await store.getRepo(1)).toBeFalsy(); // 新 MemoryStore,没建任何仓库
+    // private:false / 未知(null)照常入队
+    git.info = { sizeKb: 1, language: 'TypeScript', private: false };
+    expect((await post(app, 'https://github.com/a/pub')).statusCode).toBe(202);
+    git.info = { sizeKb: 1, language: 'TypeScript', private: null };
+    expect((await post(app, 'https://github.com/a/pub2')).statusCode).toBe(202);
+    await app.close();
+  });
+
+  it('repoInfo 拿不到(404 → null)且 ls-remote 也失败:仍是 REPO_NOT_FOUND,不区分私有与不存在', async () => {
+    const app = make();
+    git.sha = null;
+    git.info = null;
+    const r = await post(app, 'https://github.com/a/maybe-private');
+    expect([r.statusCode, r.json().error.code]).toEqual([404, 'REPO_NOT_FOUND']);
     await app.close();
   });
 

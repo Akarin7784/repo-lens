@@ -178,6 +178,20 @@ sequenceDiagram
 // 422
 { "error": { "code": "UNSUPPORTED_LANGUAGE", "message": "第 1 周仅支持 TypeScript 仓库" } }
 ```
+
+错误码(shared `API_ERROR_CODES`,错误体 `{error:{code,message}}`):
+
+| code | HTTP | 场景 |
+|---|---|---|
+| `BAD_REQUEST` | 400(框架 4xx 保留原状态码,如 413/415) | 参数或请求体格式非法 |
+| `INVALID_REPO_URL` | 400 | `repoUrl` 存在但不是合法的 GitHub 仓库地址 |
+| `REPO_NOT_FOUND` | 404 | 仓库不存在、不可访问或 ref 无效;资源 id 不存在。私有仓库在 GitHub 返回 404 时也是这个码,不透露是否存在 |
+| `REPO_NOT_READY` | 409 | 图还没生成 |
+| `REPO_TOO_LARGE` | 413 | 仓库超过 `MAX_REPO_MB` |
+| `UNSUPPORTED_LANGUAGE` | 422 | 非 TypeScript 仓库 |
+| `REPO_NOT_PUBLIC` | 422 | GitHub `repoInfo` 返回 `private: true`,文案「只支持公开仓库」;在建仓库/任务之前拒绝 |
+| `RATE_LIMITED` | 429 | 限流 |
+| `INTERNAL` | 500 | 内部错误 |
 ```jsonc
 // GET /api/repos/:id   (repo / commitSha 与 POST /api/repos 响应同名同义;commitSha 优先取最近一次已完成(done)任务的 commit,没有已完成任务时取最新任务的;jobId/status/stage/progress 始终是最新任务的)
 { "repoId": 12, "jobId": "12:a1b2c3d", "repo": "honojs/hono", "commitSha": "a1b2c3d…(40 位)", "status": "running", "stage": "parsing", "progress": 42,

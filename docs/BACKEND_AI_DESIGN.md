@@ -141,6 +141,7 @@ Query 示例（TS，字段名需要对照语法的 `node-types.json` 核实，**
 - `GET /api/repos/:id/nodes/*`:nodeId 不符合 `NodeIdSchema`(如 `bad`)返回 400;格式合法但不存在(如 `f:nope.ts`)返回 404。
 - `GET /api/repos/:id/graph` 使用 **strict** 校验(`GraphQuerySchema.strict()`,`.strict()` 放在 api 侧,shared 的 schema 不变):**只接受 `parentId` 与 `includeExternal`**,其它任何参数(`depth`、`level`,以及 `_t=` 这类缓存破坏参数)一律返回 400;`parentId` 格式非法(无前缀、未知前缀、空串)或 `includeExternal` 不是 `true`/`false` 时也返回 400。格式合法但节点不存在(`m:nope`),或者节点不可展开(file),返回 404。
 - **`INVALID_REPO_URL` 只用于真正的仓库地址错误(T-003i)**:`POST /api/repos` 的 `repoUrl` 字段存在但不合法(非 `https://github.com/<owner>/<repo>`、非字符串、owner/name 为 `.`/`..`)。其它校验错误都返回 400 `BAD_REQUEST`:缺 `repoUrl`、`ref` 非法、请求体不是对象,缺 `repoUrl` 也是 `BAD_REQUEST`(不是地址错误,而是字段缺失)。框架自带的 4xx **保留原状态码**,错误体 code 统一为 `BAD_REQUEST`:非法 JSON 400、请求体超过 bodyLimit(1 MiB)413、不支持的 Content-Type 415 等。注意:仓库超过 `MAX_REPO_MB` 的 413 是业务错误,code 是 `REPO_TOO_LARGE`。
+- **只支持公开仓库**:`POST /api/repos` 在 `ls-remote` 之后、建仓库和任务之前看 GitHub `repoInfo` 的 `private` 字段,为 `true` 时返回 422 `REPO_NOT_PUBLIC`(「只支持公开仓库」),不建仓库、不建任务、不入队、不占新仓库额度(提交总量 `rl:sub` 照计)。`repoInfo` 404 或请求失败返回 null,不在这里判断;仓库不存在或无权访问统一由 `ls-remote` 给 404 `REPO_NOT_FOUND`,不透露私有仓库是否存在。`private` 只有配置了 `GITHUB_TOKEN` 且 token 能看到该私有仓库时才可能拿到;克隆本身不带任何凭据。
 - 其余:图未生成 409 `REPO_NOT_READY`,限流 429 `RATE_LIMITED`(见各接口)。
 
 ## 2. 数据库设计
