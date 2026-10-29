@@ -117,6 +117,8 @@
 
 - 2026-10-29 15:3x:#52 合并(hono `inCycle` 修复,提交 d917881)。我在最新提交 05086ba 上独立重跑 install、lint、typecheck、build、test(api 59 等,全过),`ci` 与 `smoke` 绿,与 main 无冲突。根因:已存图时 worker 跳过解析,新任务 `stats` 为空对象,而 `/graph` 缓存仍返回旧的带环结果,所以图上有环边、详情里 `inCycle` 为 false。修法:`/graph` 与 `/nodes` 都从已存图的边现场算环(analyzer 的 Tarjan 移入 shared,type-only 边不参与),`GRAPH_PROJECTION_VERSION` 升到 6 丢弃旧缓存,`stats` 只管展示统计;stats 为空或带错值都不影响(有测试)。变异检查:把 `ix.cycles` 改回读 `stats.cycles`,2 个 api 测试失败。作者在 hono ed1d5f7 上进程内验收:5 个环共 12 个文件全部 inCycle 为 true,各层共 27 条 inCycle 边;CI smoke 真实克隆 hono 断言 `/graph` 有环边、`/nodes` 对 streaming/index.ts 与 text.ts 为 true、对 src/hono.ts 为 false。注意:smoke 是全新分析、stats 本来有值,测不到「重跑后 stats 为空」,该场景只由 api 单测覆盖。仍待办:演示机上对 hono 重新分析一次并按检查清单抽查在环节点(未通过 compose 验证)。
 
+- 2026-10-29 15:4x:#54 合并(RAG 留出集,纯文档,提交 c87ce84,此提交即留出集冻结点,此后题目不再改)。`docs/RAG_HOLDOUT.md` 8 道中文留出题(hono ed1d5f7)加单列的「演示冒烟题」S1(「路由匹配在哪个文件?」,每次都跑、照实写、不计入达标线);`docs/RAG_TUNING_QUESTIONS.md` 12 道调参题(中英各 6)。达标线:8 题前 5 条命中不少于 6 题。约束:调参与改写提示词(含示例)不得出现留出集原话或中文关键词组合,留出集在调参结束后只跑一次。评审过程:我指出原 H2 与原 H4 改写成英文后与调参题英 2 重叠,架构师改判后两题已替换为「Context 对象是做什么的」(`src/context.ts` 的 `Context`)和「中间件之间怎么传递数据」(`set`/`get`/`var`),我逐一对照 hono 源码核对通过,8 题与 12 题逐题比较无实质重叠。已知提示:H2 题面含类名 `Context`,检索较容易,解读结果时需打折扣;H5 与调参题中2、英6 在改写后都含 request body,H4 与中6 词面都含 set/get,写改写提示词示例时避免这两组词。
+
 ## 演示检查清单(第 4 周前逐项勾选)
 - [ ] 演示前抽查 hono 的在环节点:节点详情里环上的文件显示「在环中」,数量与状态栏环边数相符(`inCycle` 须与图投影同源,不依赖 `stats`)。 具体抽查:`/nodes` 对 `src/helper/streaming/index.ts`、`src/helper/streaming/text.ts`、`src/jsx/dom/render.ts` 返回 true,`src/hono.ts` 为 false;ed1d5f7 应为 5 个环、12 个文件(CI smoke 的 `ci-smoke-cycles.mjs` 同样断言)。
 - [ ] 演示机内存至少 4 GB(本地 e5 embedding 峰值约 2.5 GB,见 D4 与 T-214);embedding 批大小可配置。
