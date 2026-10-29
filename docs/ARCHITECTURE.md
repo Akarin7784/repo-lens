@@ -375,7 +375,12 @@ Qdrant collection `code_chunks`:命名向量 `dense`,384 维(multilingual-e5-sma
 | `skipped` | 未配置向量库(EMBEDDER/QDRANT 未设),未向量化 |
 | `failed` | 向量化出错;已发一次 `stage_error{stage:"embedding"}`,任务仍 `done`,图与摘要可用 |
 
-同 commit 并发向量化互斥:Redis `SET lock:embed:{repo_id}:{commit_sha} <随机 token> NX PX <TTL>`;TTL 由 `EMBEDDING_LOCK_TTL_SEC` 配置,默认 1800 秒(须长于一次完整向量化,按 CPU 上保守 ≥10 块/秒估算可覆盖约 1.8 万块;持有者崩溃时由过期释放);释放用 Lua 校验 token,只删自己的锁;拿不到锁的任务不写,轮询等待,持有者成功(写 `:done` 标记)则记 `reused`,持有者失败或过期则接手。
+同 commit 并发向量化互斥:Redis `SET lock:embed:{repo_id}:{commit_sha} <随机 token> NX PX <TTL>`。
+- **TTL 与续期**:`EMBEDDING_LOCK_TTL_SEC`(≥60,默认 300)。持有者每 TTL/3 用 Lua 心跳续期,只续自己 token 的锁,所以向量化耗时不受 TTL 限制;TTL 只决定持有者崩溃后多久释放。实测(hono ed1d5f7,1434 块,e5-small fp32,batch 16):单核(taskset 单核 + intraOp 1 线程,平均 0.99 核)3.6 块/秒。
+- **持锁校验**:每次 `deleteCommit`/`upsert` 前校验锁仍属于自己(同时续期);已丢失(续期失败或被接管)则抛 `EmbedLockLostError` 中止写入,不写 `:done`。释放用 Lua 校验 token,只删自己的锁。
+- **等待者**:拿不到锁的任务不写、轮询等待,并发一次进度事件 `embedding 85「等待同 commit 的另一任务完成向量化」`;最长等待 `EMBEDDING_LOCK_MAX_WAIT_SEC`(默认 3600,按单核 3.6 块/秒约覆盖 1.3 万块),超时本任务 `embeddingStatus=failed`(图与摘要不受影响)。
+- **完成标记**:持有者成功后写 `:done = <embeddingDigest>`。等待者只有在标记等于自己算出的 digest、且锁已释放时才记 `reused`;不一致(内容变了)或持有者失败/过期则接手重建。
+- **跨任务复用**:按 (repo, commit) 取最近一次 done 任务的 `stats.embeddingDigest` 作为基线(`analysis_task` 有 `uk_repo_commit`,同 commit 重跑复用同一行,因此同时在流水线开始时读取本行旧 digest);digest 一致且点数一致则 `reused`,内容变化则重建。
 
 与架构师口径 `ok|failed|skipped` 的对应:`ready`、`reused` 都算 **ok**(向量可用),`failed`→failed,`skipped`→skipped;细分 ready/reused 只为观测复用率。
 

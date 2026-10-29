@@ -61,7 +61,7 @@ export class OnnxEmbedder implements Embedder {
   constructor(
     readonly model: string,
     private readonly modelDir: string,
-    /** 仅测试:替换模型加载,用来断言实际送进模型的文本 */
+    /** @internal 仅测试:替换模型加载,用来断言实际送进模型的文本;业务代码不要传 */
     loader?: () => Promise<Extractor>,
   ) {
     if (loader) this.ext = loader();

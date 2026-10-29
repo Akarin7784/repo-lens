@@ -240,6 +240,21 @@ export class MysqlStore implements Store {
       .limit(1);
     return r ? toTask(r) : null;
   }
+  async latestDoneTaskForCommit(repoId: number, commitSha: string) {
+    const [r] = await this.db
+      .select()
+      .from(schema.analysisTask)
+      .where(
+        and(
+          eq(schema.analysisTask.repoId, repoId),
+          eq(schema.analysisTask.commitSha, commitSha),
+          eq(schema.analysisTask.stage, 'done'),
+        ),
+      )
+      .orderBy(desc(schema.analysisTask.id))
+      .limit(1);
+    return r ? toTask(r) : null;
+  }
   async latestGraphTask(repoId: number) {
     const [r] = await this.db
       .select()

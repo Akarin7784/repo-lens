@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { DEFAULT_EMBED_LOCK_TTL_SEC } from './lock.js';
+import { DEFAULT_EMBED_LOCK_MAX_WAIT_SEC, DEFAULT_EMBED_LOCK_TTL_SEC } from './lock.js';
 
 /** D4:本地 multilingual-e5-small(fp32),384 维 */
 export const DEFAULT_EMBEDDING_MODEL = 'Xenova/multilingual-e5-small';
@@ -14,6 +14,10 @@ const Schema = z.object({
   EMBEDDING_LOCK_TTL_SEC: z.preprocess(
     empty,
     z.coerce.number().int().min(60).default(DEFAULT_EMBED_LOCK_TTL_SEC),
+  ),
+  EMBEDDING_LOCK_MAX_WAIT_SEC: z.preprocess(
+    empty,
+    z.coerce.number().int().min(1).default(DEFAULT_EMBED_LOCK_MAX_WAIT_SEC),
   ),
   QDRANT_URL: z.preprocess(empty, z.string().url().optional()),
   QDRANT_API_KEY: z.preprocess(empty, z.string().optional()),
@@ -33,6 +37,8 @@ export interface EmbeddingConfig {
   batchSize: number;
   /** 同 commit 向量化锁 TTL(秒),见 lock.ts 默认值理由 */
   lockTtlSec: number;
+  /** 等待同 commit 另一任务的最长秒数;缺省 DEFAULT_EMBED_LOCK_MAX_WAIT_SEC(3600) */
+  lockMaxWaitSec: number;
   qdrant: { url: string; apiKey?: string; collection: string } | null;
 }
 
@@ -49,6 +55,7 @@ export function readEmbeddingConfig(env: NodeJS.ProcessEnv = process.env): Embed
     modelDir: e.EMBEDDING_MODEL_DIR,
     batchSize: e.EMBEDDING_BATCH_SIZE,
     lockTtlSec: e.EMBEDDING_LOCK_TTL_SEC,
+    lockMaxWaitSec: e.EMBEDDING_LOCK_MAX_WAIT_SEC,
     qdrant: e.QDRANT_URL
       ? { url: e.QDRANT_URL, apiKey: e.QDRANT_API_KEY, collection: e.QDRANT_COLLECTION }
       : null,

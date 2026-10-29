@@ -178,7 +178,13 @@ if (typeof full.content !== 'string' || !/createStore/.test(full.content))
   fail('vanilla.ts 全文件不含 createStore', { totalLines: full.totalLines, hasMore: full.hasMore });
 const trav = await fetch(`${BASE}/api/repos/${graphReady.repoId}/files?path=../x`);
 if (trav.status !== 400) fail(`files ?path=../x 应为 400,实际 ${trav.status}`);
+const missRes = await fetch(
+  `${BASE}/api/repos/${graphReady.repoId}/files?path=src/__no_such_file__.ts`,
+);
+const miss = await missRes.json().catch(() => null);
+if (missRes.status !== 404 || miss?.error?.code !== 'FILE_NOT_FOUND')
+  fail('不存在的文件应为 404 FILE_NOT_FOUND', { status: missRes.status, body: miss });
 console.log(
-  `SMOKE files[src/vanilla.ts] lines=${nLines} total=${file.totalLines} commit=${file.commitSha.slice(0, 7)} traversal=${trav.status}`,
+  `SMOKE files[src/vanilla.ts] lines=${nLines} total=${file.totalLines} commit=${file.commitSha.slice(0, 7)} traversal=${trav.status} missing=${missRes.status} ${miss.error.code}`,
 );
 console.log('SMOKE ANALYZE PASS');

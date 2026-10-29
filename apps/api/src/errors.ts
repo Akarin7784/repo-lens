@@ -1,6 +1,7 @@
-import type { ApiError, RepoNotReadyReason } from '@repolens/shared';
+import type { ApiError } from '@repolens/shared';
 
 type Code = ApiError['error']['code'];
+export type ApiErrorDetails = NonNullable<ApiError['error']['details']>;
 const STATUS: Record<Code, number> = {
   BAD_REQUEST: 400,
   INVALID_REPO_URL: 400,
@@ -19,7 +20,8 @@ export class HttpError extends Error {
   constructor(
     readonly code: Code,
     message: string,
-    readonly details?: { reason: RepoNotReadyReason },
+    /** 与 shared ApiErrorSchema.error.details 同型:reason 可选,可带其他字段 */
+    readonly details?: ApiErrorDetails,
   ) {
     super(message);
     this.status = STATUS[code];

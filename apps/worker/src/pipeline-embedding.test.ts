@@ -64,6 +64,40 @@ describe('embedding 阶段(T-214)', () => {
     expect([...vectorStore.points.values()].map((p) => p.payload.path)).not.toContain('src/big.ts');
   });
 
+  it('跨任务复用:同 (repo, commit) 的新任务读最近成功任务的 digest 复用;digest 不同则重建', async () => {
+    const { store, data } = await setup();
+    const embedder = new FakeEmbedder();
+    const spy = vi.spyOn(embedder, 'embedDocuments');
+    const vectorStore = new MemoryVectorStore();
+    const deps = { store, config: testConfig(), embedder, vectorStore, allowFileProtocol: true };
+    await runPipeline(data, { ...deps, events: new MemoryEventSink() });
+    const first = spy.mock.calls.length;
+    expect(first).toBeGreaterThan(0);
+    const digest = (await store.getTask(data.jobId))?.stats.embeddingDigest;
+    expect(digest).toMatch(/^[0-9a-f]{64}$/);
+
+    // 新任务(不同 jobId,同 repo + commit):本行 stats 为空,只能从上一个成功任务拿到 digest
+    const data2 = { ...data, jobId: `${data.jobId}-b` };
+    await store.createTask({ jobId: data2.jobId, repoId: data.repoId, commitSha: data.commitSha });
+    await runPipeline(data2, { ...deps, events: new MemoryEventSink() });
+    expect(spy.mock.calls.length).toBe(first);
+    expect((await store.getTask(data2.jobId))?.stats).toMatchObject({
+      embeddingStatus: 'reused',
+      embeddingDigest: digest,
+    });
+
+    // 内容变了(以记录的 digest 不同模拟,如排除规则变化):点数相同也不复用,重建
+    for (const id of [data.jobId, data2.jobId]) {
+      const t = (await store.getTask(id))!;
+      await store.updateTask(id, { stats: { ...t.stats, embeddingDigest: 'stale' } });
+    }
+    const data3 = { ...data, jobId: `${data.jobId}-c` };
+    await store.createTask({ jobId: data3.jobId, repoId: data.repoId, commitSha: data.commitSha });
+    await runPipeline(data3, { ...deps, events: new MemoryEventSink() });
+    expect(spy.mock.calls.length).toBe(first * 2);
+    expect((await store.getTask(data3.jobId))?.stats.embeddingStatus).toBe('ready');
+  });
+
   it('向量库失败只发 stage_error,任务仍 done', async () => {
     const { store, data } = await setup();
     const broken: VectorStore = {
