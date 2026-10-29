@@ -14,6 +14,7 @@ function covers(container: GraphNode, focusPath: string): boolean {
  * - focus 已在已加载节点里:未展开就返回它本身,已展开返回 null(完成)。
  * - 否则在「未展开的 module/dir」中找路径覆盖 focus 的最深那个,先展开它,
  *   拿到下一层再继续(沿 parentId 链逐层请求)。
+ * - focus 不是 m:/d: 节点(文件、外部等):直接忽略,返回 null。
  * - 找不到(focus 不在这棵树上)返回 null,停止,不做兜底。
  */
 export function nextFocusStep(
@@ -21,7 +22,10 @@ export function nextFocusStep(
   expanded: ReadonlySet<string>,
   focus: string,
 ): string | null {
+  // 只处理 module(m:)/dir(d:);文件、外部等其它类型直接忽略
+  if (!focus.startsWith('m:') && !focus.startsWith('d:')) return null;
   const hit = nodes.find((n) => n.id === focus);
+  if (hit && hit.type !== 'module' && hit.type !== 'dir') return null;
   if (hit) return expanded.has(focus) ? null : focus;
   const fp = pathOf(focus);
   let best: GraphNode | null = null;

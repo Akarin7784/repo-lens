@@ -23,4 +23,10 @@ describe('nextFocusStep(suggestedFocus 逐层下探)', () => {
   it('路径前缀按段比较:m:pkg 不覆盖 d:pkg2/x', () => {
     expect(nextFocusStep([n('m:pkg', 'module', null)], new Set(), 'd:pkg2/x')).toBeNull();
   });
+  it('只处理 module/dir:文件、外部节点直接忽略', () => {
+    expect(nextFocusStep(root, new Set(), 'f:src/index.ts')).toBeNull();
+    expect(nextFocusStep(root, new Set(), 'x:react')).toBeNull();
+    const l2 = [...root, n('f:a.ts', 'file', 'm:.')];
+    expect(nextFocusStep(l2, new Set(['m:.']), 'f:a.ts')).toBeNull();
+  });
 });

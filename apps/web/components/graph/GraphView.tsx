@@ -14,7 +14,7 @@ import {
   activeLayerEdges,
   aggregateEdges,
   countChildren,
-  cycleEdgeKeys,
+  inCycleEdgeKeys,
   deriveExternal,
   makeVisibility,
   SliceTooLargeError,
@@ -100,7 +100,7 @@ function Inner({ source, owner, repo, engine, onRootLoaded }: GraphViewProps) {
   }, [source, owner, repo]);
 
   const toggle = useCallback(
-    async (id: string): Promise<boolean> => {
+    async (id: string, autoFor?: string): Promise<boolean> => {
       setError(null);
       if (state.expanded.has(id)) {
         dispatch({ type: 'collapse', id });
@@ -109,6 +109,8 @@ function Inner({ source, owner, repo, engine, onRootLoaded }: GraphViewProps) {
       if (!state.loaded.has(id)) {
         try {
           const slice = await source.loadChildren(id);
+          // 自动下探的请求返回时,用户可能已手动操作(autoFocus 被置空或换了目标):丢弃结果
+          if (autoFor !== undefined && autoFocus.current !== autoFor) return false;
           dispatch({
             type: 'childrenLoaded',
             parentId: id,
@@ -118,6 +120,7 @@ function Inner({ source, owner, repo, engine, onRootLoaded }: GraphViewProps) {
             truncated: slice.truncated,
           });
         } catch (e) {
+          if (autoFor !== undefined && autoFocus.current !== autoFor) return false;
           setError(
             e instanceof SliceTooLargeError ? e.message : `加载 ${id} 失败:${userMessageOf(e)}`,
           );
@@ -148,10 +151,13 @@ function Inner({ source, owner, repo, engine, onRootLoaded }: GraphViewProps) {
       return;
     }
     autoBusy.current = true;
-    void toggle(step).then((ok) => {
+    void toggle(step, focus).then((ok) => {
       autoBusy.current = false;
-      // 请求失败时 toggle 已显示错误,停止下探;成功则触发下一步
-      if (!ok) autoFocus.current = null;
+      // 请求失败(toggle 已显示错误)或结果被丢弃:停止下探;成功则触发下一步
+      if (!ok || autoFocus.current !== focus) {
+        autoFocus.current = null;
+        return;
+      }
       setAutoTick((t) => t + 1);
     });
   }, [state.nodes, state.expanded, toggle, autoTick]);
@@ -163,7 +169,7 @@ function Inner({ source, owner, repo, engine, onRootLoaded }: GraphViewProps) {
       ? state.edges
       : activeLayerEdges(state.edges, state.edgeLayer, state.expanded, vis.isVisible);
     let edges = aggregateEdges(live, vis.visibleAncestor);
-    const cycleKeys = cycleEdgeKeys(live, state.cycles, vis.visibleAncestor);
+    const cycleKeys = inCycleEdgeKeys(live, vis.visibleAncestor);
     // 截断提示:只看当前可见的层(根层 + 已展开且可见的容器)
     const truncatedLayers = [...state.truncated].filter(
       (p) => p === '' || (state.expanded.has(p) && vis.isVisible(p)),
@@ -181,7 +187,6 @@ function Inner({ source, owner, repo, engine, onRootLoaded }: GraphViewProps) {
     state.edges,
     state.edgeLayer,
     state.truncated,
-    state.cycles,
     state.expanded,
     state.includeExternal,
     source,
