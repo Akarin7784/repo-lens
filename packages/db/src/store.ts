@@ -30,6 +30,8 @@ export interface TaskStats {
   /** T-214:向量化结果(ready/reused/skipped/failed);旧任务无此字段 */
   embeddingStatus?: 'ready' | 'reused' | 'skipped' | 'failed';
   embeddingChunks?: number;
+  /** 切块内容 hash 汇总,复用判断用 */
+  embeddingDigest?: string;
   [k: string]: unknown;
 }
 

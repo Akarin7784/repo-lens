@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { DEFAULT_EMBED_LOCK_TTL_SEC } from './lock.js';
 
 /** D4:本地 multilingual-e5-small(fp32),384 维 */
 export const DEFAULT_EMBEDDING_MODEL = 'Xenova/multilingual-e5-small';
@@ -10,6 +11,10 @@ const Schema = z.object({
   EMBEDDING_MODEL: z.preprocess(empty, z.string().default(DEFAULT_EMBEDDING_MODEL)),
   EMBEDDING_MODEL_DIR: z.preprocess(empty, z.string().default('/app/models')),
   EMBEDDING_BATCH_SIZE: z.preprocess(empty, z.coerce.number().int().min(1).max(256).default(16)),
+  EMBEDDING_LOCK_TTL_SEC: z.preprocess(
+    empty,
+    z.coerce.number().int().min(60).default(DEFAULT_EMBED_LOCK_TTL_SEC),
+  ),
   QDRANT_URL: z.preprocess(empty, z.string().url().optional()),
   QDRANT_API_KEY: z.preprocess(empty, z.string().optional()),
   QDRANT_COLLECTION: z.preprocess(
@@ -26,6 +31,8 @@ export interface EmbeddingConfig {
   model: string;
   modelDir: string;
   batchSize: number;
+  /** 同 commit 向量化锁 TTL(秒),见 lock.ts 默认值理由 */
+  lockTtlSec: number;
   qdrant: { url: string; apiKey?: string; collection: string } | null;
 }
 
@@ -41,6 +48,7 @@ export function readEmbeddingConfig(env: NodeJS.ProcessEnv = process.env): Embed
     model: e.EMBEDDER === 'fake' ? 'fake-384' : e.EMBEDDING_MODEL,
     modelDir: e.EMBEDDING_MODEL_DIR,
     batchSize: e.EMBEDDING_BATCH_SIZE,
+    lockTtlSec: e.EMBEDDING_LOCK_TTL_SEC,
     qdrant: e.QDRANT_URL
       ? { url: e.QDRANT_URL, apiKey: e.QDRANT_API_KEY, collection: e.QDRANT_COLLECTION }
       : null,

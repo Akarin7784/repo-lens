@@ -46,7 +46,7 @@ export class FakeEmbedder implements Embedder {
   }
 }
 
-type Extractor = (
+export type Extractor = (
   texts: string[],
   opts: { pooling: 'mean'; normalize: boolean },
 ) => Promise<{ tolist(): number[][] }>;
@@ -61,7 +61,11 @@ export class OnnxEmbedder implements Embedder {
   constructor(
     readonly model: string,
     private readonly modelDir: string,
-  ) {}
+    /** 仅测试:替换模型加载,用来断言实际送进模型的文本 */
+    loader?: () => Promise<Extractor>,
+  ) {
+    if (loader) this.ext = loader();
+  }
   private load(): Promise<Extractor> {
     this.ext ??= (async () => {
       const t = await import('@huggingface/transformers');

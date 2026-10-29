@@ -121,10 +121,15 @@ describe('indexChunks', () => {
     const emb = new FakeEmbedder();
     const spy = vi.spyOn(emb, 'embedDocuments');
     const r1 = await indexChunks({ repoId: 1, commitSha: 'c1', chunks, batchSize: 2 }, emb, store);
-    expect(r1).toEqual({ chunks: 5, reused: false });
+    expect(r1).toMatchObject({ chunks: 5, reused: false });
+    expect(r1.digest).toMatch(/^[0-9a-f]{64}$/);
     expect(spy.mock.calls.map((c) => c[0].length)).toEqual([2, 2, 1]);
-    const r2 = await indexChunks({ repoId: 1, commitSha: 'c1', chunks, batchSize: 2 }, emb, store);
-    expect(r2).toEqual({ chunks: 5, reused: true });
+    const r2 = await indexChunks(
+      { repoId: 1, commitSha: 'c1', chunks, batchSize: 2, prevDigest: r1.digest },
+      emb,
+      store,
+    );
+    expect(r2).toEqual({ chunks: 5, reused: true, digest: r1.digest });
     expect(spy).toHaveBeenCalledTimes(3);
     await indexChunks(
       { repoId: 1, commitSha: 'c2', chunks: chunks.slice(0, 2), batchSize: 8 },
@@ -136,6 +141,28 @@ describe('indexChunks', () => {
     const q = await emb.embedQuery('f3');
     const hits = await store.search(1, 'c1', q, 1);
     expect(hits[0]!.payload.path).toBe('src/f3.ts');
+  });
+  it('点数相同但内容 hash 汇总不同(如排除规则变化)时不复用、重建', async () => {
+    const store = new MemoryVectorStore();
+    const emb = new FakeEmbedder();
+    const r1 = await indexChunks({ repoId: 1, commitSha: 'c1', chunks, batchSize: 8 }, emb, store);
+    const changed = chunks.map((c, i) => (i === 0 ? { ...c, contentHash: 'changed' } : c));
+    const spy = vi.spyOn(emb, 'embedDocuments');
+    const r2 = await indexChunks(
+      { repoId: 1, commitSha: 'c1', chunks: changed, batchSize: 8, prevDigest: r1.digest },
+      emb,
+      store,
+    );
+    expect(r2.reused).toBe(false);
+    expect(r2.digest).not.toBe(r1.digest);
+    expect(spy).toHaveBeenCalledTimes(1);
+    // 没有上次的汇总(旧任务)也不复用
+    const r3 = await indexChunks(
+      { repoId: 1, commitSha: 'c1', chunks: changed, batchSize: 8 },
+      emb,
+      store,
+    );
+    expect(r3.reused).toBe(false);
   });
   it('上次中途失败(point 数不齐)时删掉旧 point 重建', async () => {
     const store = new MemoryVectorStore();

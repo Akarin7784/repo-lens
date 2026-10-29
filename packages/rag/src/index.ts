@@ -5,3 +5,4 @@ export * from './cache.js';
 export * from './chunks.js';
 export * from './vector-store.js';
 export * from './indexer.js';
+export * from './lock.js';

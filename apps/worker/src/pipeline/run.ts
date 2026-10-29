@@ -35,8 +35,12 @@ import {
 } from '@repolens/shared';
 import {
   buildChunks,
+  chunksDigest,
+  embedLockKey,
   indexChunks,
+  withEmbedLock,
   type ChunkSourceFile,
+  type LockKv,
   type Embedder,
   type VectorStore,
 } from '@repolens/rag';
@@ -65,6 +69,11 @@ export interface PipelineDeps {
   /** embedding(T-214);与 vectorStore 都给了才跑向量化,否则跳过该阶段 */
   embedder?: Embedder;
   vectorStore?: VectorStore;
+  /** 同 (repo, commit) 向量化互斥锁(Redis);不传时不加锁(单测) */
+  lockKv?: LockKv;
+  /** 锁 key 前缀(测试隔离用) */
+  lockPrefix?: string;
+  lockPollMs?: number;
   /** 仅测试:允许 file:// 克隆源 */
   allowFileProtocol?: boolean;
 }
@@ -326,9 +335,16 @@ export async function runPipeline(
     } else {
       await progress('embedding', 85, '切块与向量化');
       try {
-        const r = await runEmbedding(data, deps, root, progress);
+        const r = await runEmbedding(
+          data,
+          deps,
+          root,
+          progress,
+          typeof stats.embeddingDigest === 'string' ? stats.embeddingDigest : null,
+        );
         embeddingStatus = r.reused ? 'reused' : 'ready';
         stats = { ...stats, embeddingChunks: r.chunks };
+        if (r.digest) stats = { ...stats, embeddingDigest: r.digest };
         await progress('embedding', 99, r.message);
       } catch (err) {
         embeddingStatus = 'failed';
@@ -509,7 +525,9 @@ export async function runEmbedding(
   deps: PipelineDeps,
   root: string,
   progress: (s: ProgressStage, pct: number, message?: string) => Promise<void>,
-): Promise<{ chunks: number; reused: boolean; message: string }> {
+  /** 本任务(同 repo+commit)上次记录在 stats 里的内容 hash 汇总;与本次一致且点数相符才复用 */
+  prevDigest: string | null = null,
+): Promise<{ chunks: number; reused: boolean; message: string; digest?: string }> {
   const { store, config } = deps;
   const { repoId, commitSha } = data;
   const ana = readJson<AnalyzeResult>(`${root}.analysis.json`);
@@ -536,13 +554,30 @@ export async function runEmbedding(
     }
   };
   const { chunks, excluded } = await buildChunks(files, readSource);
-  const r = await indexChunks(
-    { repoId, commitSha, chunks, batchSize: config.embedding.batchSize },
-    deps.embedder!,
-    deps.vectorStore!,
-    (done, total) =>
-      progress('embedding', 85 + Math.floor((done / total) * 14), `向量化 ${done}/${total} 块`),
-  );
+  const index = () =>
+    indexChunks(
+      { repoId, commitSha, chunks, batchSize: config.embedding.batchSize, prevDigest },
+      deps.embedder!,
+      deps.vectorStore!,
+      (done, total) =>
+        progress('embedding', 85 + Math.floor((done / total) * 14), `向量化 ${done}/${total} 块`),
+    );
+  let r: { chunks: number; reused: boolean; digest?: string };
+  if (deps.lockKv) {
+    // 同 commit 并发任务:拿到锁的写,拿不到的不写、等持有者完成后记 reused;持有者失败则接手
+    const locked = await withEmbedLock(deps.lockKv, embedLockKey(repoId, commitSha), index, {
+      ttlSec: config.embedding.lockTtlSec,
+      pollMs: deps.lockPollMs,
+      prefix: deps.lockPrefix,
+    });
+    r = locked.ran
+      ? locked.result
+      : {
+          chunks: await deps.vectorStore!.count(repoId, commitSha),
+          reused: true,
+          digest: chunksDigest(deps.embedder!.model, chunks),
+        };
+  } else r = await index();
   const skip = excluded.length ? `,排除 ${excluded.length} 个文件` : '';
   return {
     ...r,

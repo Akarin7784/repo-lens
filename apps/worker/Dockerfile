@@ -28,7 +28,7 @@ RUN mkdir -p /models && if [ "$EMBEDDING_MODEL_DOWNLOAD" = "1" ]; then \
     apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
     && d="/models/$EMBEDDING_MODEL_REPO" && mkdir -p "$d/onnx" && cd "$d" \
     && for f in config.json tokenizer.json tokenizer_config.json special_tokens_map.json onnx/model.onnx; do \
-      curl -fsSL --retry 3 -o "$f" \
+      curl -fsSL --connect-timeout 30 --max-time 900 --retry 3 --retry-all-errors -o "$f" \
         "${EMBEDDING_MODEL_BASE_URL%/}/$EMBEDDING_MODEL_REPO/resolve/$EMBEDDING_MODEL_REVISION/$f" || exit 1; \
     done \
     && printf '%s  %s\n' $EMBEDDING_MODEL_SHA256 > /tmp/sums \

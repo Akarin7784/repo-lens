@@ -58,6 +58,7 @@ const worker = new Worker<AnalyzeJobData>(
       store,
       events,
       config,
+      lockKv: redis,
       gateway,
       embedder,
       vectorStore,
