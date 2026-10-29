@@ -443,8 +443,8 @@ services:
     volumes: [repos:/data/repos]
     read_only: true
     tmpfs: [/tmp]
-    mem_limit: 2g
-    cpus: 1.5
+    mem_limit: 3g
+    cpus: ${WORKER_CPUS:-2}   # 可配置,默认 2,见下方说明
     security_opt: ["no-new-privileges:true"]
     depends_on: [mysql, redis, qdrant]
   mysql:
@@ -461,6 +461,8 @@ services:
     # 不对公网暴露端口,仅内网 6333(REST)/6334(gRPC)
 volumes: { repos: {}, mysql: {}, qdrant: {} }
 ```
+
+**worker CPU 上限**:`cpus` 由 `WORKER_CPUS` 配置(默认 2,原先写死 1.5)。本地 e5 向量化吞吐近似随核数线性:本地基准(hono ed1d5f7,1434 块)单核 3.6 块/秒约 6.6 分钟,2 核 7.0 块/秒约 3.4 分钟;**容器内尚未实测**。值不得超过宿主机核数(否则 docker 拒绝启动);演示机至少 4 核 4 GB,建议 `WORKER_CPUS=2`~`3`,给 api、MySQL、Qdrant 留余量。`mem_limit` 与实际 compose 一致为 3g。
 
 **web 访问 api 的方式**:浏览器同源请求 `/api/*`,由 Next `rewrites` 转发到 api。`rewrites` 在**构建期**由 `API_PROXY_TARGET` 固定,运行时环境变量对它无效:`apps/web/Dockerfile` 用 `ARG API_PROXY_TARGET=http://api:4000` 注入,compose 的 web 构建通过 `args` 传入,`turbo.json` 的 build 任务声明 `API_PROXY_TARGET` / `NEXT_PUBLIC_API_BASE_URL`(turbo 2 严格 env 模式否则会过滤掉,rewrites 为空)。若改用 `NEXT_PUBLIC_API_BASE_URL` 直连别的域名,api 必须开 CORS,并通过 `Access-Control-Expose-Headers: x-graph-truncated` 暴露截断标记头。PR #22 合并后,CI smoke 会经 web 请求 `/api/repos/999999` 校验转发(详见 docs/FRONTEND_DESIGN.md §7.5)。
 
@@ -481,6 +483,7 @@ volumes: { repos: {}, mysql: {}, qdrant: {} }
 | `MAX_REPO_MB` / `MAX_FILES` | `300` / `5000` | 仓库限制 |
 | `DAILY_LLM_BUDGET_CENTS` | `500` | 每日预算熔断 |
 | `WORKER_CONCURRENCY` | `2` | 并发分析数 |
+| `WORKER_CPUS` | `2` | worker 容器 CPU 上限(compose `cpus`),不得超过宿主机核数;演示机 4 核建议 2~3 |
 | `QDRANT_URL` | `http://qdrant:6333` | Qdrant 地址 |
 | `QDRANT_API_KEY` | 随机串 | Qdrant 鉴权 |
 | `QDRANT_COLLECTION` | `code_chunks` | 向量 collection 名 |
