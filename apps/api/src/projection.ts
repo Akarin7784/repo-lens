@@ -223,12 +223,32 @@ export function projectGraphWithInfo(
   const edges: GraphEdge[] = [];
   const agg = new Map<
     string,
-    { s: string; t: string; n: number; kinds: Map<ImportKind, number>; src: string }
+    {
+      s: string;
+      t: string;
+      n: number;
+      kinds: Map<ImportKind, number>;
+      src: string;
+      inCycle: boolean;
+    }
   >();
-  const pushAgg = (s: string, t: string, kind: ImportKind, srcPath: string, n = 1) => {
+  // inCycle:file 边两端在同一个 SCC(o.cycles 的同一项)里为 true;聚合边只要有一条底层 file 边在环里就为 true
+  const sccOf = new Map<string, number>();
+  (o.cycles ?? []).forEach((c, i) => c.forEach((id) => sccOf.set(id, i)));
+  const fileEdgeInCycle = (src: string, dst: string) =>
+    sccOf.has(src) && sccOf.get(src) === sccOf.get(dst);
+  const pushAgg = (
+    s: string,
+    t: string,
+    kind: ImportKind,
+    srcPath: string,
+    n = 1,
+    inCycle = false,
+  ) => {
     const k = `${s}->${t}`;
-    const a = agg.get(k) ?? { s, t, n: 0, kinds: new Map(), src: srcPath };
+    const a = agg.get(k) ?? { s, t, n: 0, kinds: new Map(), src: srcPath, inCycle: false };
     a.n += n;
+    if (inCycle) a.inCycle = true;
     a.kinds.set(kind, (a.kinds.get(kind) ?? 0) + n);
     if (srcPath < a.src) a.src = srcPath;
     agg.set(k, a);
@@ -241,6 +261,7 @@ export function projectGraphWithInfo(
     const t = vt ?? (vs ? outsideOf(e.dstId) : null);
     if (!s || !t || s === t) continue;
     const srcPath = ix.pathById.get(e.srcFileId) ?? e.srcId.slice(2);
+    const inCycle = fileEdgeInCycle(e.srcId, e.dstId);
     if (vs && vt && s === e.srcId && t === e.dstId)
       edges.push({
         id: `e:${s}->${t}:${e.kind}`,
@@ -250,8 +271,9 @@ export function projectGraphWithInfo(
         kind: e.kind,
         srcFileId: fileId(srcPath) as never,
         weight: e.weight,
+        ...(inCycle ? { inCycle: true } : {}),
       });
-    else pushAgg(s, t, e.kind, srcPath, e.weight);
+    else pushAgg(s, t, e.kind, srcPath, e.weight, inCycle);
   }
 
   const extNodes: GraphNode[] = [];
@@ -293,6 +315,7 @@ export function projectGraphWithInfo(
       srcFileId: fileId(a.src) as never,
       weight: a.n,
       ...(raw ? {} : { aggregated: true }),
+      ...(a.inCycle ? { inCycle: true } : {}),
     });
   }
 
