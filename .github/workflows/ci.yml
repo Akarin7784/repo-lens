@@ -24,7 +24,7 @@ jobs:
           --health-interval=5s --health-timeout=3s --health-retries=20
     env:
       TEST_MYSQL_URL: mysql://root:repolens-ci@127.0.0.1:3306/repolens_test
-      TEST_REDIS_URL: redis://127.0.0.1:6379
+      TEST_REDIS_URL: redis://127.0.0.1:6379/12
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -34,6 +34,12 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm build
+      - name: 证明测试连到服务容器(不打印密码)
+        run: |
+          node -e 'for (const k of ["TEST_MYSQL_URL","TEST_REDIS_URL"]) { const u = new URL(process.env[k]); console.log(k, "host=" + u.hostname + ":" + u.port, "db=" + (u.pathname.slice(1) || "0")); }'
+          docker ps --format '{{.Image}} {{.Ports}}' | grep -E 'mysql|redis'
+          docker exec "$(docker ps -qf ancestor=mysql:8.4)" mysqld --version
+          docker exec "$(docker ps -qf ancestor=redis:7-alpine)" redis-server --version
       - name: test(MySQL/Redis 集成测试必须真跑)
         run: |
           set -o pipefail

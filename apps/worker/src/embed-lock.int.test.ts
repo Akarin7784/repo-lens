@@ -13,7 +13,7 @@ import {
 } from '@repolens/rag';
 
 // 本机 Redis 共用:默认 db 10 + 进程唯一前缀,不碰其他库和 key
-const REDIS_URL = process.env.TEST_REDIS_URL ?? 'redis://127.0.0.1:6379/10';
+const REDIS_URL = process.env.TEST_REDIS_URL ?? 'redis://127.0.0.1:6379/6' // 库号占用表见 packages/agent/src/llm/llm.test.ts;
 async function redisUp() {
   const r = new Redis(REDIS_URL, {
     lazyConnect: true,

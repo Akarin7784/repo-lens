@@ -50,7 +50,7 @@ const req = (content: string, extra: Partial<LlmRequest> = {}): LlmRequest => ({
   ...extra,
 });
 
-const REDIS_URL = process.env.TEST_REDIS_URL ?? 'redis://127.0.0.1:6379/9';
+const REDIS_URL = process.env.TEST_REDIS_URL ?? 'redis://127.0.0.1:6379/5'; // 测试 Redis 库号占用表:api app=1, agent llm=5, worker embed-lock=6, worker queue.int=7, worker test-utils=8;保留不用:0/9/10、11(#108 route.test)、13(本地全量)
 const redisOk = await (async () => {
   const r = new Redis(REDIS_URL, {
     lazyConnect: true,
