@@ -177,6 +177,7 @@
 - 2026-10-29:合并 #95(49f4320,仅文档):按架构师意见修订 `docs/DEPLOY.md`(合并过时引用段、删未用 `@sse`、XFF 实测须从演示机外发、冒烟清单加 `curl -sI` 应返回 200 而非 301/308、`header_up` 标注可能多余)。已核对:diff 仅 DEPLOY.md,CI 与 smoke 绿。未验证:所有部署步骤均未在真实服务器执行,Caddy 行为与延迟、价格等仍为「未验证」。
 - 2026-10-29:合并 #97(6ac7863,仅文档):`docs/DEPLOY.md` 里 Caddyfile 一行写完的块改成多行(`flush_interval -1` 与 `header_up` 分行),部署前清单加 `caddy validate` 一条。已核对:diff 仅 DEPLOY.md,CI 与 smoke 绿。未验证:该 Caddyfile 片段从未用 `caddy validate` 或真实 Caddy 跑过(开发机无 docker),需在有 docker 的机器上实测。
 - 2026-10-29:合并 #96(f362944):评测脚本新增索引阶段 embedding 用量输出(`EVAL embedding usage ...`),只加输出、不改选择逻辑:实测累计 `usage.total_tokens`,无 usage 的批次单列估算、不混入实测,复用向量缓存写 `reused=1 totalTokens=未测`,只统计索引不含查询。已核对:diff 只涉及评测脚本与 rag 评测模块,CI 与 smoke 绿,作者报 4 个新测试、5 个变异全被抓住(我未独立复跑)。未验证:未用真实百炼响应跑过;失败重试批次的用量未计入。
+- 2026-10-29:合并 #98(50e7ec3,P4-a):`GET /api/repos/:id` 同源透出可选 `embeddingProvider`(local|dashscope,来自 worker 已写入的 `stats.embeddingProvider`,非法值与旧任务省略);shared schema 只增不改;ARCHITECTURE 同步。已核对:diff 六个文件,worker 确已写该字段,CI 与 smoke 绿,作者报 3 个变异被抓住(我未独立复跑)。未验证:API 集成测试我未在本机复跑;接口只透出 provider,不含 model/dim(P4 检索仍需比较 stats 中的 embeddingModel/embeddingDim);`done.messageId` 仍为必填,待前端先改可选。
 
 ## 演示检查清单(第 4 周前逐项勾选)
 - [ ] 演示前抽查 hono 的 `embeddingStatus` 为 `ready`(或 `reused`)。
