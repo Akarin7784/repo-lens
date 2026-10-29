@@ -42,7 +42,10 @@ services:
     tmpfs: [/tmp]
     # 本地 e5 fp32 向量化峰值约 2.5 GB,留余量;演示机整机至少 4 GB
     mem_limit: 3g
-    cpus: 1.5
+    # CPU 上限可配置(WORKER_CPUS,默认 2):向量化吞吐近似随核数线性,
+    # 本地基准 hono 1434 块:单核 3.6 块/秒约 6.6 分钟,2 核 7.0 块/秒约 3.4 分钟(容器内未实测)。
+    # 不得超过宿主机核数,否则 docker 拒绝启动;4 核演示机建议 2~3
+    cpus: ${WORKER_CPUS:-2}
     security_opt: ['no-new-privileges:true']
     restart: unless-stopped
     # worker 不跑迁移,启动时等待 schema 就绪(waitForSchema,有限次重试)
