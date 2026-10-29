@@ -77,8 +77,9 @@ const call = (extra: Partial<LlmCall> = {}): LlmCall => ({
   messages: [{ role: 'user', content: 'hi' }],
   ...extra,
 });
+// 默认 2s:冷启动的第一个请求(建连 + JIT)在 CI 上可超过 300ms;测超时的用例各自传更小的值
 const client = (o: ConstructorParameters<typeof DeepSeekClient>[1] = {}) =>
-  new DeepSeekClient(KEY, { baseUrl: base, firstChunkTimeoutMs: 300, idleTimeoutMs: 300, ...o });
+  new DeepSeekClient(KEY, { baseUrl: base, firstChunkTimeoutMs: 2000, idleTimeoutMs: 2000, ...o });
 async function collect(it: AsyncIterable<LlmStreamEvent>) {
   const evs: LlmStreamEvent[] = [];
   for await (const e of it) evs.push(e);
