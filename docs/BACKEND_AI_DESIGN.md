@@ -470,7 +470,7 @@ T-210 已实现的部分（不依赖 D1）：
 - 预算：Redis 计数 `llm:spend:day:{yyyyMMdd UTC}`（TTL 2d）与 `llm:spend:task:{taskId}`（TTL 7d），单位 micro-USD；调用前检查、调用后 INCRBY，并发时最多超出（并发数 − 1）次调用的花费。超限抛 `BUDGET_EXCEEDED`（scope = daily / task），不调用模型、不写 `llm_usage`。**`DAILY_LLM_BUDGET_CENTS=0` 表示禁止一切模型调用**（只允许缓存命中），`LLM_TASK_BUDGET_CENTS=0` 同理只作用于分析任务；日预算按 UTC 自然日分桶，过 UTC 零点（北京时间 08:00）自动恢复。预算变量在 api 和 worker 启动时由 `readLlmConfig` 校验，非法即启动失败。
 - 记账：每次调用写 `llm_usage`；费用按价格表（每百万 token 美元）换算成 micro-USD 并向上取整；不在价格表里的模型拒绝调用。模型失败写 `ok=0` 并抛 `LLM_UNAVAILABLE`，重试与规则降级由调用方（T-211，D6）负责。
 - `FakeLlm`：确定性输出、不联网、不需要 key；`LLM_PROVIDER` 目前只接受 `fake`。
-- 待 D1：真实 OpenAI 兼容客户端、`cb:llm:{provider}` 连续失败熔断、备用 provider。
+- D1 已决 DeepSeek(见 `docs/WEEK2_PLAN.md` D1),真实客户端为 T-210b。待做：真实 OpenAI 兼容客户端、`cb:llm:{provider}` 连续失败熔断、备用 provider。
 
 ---
 
