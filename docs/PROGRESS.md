@@ -139,12 +139,7 @@
 
 - 2026-10-29 17:1x:#64 合并(T-223 节点文件预览)。我在 head 8e868b7 上独立重跑 install、lint、typecheck、build、test(web 160 等,全过),在 main 6213d1d 上试合并无冲突,试合并结果上 lint、typecheck、web 测试通过,`ci` 与 `smoke` 绿。内容:展开「查看代码」时才动态加载 Shiki(`shiki/core` 加 JS 引擎,语法与主题随构建打包,没有 CDN、没有 wasm),首屏 `/a/[id]` 仍是 196 kB;tokens 以 React 文本节点渲染,没有 `dangerouslySetInnerHTML`;已排除按 `sensitive`/`too-large`/`binary` 分文案,`FILE_NOT_FOUND` 单独处理,三种 409 按 `details.reason` 分文案(未知值回退通用文案);AbortController 切节点;最多显示 2000 行并提示「仅显示前 N 行」,单行超过 2000 字符截断且不高亮;GraphSearch 5→0→5 无结果时下标置 0。变异检查:改用 `dangerouslySetInnerHTML`(3 个 XSS 测试失败)、去掉置 0、改错 `SNAPSHOT_MISSING` 和 `binary` 的文案映射、去掉 abort 后检查,各有测试失败。后续项:行号跳转未做(UI 和 API 暂无行参数);大文件高亮在主线程同步执行,耗时没实测,演示前在 hono 大文件上看一眼;离线时预览能否高亮和投影机分辨率下 Shiki chunk 首次加载耗时未验证;后端不一致三项(架构师口径:先判 binary 再判体积、`REPOS_DIR_NOT_CONFIGURED` 保留为防御分支、`details.reason` 保持严格枚举,新增须同时改 shared 和前端),由后端放入 T-214 PR-2 之后的小 PR;`errors.ts` 第 32 行注释过时。
 
-### 2026-10-29 · #65 worker cpus 可配置(WORKER_CPUS,默认 2)
-
-- 做了什么:docker-compose 里 worker 的 `cpus` 由写死 1.5 改为 `${WORKER_CPUS:-2}`(未设或设为空串都得 2);`.env.example`、README、ARCHITECTURE 同步,文档写明演示机至少 4 核 4 GB,并把过时的 `mem_limit 2g` 更正为 3g。只改配置和文档,无代码改动。
-- 怎么验证的:独立评审在干净 worktree 里 frozen-lockfile 安装、lint、typecheck、build、全量测试(`--concurrency=1`)全部通过;main 试合并无冲突;用 yaml 库解析 compose 并逐个检查插值(未设、空串、1、4)。ci 与 smoke 均为绿。
-- 没有验证的:本机没有 Docker,未跑 `docker compose config`,docker 实际接受该值、超过宿主机核数时的行为都未实测;容器内真实向量化速度未测,文档里的 3.6 / 7.0 块/秒是 taskset 绑核的本地基准。
-- 遗留(不阻塞):ONNX 线程数没有与 `WORKER_CPUS` 关联,cpus=2 时线程数可能超过配额被限流,吞吐可能低于基准,容器内实测时一起看,必要时加 `EMBEDDING_THREADS`;`docs/notes/embed-lock-bench.md` 里「worker 限 1.5 CPU」是旧说法待更新。
+- 2026-10-29 17:2x:#65 合并(worker `cpus` 可配置,提交 2511234)。docker-compose 里 worker 的 `cpus` 由写死 1.5 改为 `${WORKER_CPUS:-2}`(未设或空串都得 2),`.env.example`、README、ARCHITECTURE 同步,并把过时的 `mem_limit 2g` 更正为 3g,只改配置和文档。我在 head e88a6e6 上独立重跑 install、lint、typecheck、build、全量测试全过,在最新 main 上试合并无冲突,`ci` 与 `smoke` 均绿;用 yaml 库解析 compose 并检查了未设、空串、1、4 的插值结果。未验证:本机没有 Docker,未跑 `docker compose config`,docker 实际接受该值、超过宿主机核数时的行为都未实测;容器内真实向量化速度未测,文档里 3.6 / 7.0 块/秒是 taskset 绑核的本地基准。遗留(不阻塞):ONNX 线程数没有与 `WORKER_CPUS` 关联,cpus=2 时线程数可能超出配额被限流,容器内实测时一并确认,必要时加 `EMBEDDING_THREADS`;`docs/notes/embed-lock-bench.md` 仍写「worker 限 1.5 CPU」,待更新。
 
 ## 演示检查清单(第 4 周前逐项勾选)
 - [ ] 演示前抽查 hono 的 `embeddingStatus` 为 `ready`(或 `reused`)。
