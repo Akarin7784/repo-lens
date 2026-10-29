@@ -24,8 +24,15 @@ export function absolutePosition(
   return { x, y };
 }
 
-/** 展开/收起前:由当前视口和节点绝对坐标记下锚点的屏幕位置 */
-export function makeAnchor(id: string, abs: { x: number; y: number }, vp: Viewport): Anchor {
+const finite = (...v: number[]) => v.every((n) => Number.isFinite(n));
+
+/**
+ * 展开/收起前:由当前视口和节点绝对坐标记下锚点的屏幕位置。
+ * T-241:容器尺寸为 0(面板隐藏)时带 duration 的 setViewport 会把视口变成 NaN;
+ * 视口或坐标非有限数时不锚定(返回 null → fit),避免 NaN 自我传播
+ */
+export function makeAnchor(id: string, abs: { x: number; y: number }, vp: Viewport): Anchor | null {
+  if (!finite(abs.x, abs.y, vp.x, vp.y, vp.zoom)) return null;
   return { id, sx: abs.x * vp.zoom + vp.x, sy: abs.y * vp.zoom + vp.y, zoom: vp.zoom };
 }
 
@@ -42,7 +49,9 @@ export function viewportAfterLayout(
   anchor: Anchor | null,
   nodes: readonly PosNode[],
 ): Viewport | 'fit' {
-  if (!anchor) return 'fit';
+  if (!anchor || !finite(anchor.sx, anchor.sy, anchor.zoom)) return 'fit';
   const abs = absolutePosition(nodes, anchor.id);
-  return abs ? anchoredViewport(anchor, abs) : 'fit';
+  if (!abs) return 'fit';
+  const v = anchoredViewport(anchor, abs);
+  return finite(v.x, v.y, v.zoom) ? v : 'fit';
 }

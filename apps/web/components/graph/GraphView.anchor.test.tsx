@@ -6,6 +6,7 @@ import { GraphView } from './GraphView';
 import { createFixtureSource, type GraphSource } from '../../lib/graph/source';
 import { SAMPLE_REPOS } from '../../lib/fixtures';
 import { createInlineEngine } from '../../lib/layout/elk';
+import { paneSize } from '../../test/paneSize';
 
 // T-240:包一层 useReactFlow,只记录 fitView / setViewport 调用,行为仍走真实实现
 const spies = vi.hoisted(() => ({ fitView: vi.fn(), setViewport: vi.fn() }));
@@ -47,7 +48,7 @@ function deferred<T>() {
 }
 
 /** fixture 源,但 middleware 的 loadChildren 由测试控制 */
-function controlledSource() {
+function controlledSource(suggestedFocus?: string) {
   const s = SAMPLE_REPOS.zustand;
   const base = createFixtureSource('pmndrs/zustand', s.data);
   const pending: ReturnType<typeof deferred<Awaited<ReturnType<GraphSource['loadChildren']>>>>[] =
@@ -57,6 +58,10 @@ function controlledSource() {
     ...base,
     loadChildren: (id) => {
       calls.push(id);
+      if (id === null && suggestedFocus)
+        return base
+          .loadChildren(null)
+          .then((sl) => ({ ...sl, meta: { ...sl.meta, suggestedFocus } }));
       if (id !== MW) return base.loadChildren(id);
       const d = deferred<Awaited<ReturnType<GraphSource['loadChildren']>>>();
       pending.push(d);
@@ -137,6 +142,46 @@ describe('<GraphView> 锚点后续(T-240)', () => {
     await waitFor(() => expect(spies.setViewport).toHaveBeenCalledTimes(1));
     await unrelatedRelayout();
     expect(spies.setViewport).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/失败/)).toBeNull();
+  });
+
+  it('容器尺寸为 0:带 duration 的恢复让视口变 NaN 后,后续展开/收起不把 NaN 传给 setViewport(走 fit)', async () => {
+    paneSize.width = 0;
+    paneSize.height = 0;
+    const c = controlledSource();
+    const { container } = await mount(c.source);
+    const vpT = () =>
+      (container.querySelector('.react-flow__viewport') as HTMLElement).style.transform;
+    fireEvent.click(screen.getByRole('button', { name: '展开 middleware' }));
+    c.pending[0]!.resolve(await c.base.loadChildren(MW));
+    await waitFor(() => expect(document.querySelector(mwFile)).not.toBeNull());
+    // 复现:0 尺寸 + duration → 视口 NaN
+    await waitFor(() => expect(vpT()).toContain('NaN'));
+    const fits = spies.fitView.mock.calls.length;
+    fireEvent.click(await screen.findByRole('button', { name: '收起 middleware' }));
+    await waitFor(() => expect(document.querySelector(mwFile)).toBeNull());
+    await waitFor(() => expect(spies.fitView.mock.calls.length).toBeGreaterThan(fits));
+    for (const [v] of spies.setViewport.mock.calls) {
+      const { x, y, zoom } = v as { x: number; y: number; zoom: number };
+      expect([x, y, zoom].every(Number.isFinite)).toBe(true);
+    }
+  });
+
+  it('自动下探正在加载 middleware 时用户点它:结果照常应用(不被丢弃),并按用户点击锚定', async () => {
+    const c = controlledSource(MW);
+    const s = SAMPLE_REPOS.zustand;
+    const engine = await createInlineEngine();
+    render(
+      <div style={{ width: 1000, height: 700 }}>
+        <GraphView source={c.source} owner={s.owner} repo={s.repo} engine={engine} />
+      </div>,
+    );
+    await waitFor(() => expect(c.pending).toHaveLength(1));
+    fireEvent.click(screen.getByRole('button', { name: '展开 middleware' }));
+    expect(c.calls.filter((x) => x === MW)).toHaveLength(1);
+    c.pending[0]!.resolve(await c.base.loadChildren(MW));
+    await waitFor(() => expect(document.querySelector(mwFile)).not.toBeNull());
+    await waitFor(() => expect(spies.setViewport).toHaveBeenCalledTimes(1));
     expect(screen.queryByText(/失败/)).toBeNull();
   });
 });
