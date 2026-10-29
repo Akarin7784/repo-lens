@@ -124,7 +124,8 @@ describe('<GraphView> 真实接口:聚合边、边界节点、截断提示', () 
     // m:a、m:b、d:a/src、a/r.ts、x、y = 6 个节点;根层 module 作为面包屑保留
     await waitFor(() => expect(status()).toHaveTextContent('当前显示 6 节点 / 1 条边'));
     expect(calls).toEqual([null, 'm:a', 'd:a/src']);
-    expect(screen.getByTestId('node-m:b')).toBeInTheDocument();
+    // 状态行与 flow 同批提交,但 React Flow 在自身 effect 里把 nodes 同步进内部 store 再渲染节点,DOM 会晚一拍出现
+    expect(await screen.findByTestId('node-m:b')).toBeInTheDocument();
 
     fireEvent.click(await screen.findByRole('button', { name: '收起 a/src' }));
     await waitFor(() => expect(status()).toHaveTextContent('当前显示 4 节点 / 0 条边'));
