@@ -33,6 +33,8 @@
   --node-muted: #5c5b59;
   --edge: #8a8579;
 
+  /* 中文衬线:不加载网页字体,按系统已装字体回退(T-225);变量名保留,兼容原 next/font 的写法 */
+  --font-noto-serif-sc: 'Noto Serif CJK SC', 'Source Han Serif SC', 'Source Han Serif CN';
   --font-serif:
     var(--font-source-serif), 'Source Serif 4', var(--font-noto-serif-sc), 'Noto Serif SC',
     'Songti SC', Georgia, serif;

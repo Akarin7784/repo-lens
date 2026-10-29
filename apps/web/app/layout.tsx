@@ -1,23 +1,35 @@
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
-import { Inter, JetBrains_Mono, Noto_Serif_SC, Source_Serif_4 } from 'next/font/google';
+import localFont from 'next/font/local';
 import { THEME_BOOT_SCRIPT } from '../components/theme/theme';
 import './globals.css';
 
-const serif = Source_Serif_4({
-  subsets: ['latin'],
+// 字体随仓库自托管(T-225):构建和运行都不访问外网。文件来自 fontsource 的可变字体 latin 子集(OFL,见 ./fonts/LICENSES.md)。
+// 中文不再加载网页字体,走系统字体回退(见 globals.css 的 --font-noto-serif-sc)。
+const serif = localFont({
+  src: './fonts/source-serif-4-latin-wght-normal.woff2',
+  weight: '200 900',
+  style: 'normal',
   variable: '--font-source-serif',
   display: 'swap',
+  adjustFontFallback: 'Times New Roman',
 });
-// 中文标题回退:Google Fonts 按 unicode-range 分片,只下载页面用到的字;不 preload、swap,不阻塞首屏
-const serifSC = Noto_Serif_SC({
-  weight: ['600'],
-  variable: '--font-noto-serif-sc',
+const sans = localFont({
+  src: './fonts/inter-latin-wght-normal.woff2',
+  weight: '100 900',
+  style: 'normal',
+  variable: '--font-inter',
   display: 'swap',
-  preload: false,
+  adjustFontFallback: 'Arial',
 });
-const sans = Inter({ subsets: ['latin'], variable: '--font-inter', display: 'swap' });
-const mono = JetBrains_Mono({ subsets: ['latin'], variable: '--font-jetbrains', display: 'swap' });
+const mono = localFont({
+  src: './fonts/jetbrains-mono-latin-wght-normal.woff2',
+  weight: '100 800',
+  style: 'normal',
+  variable: '--font-jetbrains',
+  display: 'swap',
+  adjustFontFallback: false,
+});
 
 export const metadata: Metadata = {
   title: 'RepoLens',
@@ -30,7 +42,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       lang="zh-CN"
       data-theme="light"
       suppressHydrationWarning
-      className={`${serif.variable} ${serifSC.variable} ${sans.variable} ${mono.variable}`}
+      className={`${serif.variable} ${sans.variable} ${mono.variable}`}
     >
       <head>
         <script dangerouslySetInnerHTML={{ __html: THEME_BOOT_SCRIPT }} />
