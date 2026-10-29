@@ -7,7 +7,7 @@
       "outputs": ["dist/**", ".next/**", "!.next/cache/**"]
     },
     "typecheck": { "dependsOn": ["^build"] },
-    "test": { "dependsOn": ["^build"] },
+    "test": { "dependsOn": ["^build"], "env": ["TEST_MYSQL_URL", "TEST_REDIS_URL"] },
     "dev": { "dependsOn": ["^build"], "cache": false, "persistent": true }
   }
 }
