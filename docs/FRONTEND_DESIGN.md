@@ -602,6 +602,38 @@ zustand（秒出图）和 zod（默认 module 层、按需下钻）不在 3 分�
 - 真实的 sensitive 排除、三种 409 都无法用现有数据复现,截图用 page.route 模拟;真实 hono 图里只有 TS 文件节点。
 - 屏幕阅读器实机朗读、投屏低亮度、Safari/Firefox 未验证。
 
+### 9.1.1 离线与性能核实(T-223b)
+
+> 以下数据来自本机无头 Chromium(Playwright,生产构建 `next start`,api 在本机 4100,hono repo 2),不代表真实投影机或演示机;节流由 CDP 模拟。
+
+**资源来源**:Shiki 的引擎、语言和主题全部随构建打包,由本站 `/_next/static/chunks/` 提供,运行时不请求任何 CDN。
+- 引擎用 `shiki/engine/javascript`(JS 正则),不加载 `onig.wasm`;构建产物里没有 `.wasm`。
+- 主题(github-light/dark)和 14 种语言都是本地包的动态 import。
+- 字体用 `next/font/google`,在构建时下载并自托管于 `/_next/static/media/*.woff2`,运行时不访问 fonts.googleapis.com / fonts.gstatic.com。
+- 首次打开页面并展开预览:57 个请求,host 全部是本站;没有外部请求,也没有失败请求。
+- 展开预览时新增 1 个 files 接口请求和 26 个 JS chunk,原始约 1.56 MB,gzip 约 250 KB(gzip 大小是本机重新压缩算出的,`next start` 实际是否压缩未核对)。
+- createHighlighterCore 会一次加载全部 14 种语言,不是按当前文件只加载一种。
+
+**断网**:用路由拦截,除 localhost:本站外的所有请求都 abort。预览仍然高亮(src/compose.ts:334 个 token,7 种颜色),截图见 `docs/assets/T-223b/offline-highlight-1440.png`。补充:`context.setOffline(true)` 会连本机请求一起断开,此时 files 请求先失败,显示「无法连接分析服务…」和重试按钮,不会白屏。
+
+**首次点开到出现高亮的耗时**(冷缓存,src/compose.ts,单位 ms,中位数):
+
+| 视口 | 无节流(5 次) | 10Mbps / 20ms RTT(5 次) | 约 Fast 3G 1.6Mbps / 150ms RTT(3 次) |
+|---|---|---|---|
+| 1440×900 | 420 | 1864 | 7371 |
+| 1920×1080 | 383 | 1885 | 7366 |
+
+点击后 Shiki 相关 chunk 全部加载完的耗时:1440×900 无节流下,compose.ts 中位数 61 ms,types.ts 152 ms(Resource Timing,7 次)。节流下的 chunk 耗时没有单独测到。
+
+**大文件主线程阻塞**(1440×900,src/types.ts 前 2000 行,约 19,800 个 token span,7 次,longtask 观察):最长一次 long task 中位数 **732 ms**,点击后 long task 总计中位数 802 ms。这个时长包含 Shiki 同步 tokenize 和 React 渲染 span,没有拆开。小文件 compose.ts 的最长 long task 中位数 179 ms(含首次编译语法)。纯文本会先渲染,高亮在之后替换,所以阻塞发生在代码已经可见之后。
+
+建议(本期未实现,改动不算小):
+1. 把 tokenize 放进 Web Worker,主线程只渲染;
+2. 或用 Shiki 的 grammarState 分批 tokenize,批次之间让出主线程;
+3. 按当前文件只加载需要的语言,减少首次 chunk。
+
+演示时可以优先展示中小文件。
+
 ## 10. 4 周前端任务拆分
 
 | 周 | 任务 | 交付物与验收标准 |

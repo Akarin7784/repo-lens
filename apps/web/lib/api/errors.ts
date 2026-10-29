@@ -29,7 +29,10 @@ export class ApiRequestError extends Error {
     /** 后端或校验给出的原始说明 */
     readonly detail: string,
     readonly status?: number,
-    /** error.details.reason(目前仅 REPO_NOT_READY 带);前端只当字符串,未知值由调用方回退 */
+    /**
+     * error.details.reason(shared 约定目前只有 409 REPO_NOT_READY 带)。来自严格解析时是 shared 枚举值;
+     * 来自宽松解析(looseError)时可能是前端还不认识的字符串,调用方(如 previewErrorOf)负责回退通用文案。
+     */
     readonly reason?: string,
   ) {
     super(`${code}: ${detail}`);
@@ -95,7 +98,7 @@ function looseError(
   };
 }
 
-/** T-223 代码预览:409 REPO_NOT_READY 按 details.reason 的文案;缺失或未知时用 ERROR_TEXT 的通用 409 文案 */
+/** T-223 代码预览:409 REPO_NOT_READY 按 details.reason 的文案;缺失或未知时用 PREVIEW_NOT_READY_FALLBACK */
 export const NOT_READY_TEXT: Record<string, string> = {
   GRAPH_NOT_READY: '分析还没完成,完成后可预览。',
   SNAPSHOT_MISSING: '源码快照已被清理,需要重新分析才能预览。',
@@ -112,7 +115,7 @@ export const EXCLUDED_TEXT: Record<string, string> = {
 };
 export const EXCLUDED_FALLBACK = '该文件已被排除。';
 
-/** 代码预览的错误文案。kind=notice 表示「说明性状态」(不可重试、不用红色),retry 表示可重试 */
+/** 代码预览的错误文案与是否显示重试按钮(FILE_NOT_FOUND、SNAPSHOT_MISSING 等重试无意义的不给重试) */
 export function previewErrorOf(e: unknown): { text: string; retry: boolean } {
   if (e instanceof ApiRequestError) {
     if (e.code === 'FILE_NOT_FOUND') return { text: PREVIEW_FILE_NOT_FOUND, retry: false };
