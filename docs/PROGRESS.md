@@ -149,6 +149,8 @@
 
 - 2026-10-29 18:0x:#69 合并(T-225b 中文回退链与字体许可证修正,提交 b8a0bdf)。中文回退统一为系统无衬线:`--font-cjk-fallback` 为 PingFang SC、Microsoft YaHei、Noto Sans CJK SC,衬线、无衬线、等宽三个栈都把对应西文字体放在最前、中文落到后面的无衬线上(按架构师裁定,不再用中文衬线)。LICENSES.md 按字体 name 表修正:Source Serif 4 的版权行改为 Adobe 并注明保留字体名 Source,sha256 写完整 64 位。我在 head 1e03db2 上独立重跑 install、lint、typecheck、build、全量测试(web 167 等,全过),与最新 main 试合并无冲突,`ci` 与 `smoke` 均绿;断网构建退出码 0;自己用 fontTools 读三个 woff2 的 name 表并与 LICENSES.md 逐项比对一致,sha256 一致,woff2 字节未变;5 个变异检查都被 `cjk-fallback.test.ts` 抓到。未验证:Windows、Mac 的实际渲染(团队机器只有 Linux,截图不能代替,演示机定下来后实机补看并放进演示检查清单)、Safari、Firefox、合并后组合的全量测试。遗留(不阻塞):FRONTEND_DESIGN 演示检查清单里「断网构建与运行」一项仍写「中文标题使用系统衬线字体」,与新方案矛盾,应改为系统无衬线;`layout.tsx` 的注释仍指向 `--font-noto-serif-sc`,应指向 `--font-cjk-fallback`。
 
+- 2026-10-29 18:1x:#70 合并(T-226 纯文档,提交 bc25d1b)。演示清单「断网构建与运行」的中文字体口径改为系统无衬线(`--font-cjk-fallback`),`layout.tsx` 一行注释改指该变量,`FRONTEND_DESIGN.md` 新增 9.1.2:`/files` 行号参数契约 `?line=N&endLine=M`(行号从 1 起、闭区间,只给 `line` 时 `endLine=line`;接口返回完整文件内容并新增 `range: { start, end }`;越界按截断、不报错;`line` 非正整数或 `endLine<line` 返回 400 `BAD_REQUEST`;前端 2000 行上限须包含 `range.end`,超出则放宽到 `range.end+50` 并保留提示)。**契约已定(架构师),尚未实现**:现状仍是 `start/end` 严格校验、后端切片、`start` 越界 400,前端无行号跳转;将在 W3 引用联动开工时由后端与前端在同一个 PR 里改 `packages/shared` 和两端实现。我核对了 head fd4e5dc 的 diff 只含这两个文件(+20/-2),文字与架构师的规则一致,`ci` 与 `smoke` 均绿,CLEAN;因只改文档和注释,未另跑全量测试。
+
 ## 演示检查清单(第 4 周前逐项勾选)
 - [ ] 演示前抽查 hono 的 `embeddingStatus` 为 `ready`(或 `reused`)。
 - [ ] 「镜像构建下载模型」:CI 已验证(GitHub 环境直连 huggingface.co,手动 workflow `worker-model-build.yml` run 40838998679,5 个文件 `sha256sum -c` 全 OK,镜像内 ONNX embedding 维度 384,构建约 58 秒);**演示机(国内网络)上的构建仍待验证**:演示前先在演示机构建好镜像,下载慢时设 `EMBEDDING_MODEL_BASE_URL` 为镜像站(哈希校验不变)。
