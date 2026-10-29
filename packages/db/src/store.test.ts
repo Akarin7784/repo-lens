@@ -242,6 +242,81 @@ function suite(name: string, make: () => Promise<Store>, enabled = true) {
       expect(await s.listCodeChunks(r.id, A)).toEqual([]);
       expect(await s.listCodeChunks(r.id + 999, B)).toEqual([]);
     });
+
+    it('chat_session / chat_message:创建、按 id 读回、写入消息、按 session 列出(P4-c)', async () => {
+      const r = await s.upsertRepo({ url: 'https://github.com/o/chat', owner: 'o', name: 'chat' });
+      const other = await s.upsertRepo({
+        url: 'https://github.com/o/chat2',
+        owner: 'o',
+        name: 'chat2',
+      });
+      const long = '题'.repeat(300);
+      const sess = await s.createChatSession({
+        repoId: r.id,
+        userKey: 'abc'.padEnd(32, '0'),
+        title: long,
+      });
+      expect(sess.id).toBeGreaterThan(0);
+      expect(sess.repoId).toBe(r.id);
+      expect(sess.userKey).toBe('abc'.padEnd(32, '0'));
+      expect(sess.title).toHaveLength(255);
+      expect(sess.createdAt).toBeInstanceOf(Date);
+      expect(await s.getChatSession(sess.id)).toMatchObject({
+        id: sess.id,
+        repoId: r.id,
+        userKey: sess.userKey,
+        title: sess.title,
+      });
+      expect(await s.getChatSession(sess.id + 99999)).toBeNull();
+
+      const nullKey = await s.createChatSession({
+        repoId: other.id,
+        userKey: null,
+        title: null,
+      });
+      expect(nullKey.userKey).toBeNull();
+      expect(nullKey.title).toBeNull();
+      // 别的仓库的 session 也能按 id 读到(归属校验在路由层)
+      expect((await s.getChatSession(nullKey.id))?.repoId).toBe(other.id);
+
+      const user = await s.insertChatMessage({
+        sessionId: sess.id,
+        role: 'user',
+        content: 'createPool 在哪?',
+      });
+      expect(user.id).toBeGreaterThan(0);
+      expect(user).toMatchObject({
+        sessionId: sess.id,
+        role: 'user',
+        content: 'createPool 在哪?',
+        droppedCitations: 0,
+        latencyMs: null,
+      });
+      const cites = [{ id: 1, path: 'src/a.ts', startLine: 1, endLine: 2, nodeId: 'f:src/a.ts' }];
+      const asst = await s.insertChatMessage({
+        sessionId: sess.id,
+        role: 'assistant',
+        content: '在 src/a.ts',
+        citations: cites,
+        droppedCitations: 2,
+        retrievalIds: [11, 22, 33],
+        latencyMs: 1234,
+      });
+      expect(asst).toMatchObject({
+        role: 'assistant',
+        content: '在 src/a.ts',
+        droppedCitations: 2,
+        latencyMs: 1234,
+      });
+      expect(asst.citations).toEqual(cites);
+      expect(asst.retrievalIds).toEqual([11, 22, 33]);
+
+      const listed = await s.listChatMessages(sess.id);
+      expect(listed.map((m) => m.id)).toEqual([user.id, asst.id]);
+      expect(listed.map((m) => m.role)).toEqual(['user', 'assistant']);
+      expect(await s.listChatMessages(nullKey.id)).toEqual([]);
+      expect(await s.listChatMessages(sess.id + 99999)).toEqual([]);
+    });
   });
 }
 
