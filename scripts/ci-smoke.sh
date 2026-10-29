@@ -30,6 +30,42 @@ echo "SMOKE ready_seconds=$((t3 - t2))"
 echo "SMOKE health_body=$body"
 echo "$body" | grep -q '"status":"ok"' || { echo "SMOKE FAIL: /health 返回不含 status ok"; exit 1; }
 
+# T-211c:summary 迁移 0001 在真实 MySQL 8.4 上的幂等与回填检查。
+# 用独立库 mig_check(不碰业务库);旧表结构直接取自 0000_init.sql(迁移前的 repo/summary 定义),
+# 灌旧格式行(含 model='rule')后把 0001 连跑两遍,再断言列、唯一键与回填值。
+# 口令只在容器内经 MYSQL_PWD 传给客户端,不出现在命令行与日志里
+mysql_q() { docker compose exec -T mysql sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -uroot --default-character-set=utf8mb4 -N -B "$@"' _ "$@"; }
+mig_sql() { sed 's/--> statement-breakpoint//' "$1"; }
+old_tables=$(awk '/^CREATE TABLE `(repo|summary)`/,/^\);/' packages/db/migrations/0000_init.sql)
+SHA_OLD=0123456789abcdef0123456789abcdef01234567
+mysql_q -e 'DROP DATABASE IF EXISTS mig_check; CREATE DATABASE mig_check'
+{ echo "$old_tables"; echo 'CREATE INDEX `idx_input` ON `summary` (`input_hash`);'
+  echo "INSERT INTO repo (id, url, last_commit) VALUES (1, 'https://github.com/o/a', '$SHA_OLD'), (2, 'https://github.com/o/b', NULL);"
+  echo "INSERT INTO summary (repo_id, level, target_id, input_hash, model, content) VALUES
+    (1, 'file', 'f:a.ts', REPEAT('a', 64), 'deepseek-chat', 'llm 摘要'),
+    (1, 'file', 'f:b.ts', REPEAT('b', 64), 'rule', '规则摘要'),
+    (1, 'dir', 'm:src', REPEAT('c', 64), 'deepseek-chat', '模块摘要'),
+    (2, 'file', 'f:c.ts', REPEAT('d', 64), 'rule', '无 last_commit');"
+} | mysql_q mig_check
+for i in 1 2; do
+  mig_sql packages/db/migrations/0001_summary_commit.sql | mysql_q mig_check \
+    || { echo "SMOKE FAIL: 0001 第 $i 次执行失败"; exit 1; }
+  echo "SMOKE migration_0001_run_$i=ok"
+done
+cols=$(mysql_q mig_check -e "SELECT GROUP_CONCAT(COLUMN_NAME ORDER BY COLUMN_NAME) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='mig_check' AND TABLE_NAME='summary' AND COLUMN_NAME IN ('commit_sha','source')")
+idx=$(mysql_q mig_check -e "SELECT GROUP_CONCAT(DISTINCT INDEX_NAME ORDER BY INDEX_NAME) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA='mig_check' AND TABLE_NAME='summary' AND INDEX_NAME LIKE 'uk_%'")
+ukcols=$(mysql_q mig_check -e "SELECT GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA='mig_check' AND TABLE_NAME='summary' AND INDEX_NAME='uk_target_commit'")
+rows=$(mysql_q mig_check -e "SELECT GROUP_CONCAT(CONCAT(target_id,'=',commit_sha,'/',source) ORDER BY target_id SEPARATOR ' ') FROM summary")
+ver=$(mysql_q -e 'SELECT VERSION()')
+echo "SMOKE migration_0001 mysql=$ver cols=$cols uk=$idx uk_cols=$ukcols"
+echo "SMOKE migration_0001 rows=$rows"
+[ "$cols" = "commit_sha,source" ] || { echo "SMOKE FAIL: 缺 commit_sha/source 列"; exit 1; }
+[ "$idx" = "uk_target_commit" ] || { echo "SMOKE FAIL: 唯一键应只有 uk_target_commit(uk_target 应已删除)"; exit 1; }
+[ "$ukcols" = "repo_id,level,target_id,commit_sha" ] || { echo "SMOKE FAIL: uk_target_commit 列不对"; exit 1; }
+want="f:a.ts=$SHA_OLD/llm f:b.ts=$SHA_OLD/rule f:c.ts=/rule m:src=$SHA_OLD/llm"
+[ "$rows" = "$want" ] || { echo "SMOKE FAIL: 回填不符,期望 $want"; exit 1; }
+mysql_q -e 'DROP DATABASE mig_check'
+
 # web 也要能响应(不要求 200 的具体内容)
 code=$(curl -s -o /dev/null -w '%{http_code}' --retry 15 --retry-delay 2 --retry-all-errors http://localhost:3000/ || true)
 echo "SMOKE web_status=$code"
