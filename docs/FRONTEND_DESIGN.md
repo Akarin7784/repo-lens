@@ -641,3 +641,14 @@ zustand（秒出图）和 zod（默认 module 层、按需下钻）不在 3 分�
 - 窄屏状态条:状态条 `max-w-[calc(100%-5rem)] truncate`,右侧给缩放按钮留出 5rem,长路径省略号截断;「Esc 取消」提示 `hidden md:inline`,触屏窄屏不显示。
 - 跳转中保留选中的例外:跳转目标逐层展开期间,选中节点暂时不在图里也不清空选中(否则右栏闪空);若展开被中断(用户收起了相关目录、请求失败或 autoFocus 变化),`jumpStopped` 计数触发收尾:清掉 pendingJump,选中节点也不在图里时取消选中,不留下看不见的选中。
 - 截图(生产构建 `next build` + `next start`,浅色):`docs/assets/T-222e/tag-rule.png`(hono `f:src/jsx/dom/client.ts`)、`tag-llm.png`(hono `f:src/jsx/base.ts`,摘要文本来自本地 `LLM_PROVIDER=fake`)、`in-cycle-badge.png`(zod `f:packages/zod/src/v4/core/core.ts`)、`narrow-status-bar.png`(390×844)。
+
+### 按路径搜索(T-224)
+
+- 位置:图区左上角 `<GraphSearch>`(`apps/web/components/graph/GraphSearch.tsx`),宽 `calc(100%-14rem)`、最大 22rem,给右上「全部收起 / 外部依赖」留位;窄屏同样可用,结果列表最高 `50dvh`。
+- 范围:**只搜前端已加载过的节点**(当前画布累计加载的 module/dir/file,不含 external)。未加载节点的服务端搜索依赖后端接口(目前只有按 `parentId` 取一层的 `/graph`),未做。
+- 匹配与排序(`lib/graph/search.ts`,不区分大小写):文件名完全相等 > 文件名前缀 > 文件名包含 > 路径以查询结尾 > 路径包含 > 文件名子序列 > 路径子序列;同分按路径短优先、再按字典序。查询含 `/` 时只按整条路径匹配。最多显示 8 条,每条显示相对路径和类型图标(◆ 模块 / ▤ 目录 / ▢ 文件,带屏幕阅读器文字)。无结果显示「没有匹配的节点」。
+- 键盘:`/` 聚焦(焦点在输入框/可编辑区或带修饰键时不拦截);↑↓ 移动;Enter 定位;Esc 先清空再失焦,并阻止冒泡,不会同时取消图上的选中。
+- 定位:复用详情跳转的 `startJump`——目标未显示时按 `parentId` 链从最外层收起的祖先开始逐层展开(`focus.ts` 的 `nextFocusStep` 修正:祖先被收起时先展开最外层,而不是卡在已加载但不可见的内层容器),然后选中(写入 `?node=`、右栏详情)并 `fitView` 居中到该节点(padding 0.6,maxZoom 1.2)。
+- 无障碍:输入框 `role=combobox` + `aria-expanded/aria-controls/aria-activedescendant`,结果 `role=listbox`/`option` + `aria-selected`。
+- 已知限制:分析进行中顶部居中的进度横幅与搜索框同为 `z-20`,窄屏时可能重叠。
+- 截图:`docs/assets/T-224/`。

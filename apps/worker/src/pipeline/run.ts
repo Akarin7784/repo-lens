@@ -458,7 +458,7 @@ export async function runSummaries(
       return null;
     }
   };
-  // 跨 commit 复用:逐节点按 (level, targetId, inputHash) 查库(idx_input),优先当前 commit 的行;
+  // 跨 commit 复用:逐节点按 (level, targetId, inputHash) 查库(复合索引 idx_reuse,迁移 0002),优先当前 commit 的行;
   // 不再把仓库所有 commit 的摘要整表读进内存。旧 commit 行的清理跟随 D5 快照保留策略(见 BACKEND_AI_DESIGN)
   const lookup = (level: SummaryLevel, targetId: string, hash: string) =>
     store.findSummaryByInput(repoId, level, targetId, hash, commitSha);

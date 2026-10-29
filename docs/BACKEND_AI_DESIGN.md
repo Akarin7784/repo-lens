@@ -196,18 +196,20 @@ CREATE TABLE summary (
   source ENUM('llm','rule') NOT NULL DEFAULT 'llm', -- T-211c:规则摘要(熔断/降级/敏感文件)为 rule
   content TEXT, tokens_in INT, tokens_out INT,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE KEY uk_target_commit (repo_id, level, target_id, commit_sha), KEY idx_input (input_hash)
+  UNIQUE KEY uk_target_commit (repo_id, level, target_id, commit_sha), KEY idx_input (input_hash),
+  KEY idx_reuse (repo_id, level, target_id, input_hash)   -- 迁移 0002,摘要复用逐节点查询
 );
 -- T-211c 迁移 0001_summary_commit 可重复执行(MariaDB / MySQL 8.4):旧行 commit_sha 回填为 repo.last_commit,
 -- model='rule' 的行回填 source='rule'。唯一键保留 level:同一 target_id 理论上可在不同 level 各有一行。
--- 复用:worker 逐节点按 (repo_id, level, target_id, input_hash) 查一行(走 idx_input,优先当前 commit),
+-- 复用:worker 逐节点按 (repo_id, level, target_id, input_hash) 查一行(走复合索引 idx_reuse,迁移 0002;优先当前 commit),
 --   命中即为当前 commit 写一份副本,content 与 source 保持原样;不再整表读该仓库所有 commit 的摘要。
 -- 旧 commit 行的清理跟随 D5(源码快照保留策略):D5 定下后,summary 只保留与快照相同的那批 commit
 --   (默认建议最近 10 个,LRU),其余按 (repo_id, commit_sha) 删除;D5 未定前不自动清理。
 -- summary 孤儿行清理(手动,不自动删数据):repo.last_commit 为 NULL 的仓库,迁移后旧行 commit_sha 保持 '',
 --   任何 commit 都读不到,只能被哈希复用。确认无用后可手动执行:
 --     SELECT repo_id, COUNT(*) FROM summary WHERE commit_sha = '' GROUP BY repo_id;   -- 先看
---     DELETE FROM summary WHERE commit_sha = '';                                     -- 确认后再删
+--     DELETE FROM summary WHERE repo_id = ? AND commit_sha = '';                     -- 确认后按仓库逐个删(? 换成上一步看到的 repo_id)
+--   DELETE 必须带 repo_id,不要不加条件地清掉所有仓库的 commit_sha='' 行。
 --   滚动发布期间旧 worker 写入的行也是 commit_sha=''(见 ARCHITECTURE §6:api 与 worker 要一起升级),同样适用。
 CREATE TABLE chat_session (
   id BIGINT PRIMARY KEY AUTO_INCREMENT, repo_id BIGINT NOT NULL, user_key VARCHAR(64),
@@ -502,6 +504,7 @@ T-210b（DeepSeek，D1）：
 - 规则表在 `packages/shared/src/sensitive.ts`（摘要、embedding 切块、T-213 `/files` 共用一份）：
   - 路径（按文件名）：`.env*`、`*.pem`、`id_rsa*` / `id_ed25519*` 等 SSH 私钥、`*.key`、证书 `*.crt` / `*.cer` / `*.der` / `*.p7b`、密钥库 `*.p12` / `*.pfx` / `*.jks` / `*.keystore`、`.npmrc`、`.netrc`、`.pgpass`、`.htpasswd`、凭据文件 `credentials` 与 `secrets`（含前缀写法，如 `~/.aws/credentials`、`.git-credentials`、`gcp-credentials.json`、`credentials.env`、`app-secrets.json`、`.secrets`）；两条共用一份扩展名表：无扩展名或 `json` / `yaml` / `yml` / `toml` / `ini` / `env` / `xml` / `txt` / `csv` / `conf` / `cfg` / `properties`，`credentials.ts`、`secrets.ts` 这类源码按内容规则判断。
   - 内容特征：`-----BEGIN … PRIVATE KEY-----`、`AKIA` / `ASIA` + 16 位、`ghp_` / `gho_` / `ghu_` / `ghs_` / `ghr_` / `github_pat_`、`sk-`（含 `sk-proj-`、`sk-ant-`）+ ≥20 位、Slack `xox?-`、Google `AIza…`、Stripe `sk_live_` / `rk_live_` / `sk_test_` / `rk_test_`、npm `_authToken=`、JSON（如 package.json）里的 `"_authToken": "…"`、`.yarnrc.yml` 的 `npmAuthToken:`（均 `${ENV}` 引用除外）与 `npm_` + 36 位、JWT（`eyJ….eyJ….…` 三段）。往 `SENSITIVE_PATH_RULES` / `SENSITIVE_CONTENT_RULES` 追加即可扩展。日志和提示里只出现规则 id，不出现命中内容。
+  - **已知误判(取舍,不修)**：`.yarnrc.yml` 的 `npmAuthToken:` 规则按「行首键名 + ≥8 位值 + 行尾结束」匹配，无法区分 YAML 明文值和 JS 表达式。源码里行尾不带逗号的 `npmAuthToken: process.env.X`(例如对象最后一个属性省略逗号、值里只含字母数字和 `.`)会被判为敏感，整个文件不送模型、只给规则摘要。带逗号(`npmAuthToken: token,`)、值里含 `_`(`process.env.NPM_TOKEN`)或 `${ENV}` 引用不受影响。宁可少送一个文件也不漏掉真实 token，所以接受这个误判；`sensitive.test.ts` 有用例固定这一行为。
 - 命中后：
   - 摘要：只做规则摘要，输入只有路径、语言、行数。不含源码，也不含导出名和 import：导出名是从源码里抽出来的标识符，可能就是常量名或值本身，与其逐个甄别不如一律不带。`contentHash` 也置空。worker 读文件时判定（`exclusionRule(path, code)`），`summarizeRepo` 见到 `sensitive` 再强制一次。
   - README / package.json 内容命中特征时不进 repo 提示词。
