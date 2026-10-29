@@ -226,7 +226,7 @@ function aggregateEdges(raw: GraphEdge[], visibleAncestor: (id: string) => strin
 详情面板内容（`<NodeDetail>`）：
 - 头部：图标 + 路径面包屑（可点，用于跳转父节点）+ 类型标签。
 - 摘要：LLM 生成的 `summary`。为 `null`（摘要还没生成，后台仍在 summarizing）时显示 3 行骨架屏，收到 `done` 进度事件后重新请求。
-- 指标：LOC、导出符号、入度/出度、`topDependents`（被依赖最多的节点，可点击跳转）、是否处于循环依赖中（加分项，来自 `meta.cycles`）。
+- 指标：LOC、导出符号、入度/出度、`topDependents`（被依赖最多的节点，可点击跳转）、是否处于循环依赖中（加分项，来自节点详情接口的 `inCycle`；图状态不再收集 `meta.cycles`，T-203）。
 - 邻居列表：「依赖于」和「被依赖」两个 tab，各自可点击跳转。
 - 代码预览：Shiki（浅色用 `github-light` 叠加纸色底，深色用 `vitesse-dark`，见第 8 章），懒加载，`GET /api/repos/:id/files?path=&start=&end=`；支持行区间高亮（与引用共用）；超过 2,000 行时用虚拟滚动。
 - 操作：「问问这个模块」，点击后把节点加入对话上下文并切换到对话 tab。

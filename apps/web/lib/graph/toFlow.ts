@@ -18,7 +18,7 @@ export type RepoEdgeData = {
   kind: GraphEdge['kind'];
   /** 有选中节点时:与之相连为 on,否则 dim;无选中为 undefined */
   highlight?: 'on' | 'dim';
-  /** 在 meta.cycles 的某个环上 */
+  /** 环边:只来自 edge.inCycle === true(T-203 起不再读 meta.cycles) */
   cycle?: boolean;
 };
 export type RepoFlowEdge = Edge<RepoEdgeData, 'weighted'>;
