@@ -553,6 +553,30 @@ describe.skipIf(!hasRedis)('路由(真实 Redis + 内存 Store)', () => {
     return { repoId: repo.id, jobId };
   }
 
+  it('inCycle 由存储的边现场计算:stats 为空(重跑复用已入库图)时 /graph 与 /nodes 仍一致', async () => {
+    const app = make();
+    const { repoId, jobId } = await seedGraph();
+    // 模拟重试/重跑:图已入库走 "跳过解析",stats 被写成 {}(或残留错误的 cycles)
+    await store.updateTask(jobId, { stats: {} });
+    for (const k of await redis.keys(redisKeys.graphPattern(repoId, SHA))) await redis.del(k);
+    const root = GraphDataSchema.parse((await app.inject(`/api/repos/${repoId}/graph`)).json());
+    expect(root.edges.find((e) => e.id === 'a:m:src/a->m:src/b')?.inCycle).toBe(true);
+    expect(root.meta.cycles).toEqual([['m:src/a', 'm:src/b']]);
+    const sub = GraphDataSchema.parse(
+      (await app.inject(`/api/repos/${repoId}/graph?parentId=m:src/a`)).json(),
+    );
+    expect(sub.edges.some((e) => e.inCycle === true)).toBe(true);
+    const get = async (id: string) =>
+      NodeDetailSchema.parse((await app.inject(`/api/repos/${repoId}/nodes/${id}`)).json());
+    // 环:a/index → a/x/deep → b/index → b/util → a/index(type-only 边不算)
+    for (const f of ['src/a/index.ts', 'src/a/x/deep.ts', 'src/b/index.ts', 'src/b/util.ts'])
+      expect((await get(`f:${f}`)).inCycle).toBe(true);
+    expect((await get('f:main.ts')).inCycle).toBe(false);
+    await store.updateTask(jobId, { stats: { cycles: [['f:main.ts']] } });
+    expect((await get('f:main.ts')).inCycle).toBe(false);
+    await app.close();
+  });
+
   describe('GET /api/repos/:id 的 repo 与 commitSha', () => {
     const SHA2 = 'b'.repeat(40);
     const detail = async (app: ReturnType<typeof make>, id: number) =>
@@ -927,12 +951,12 @@ describe.skipIf(!hasRedis)('路由(真实 Redis + 内存 Store)', () => {
     expect(await get('m:src/a')).toMatchObject({ summary: 'mod A', summarySource: 'llm' });
     expect(await get('f:src/b/util.ts')).toMatchObject({ summary: 'util', summarySource: 'rule' });
     expect(await get('f:main.ts')).toMatchObject({ summary: null, summarySource: null });
-    // inCycle:SCC 成员集合 [src/a/index.ts, src/b/util.ts]
+    // inCycle:由存储的边现场算 SCC = {a/index, a/x/deep, b/index, b/util}(不读 stats.cycles)
     expect((await get('f:src/a/index.ts')).inCycle).toBe(true);
     expect((await get('f:src/b/util.ts')).inCycle).toBe(true);
     expect((await get('m:src/a')).inCycle).toBe(true);
     expect((await get('f:main.ts')).inCycle).toBe(false);
-    expect((await get('f:src/a/x/deep.ts')).inCycle).toBe(false);
+    expect((await get('f:src/a/x/deep.ts')).inCycle).toBe(true);
     expect((await get('x:react')).inCycle).toBe(false);
     expect((await app.inject(`/api/repos/${repoId}/nodes/f:nope.ts`)).statusCode).toBe(404);
     await app.close();

@@ -116,7 +116,7 @@
 - 2026-10-29 15:2x:#51 合并(前端标签与 #49 后续,提交 9f2e777)。我在最新提交 a171a40 上独立重跑 install、lint、typecheck、build、test(web 108 等,全过),`ci` 与 `smoke` 绿,与 main 试合并无冲突。内容:节点详情新增来源标签(rule「规则摘要」、llm「AI 生成」、null 不显示)和「↻ 在环中」标签(与环边同色,缺省按 null/false);窄屏状态条限宽且「Esc 取消」隐藏;`55vh` 改 `55dvh`;README 改写(先 `pnpm build`,api 与 worker 用 `pnpm --filter … start`);跳转逐层展开被中断后清理图里已不存在的选中。变异检查:去掉清理那行,新测试失败;把来源标签条件改恒真,3 个测试失败。截图 `docs/assets/T-222e/` 4 张(`tag-llm` 的摘要文字来自 fake provider)。后续项(非阻塞):README 一行注释写成 `turbo run dev:web`,与实际 `turbo run dev` 不符;清理 effect 补 eslint-disable 及原因;根目录 `pnpm dev` 跑不全(架构师定为 T-214 之后,让 api 与 worker 自己读根 `.env` 并补 worker dev 脚本);hono 的 `inCycle` 全为 false 为演示阻塞项,后端正在修。
 
 ## 演示检查清单(第 4 周前逐项勾选)
-- [ ] 演示前抽查 hono 的在环节点:节点详情里环上的文件显示「在环中」,数量与状态栏环边数相符(`inCycle` 须与图投影同源,不依赖 `stats`)。
+- [ ] 演示前抽查 hono 的在环节点:节点详情里环上的文件显示「在环中」,数量与状态栏环边数相符(`inCycle` 须与图投影同源,不依赖 `stats`)。 具体抽查:`/nodes` 对 `src/helper/streaming/index.ts`、`src/helper/streaming/text.ts`、`src/jsx/dom/render.ts` 返回 true,`src/hono.ts` 为 false;ed1d5f7 应为 5 个环、12 个文件(CI smoke 的 `ci-smoke-cycles.mjs` 同样断言)。
 - [ ] 演示机内存至少 4 GB(本地 e5 embedding 峰值约 2.5 GB,见 D4 与 T-214);embedding 批大小可配置。
 - [x] summary 迁移 0001 在 MySQL 8.4 上的幂等与回填:CI smoke 已验证(8.4.13)。
 - [ ] 演示机拉代码后先在仓库根目录运行 `pnpm build`(或 `pnpm --filter @repolens/shared build`),避免 shared 旧构建导致错误码显示异常。
