@@ -49,6 +49,8 @@ export interface LlmGatewayOptions {
 
 const CENT = 10_000; // micro-USD
 
+const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
 /** 缓存 key 的 hash:模型 + 影响输出的全部请求字段 */
 export function cacheHash(req: LlmCall): string {
   const body = JSON.stringify({
@@ -119,13 +121,21 @@ export class LlmGateway {
 
     const hit = parseCached(await this.o.kv.get(cacheKey));
     if (hit) {
-      await this.o.usage.insertLlmUsage({
-        ...owner,
-        ...hit.usage,
-        costMicroUsd: 0,
-        cacheHit: true,
-        ok: true,
-      });
+      // 命中行只做审计:写库失败只 warn、照常返回命中结果(不花钱,不该让调用方重试再调模型)
+      try {
+        await this.o.usage.insertLlmUsage({
+          ...owner,
+          ...hit.usage,
+          costMicroUsd: 0,
+          cacheHit: true,
+          ok: true,
+        });
+      } catch (e) {
+        this.warn(
+          { ...owner, cacheHit: true, err: errMsg(e) },
+          'llm usage cache-hit row write failed',
+        );
+      }
       return { ...hit, model: call.model, costMicroUsd: 0, cacheHit: true };
     }
 
@@ -157,10 +167,10 @@ export class LlmGateway {
       res.usage.cachedTokensIn ?? 0,
     );
     // 与流式路径一致:addSpend 与 insert 都成功才算记过账;任一步抛错包成 LLM_UNAVAILABLE 并补一行 ok=0
-    let spent = false;
+    // mark.counted:第一次 INCRBY(日预算)成功即置位;addSpend 部分成功后抛错时补行仍带真实 cost
+    const mark = { counted: false };
     try {
-      await this.addSpend(cost, taskId);
-      spent = true;
+      await this.addSpend(cost, taskId, mark);
       await this.o.usage.insertLlmUsage({
         ...owner,
         tokensIn: res.usage.tokensIn,
@@ -170,18 +180,23 @@ export class LlmGateway {
         ok: true,
       });
     } catch (err) {
-      await this.failRowSafe(owner, spent ? { ...res.usage, cost } : undefined, err);
+      await this.failRowSafe(owner, mark.counted ? { ...res.usage, cost } : undefined, err);
       throw new LlmError('LLM_UNAVAILABLE', 'LLM 用量记账失败', undefined, { cause: err });
     }
-    await this.o.kv.set(
-      cacheKey,
-      JSON.stringify({
-        text: res.text,
-        usage: { tokensIn: res.usage.tokensIn, tokensOut: res.usage.tokensOut },
-      }),
-      'EX',
-      LLM_CACHE_TTL_S,
-    );
+    // 账已记成功;缓存只是优化,写缓存失败只 warn、照常返回(抛错会让 summarize 重试 → 再调模型再计费)
+    try {
+      await this.o.kv.set(
+        cacheKey,
+        JSON.stringify({
+          text: res.text,
+          usage: { tokensIn: res.usage.tokensIn, tokensOut: res.usage.tokensOut },
+        }),
+        'EX',
+        LLM_CACHE_TTL_S,
+      );
+    } catch (e) {
+      this.warn({ ...owner, err: errMsg(e) }, 'llm cache write failed');
+    }
     return { ...res, model: call.model, costMicroUsd: cost, cacheHit: false };
   }
 
@@ -260,9 +275,9 @@ export class LlmGateway {
         if (this.o.log) this.o.log.warn(w, msg);
         else console.warn(msg, w);
       }
+      const mark = { counted: false };
       try {
-        await this.addSpend(cost, taskId);
-        spentRow = { tokensIn: usage.tokensIn, tokensOut: usage.tokensOut, cost };
+        await this.addSpend(cost, taskId, mark);
         await this.o.usage.insertLlmUsage({
           ...owner,
           tokensIn: usage.tokensIn,
@@ -275,6 +290,8 @@ export class LlmGateway {
       } catch (err) {
         // 记账失败:统一成 LlmError;recorded 仍为 false,由 finally 补一行 ok=0
         bookErr = err;
+        // 日预算 INCRBY 已成功(哪怕之后 expire/任务预算抛错):补行带真实 cost
+        if (mark.counted) spentRow = { tokensIn: usage.tokensIn, tokensOut: usage.tokensOut, cost };
         throw new LlmError('LLM_UNAVAILABLE', 'LLM 用量记账失败', undefined, { cause: err });
       }
       return {
@@ -306,9 +323,7 @@ export class LlmGateway {
     spent?: { tokensIn: number; tokensOut: number; cost: number },
     cause?: unknown,
   ) {
-    const warn = (w: object, msg: string) =>
-      this.o.log ? this.o.log.warn(w, msg) : console.warn(msg, w);
-    const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
+    const warn = (w: object, msg: string) => this.warn(w, msg);
     if (spent)
       warn(
         {
@@ -337,6 +352,12 @@ export class LlmGateway {
     }
   }
 
+  /** 结构化告警:只带归属、token、cost、err.message,不含正文/key/IP */
+  private warn(w: object, msg: string) {
+    if (this.o.log) this.o.log.warn(w, msg);
+    else console.warn(msg, w);
+  }
+
   private async checkBudget(taskId?: number) {
     const daily = this.o.dailyBudgetCents * CENT;
     const spent = await this.spentToday();
@@ -360,10 +381,18 @@ export class LlmGateway {
     }
   }
 
-  private async addSpend(cost: number, taskId?: number) {
-    if (cost <= 0) return;
+  /**
+   * 累加 Redis 预算。`mark.counted` 在日预算 INCRBY 成功后立即置位(cost<=0 无需计入,也视为已计入),
+   * 之后 expire / 任务预算 INCRBY 抛错时调用方据此知道日预算已扣,补行带真实 cost。
+   */
+  private async addSpend(cost: number, taskId: number | undefined, mark: { counted: boolean }) {
+    if (cost <= 0) {
+      mark.counted = true;
+      return;
+    }
     const day = this.k(redisKeys.llmSpendDay(this.now()));
     await this.o.kv.incrby(day, cost);
+    mark.counted = true;
     await this.o.kv.expire(day, LLM_SPEND_DAY_TTL_S);
     if (taskId != null) {
       const tk = this.k(redisKeys.llmSpendTask(taskId));

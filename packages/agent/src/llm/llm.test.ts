@@ -394,6 +394,80 @@ describe('complete() 记账失败(与流式路径对齐)', () => {
     expect(warns).toEqual([]);
   });
 
+  it('记账成功后写缓存抛错:只 warn,照常返回结果,不抛;只一行 ok=1、预算只计一次', async () => {
+    const { gw, usage, warns } = setup();
+    const kv = (gw as unknown as { o: { kv: MemKv } }).o.kv;
+    kv.set = async () => {
+      throw new Error('redis set down');
+    };
+    const r = await gw.complete(req('hello'));
+    expect(r.cacheHit).toBe(false);
+    expect(r.costMicroUsd).toBeGreaterThan(0);
+    expect((await usage.llmUsageByTask(11)).map((x) => [x.ok, x.costMicroUsd])).toEqual([
+      [true, r.costMicroUsd],
+    ]);
+    expect(await gw.spentToday()).toBe(r.costMicroUsd);
+    expect(warns.map((w) => w.msg)).toEqual(['llm cache write failed']);
+    expect(warns[0]!.obj).toMatchObject({ purpose: 'summary', err: 'redis set down' });
+    expect(JSON.stringify(warns[0]!.obj)).not.toContain('hello');
+  });
+
+  it('缓存命中时写命中行抛错:只 warn,照常返回命中结果', async () => {
+    const { gw, warns } = setup({
+      insertFails: (row) => (row as { cacheHit?: boolean }).cacheHit === true,
+    });
+    const first = await gw.complete(req('hello'));
+    const r = await gw.complete(req('hello'));
+    expect(r).toMatchObject({ cacheHit: true, costMicroUsd: 0, text: first.text });
+    expect(await gw.spentToday()).toBe(first.costMicroUsd);
+    expect(warns.map((w) => w.msg)).toEqual(['llm usage cache-hit row write failed']);
+    expect(JSON.stringify(warns[0]!.obj)).not.toContain('hello');
+  });
+
+  it('cost=0(零价模型)时 insert 抛错:视为已计入,补行带真实 token、cost 0', async () => {
+    const { gw, usage, warns } = setup({ insertFails: (row) => row.ok });
+    (gw as unknown as { o: { prices: PriceTable } }).o.prices = {
+      ...PRICES,
+      'zero-model': { inputPerMTok: 0, outputPerMTok: 0 },
+    };
+    const err = (await gw
+      .complete(req('hello', { model: 'zero-model' }))
+      .catch((e: unknown) => e)) as LlmError;
+    expect(err.code).toBe('LLM_UNAVAILABLE');
+    const rows = await usage.llmUsageByTask(11);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ ok: false, costMicroUsd: 0 });
+    expect(rows[0]!.tokensIn).toBeGreaterThan(0);
+    expect(warns.map((w) => w.msg)).toEqual(['llm usage insert failed after spend counted']);
+  });
+
+  for (const stage of ['expire', 'task-incrby'] as const) {
+    it(`addSpend 部分成功(日预算 INCRBY 后 ${stage} 抛错):LlmError,补行带真实 cost`, async () => {
+      const { gw, usage, warns } = setup();
+      const kv = (gw as unknown as { o: { kv: MemKv } }).o.kv;
+      const boom = new Error('redis partial');
+      if (stage === 'expire')
+        kv.expire = async () => {
+          throw boom;
+        };
+      else {
+        const orig = kv.incrby.bind(kv);
+        kv.incrby = async (k, n) => {
+          if (k.includes('task')) throw boom;
+          return orig(k, n);
+        };
+      }
+      const err = (await gw.complete(req('hello')).catch((e: unknown) => e)) as LlmError;
+      expect(err.code).toBe('LLM_UNAVAILABLE');
+      expect(err.cause).toBe(boom);
+      const spent = await gw.spentToday();
+      expect(spent).toBeGreaterThan(0);
+      const rows = await usage.llmUsageByTask(11);
+      expect(rows.map((x) => [x.ok, x.costMicroUsd])).toEqual([[false, spent]]);
+      expect(warns.map((w) => w.msg)).toEqual(['llm usage insert failed after spend counted']);
+    });
+  }
+
   it('模型失败时补行也抛错:仍抛 LLM 调用失败,不被盖掉', async () => {
     const { gw, warns } = setup({ insertFails: () => true });
     (gw as unknown as { o: { client: FakeLlm } }).o.client = new FakeLlm({ fail: () => true });
