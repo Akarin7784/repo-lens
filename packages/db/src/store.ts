@@ -183,6 +183,18 @@ export interface Store {
   replaceCodeChunks(repoId: number, commitSha: string, rows: CodeChunkRow[]): Promise<void>;
   /** T-214:(repo, commit) 的全部切块,按 id 升序(关键词检索在进程内打分) */
   listCodeChunks(repoId: number, commitSha: string): Promise<CodeChunkRow[]>;
+  /** P4-c:新建 chat_session;title 截到 255(调用方也可先截) */
+  createChatSession(input: {
+    repoId: number;
+    userKey: string | null;
+    title: string | null;
+  }): Promise<ChatSessionRow>;
+  /** P4-c:按 id 读会话;不存在返回 null(路由再校验是否属于该 repo) */
+  getChatSession(id: number): Promise<ChatSessionRow | null>;
+  /** P4-c:写入一条 chat_message,返回带自增 id 的行(done.messageId 用) */
+  insertChatMessage(input: ChatMessageInput): Promise<ChatMessageRow>;
+  /** P4-c:某会话全部消息,按 id 升序(契约测试与运维排查) */
+  listChatMessages(sessionId: number): Promise<ChatMessageRow[]>;
   close(): Promise<void>;
 }
 
@@ -197,6 +209,36 @@ export interface CodeChunkRow {
   qdrantPointId: string;
 }
 
+/** P4-c:chat_session 一行 */
+export interface ChatSessionRow {
+  id: number;
+  repoId: number;
+  userKey: string | null;
+  title: string | null;
+  createdAt: Date;
+}
+/** P4-c:写入 chat_message 的输入(citations / retrievalIds 原样存 json) */
+export interface ChatMessageInput {
+  sessionId: number;
+  role: 'user' | 'assistant';
+  content: string;
+  citations?: unknown;
+  droppedCitations?: number;
+  retrievalIds?: unknown;
+  latencyMs?: number | null;
+}
+/** P4-c:chat_message 一行 */
+export interface ChatMessageRow {
+  id: number;
+  sessionId: number;
+  role: 'user' | 'assistant';
+  content: string;
+  citations: unknown;
+  droppedCitations: number;
+  retrievalIds: unknown;
+  latencyMs: number | null;
+  createdAt: Date;
+}
 export const LLM_PURPOSES = ['summary', 'embed', 'chat', 'rerank', 'verify'] as const;
 export type LlmPurpose = (typeof LLM_PURPOSES)[number];
 export interface LlmUsageInput {
