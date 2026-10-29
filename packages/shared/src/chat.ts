@@ -22,7 +22,8 @@ export type Citation = z.infer<typeof CitationSchema>;
 export const CitationEventSchema = z.object({ event: z.literal('citation'), data: CitationSchema });
 
 export const ChatDoneSchema = z.object({
-  messageId: z.number().int().positive(),
+  /** P4:落库的 assistant 消息 id;写 assistant 消息失败时 done 不带 messageId(不兜底、不造假 id)。前端 #99 已按可选处理 */
+  messageId: z.number().int().positive().optional(),
   /** 本轮所属 chat_session;schema 上可选(只增不改),服务端始终填写。前端下一轮请求带回它即可续聊 */
   sessionId: z.number().int().positive().optional(),
   droppedCitations: z.number().int().nonnegative(),
