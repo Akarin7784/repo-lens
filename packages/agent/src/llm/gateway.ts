@@ -43,6 +43,8 @@ export interface LlmGatewayOptions {
   /** key 前缀,测试/共用 Redis 时隔离用 */
   keyPrefix?: string;
   now?: () => Date;
+  /** 告警日志(不传则用 console.warn);只记归属与 token 数,不含正文 */
+  log?: { warn(obj: object, msg: string): void };
 }
 
 const CENT = 10_000; // micro-USD
@@ -189,6 +191,8 @@ export class LlmGateway {
    * - 建连失败 / 中途断流 / 没给 usage 就结束:写 ok=0 的 llm_usage,抛 LlmError('LLM_UNAVAILABLE')。
    *   已经吐出的正文不收回,由调用方决定怎么收尾。熔断计数由 BreakerClient 负责。
    * - 用户中止(signal.aborted):写 ok=0、不计花费,抛 LlmError('LLM_UNAVAILABLE', 'LLM 调用已取消')。
+   * - usage 带 `estimated`(服务商缺 usage,但 stop + [DONE] 正常结束):记 ok=1、按估算 token 计花费,
+   *   打 estimated 告警日志,返回值带 `usageEstimated: true`。
    * - 正常结束时 generator 的返回值是 LlmResult(text 为全文);输出被 max_tokens 截断时照常记账,返回值带 `truncated: true`。
    */
   async *stream(req: LlmRequest): AsyncGenerator<LlmStreamChunk, LlmResult> {
@@ -216,11 +220,13 @@ export class LlmGateway {
     let text = '';
     let usage: LlmUsage | undefined;
     let truncated = false;
+    let estimated = false;
     try {
       for await (const ev of this.o.client.stream(call)) {
         if (ev.type === 'usage') {
           usage = ev.usage;
           truncated = ev.truncated === true;
+          estimated = ev.estimated === true;
         } else if (ev.text) {
           text += ev.text;
           yield { text: ev.text };
@@ -240,6 +246,19 @@ export class LlmGateway {
     }
 
     const cost = costMicroUsd(price, usage.tokensIn, usage.tokensOut, usage.cachedTokensIn ?? 0);
+    if (estimated) {
+      // llm_usage 没有「估算」列(不加列、不迁移):行照常 ok=1,估算只靠这条告警日志区分
+      const w = {
+        ...owner,
+        estimated: true,
+        tokensIn: usage.tokensIn,
+        tokensOut: usage.tokensOut,
+        costMicroUsd: cost,
+      };
+      const msg = 'llm usage estimated: provider sent no usage';
+      if (this.o.log) this.o.log.warn(w, msg);
+      else console.warn(msg, w);
+    }
     await this.addSpend(cost, taskId);
     await this.o.usage.insertLlmUsage({
       ...owner,
@@ -256,6 +275,7 @@ export class LlmGateway {
       costMicroUsd: cost,
       cacheHit: false,
       ...(truncated ? { truncated: true } : {}),
+      ...(estimated ? { usageEstimated: true } : {}),
     };
   }
 

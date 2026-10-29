@@ -1,3 +1,4 @@
+import { estimateUsage } from './estimate.js';
 import type { LlmCall, LlmCallResult, LlmClient, LlmStreamEvent, LlmUsage } from './types.js';
 
 export const DEEPSEEK_DEFAULT_BASE_URL = 'https://api.deepseek.com';
@@ -168,7 +169,11 @@ export class DeepSeekClient implements LlmClient {
    * 流式:POST stream:true + stream_options.include_usage:true,解析 SSE。
    * - 只把 `delta.content` 作为 text 事件发出;`reasoning_content`(思考内容)不发、不计入正文。
    * - 用量取 include_usage 的最后一个 chunk(`choices: []` + `usage`),在 `[DONE]` 时作为最后一个事件发出。
-   *   没收到 usage 就 `[DONE]`:不发 usage 事件,由网关按「没给 usage 就结束」记 ok=0、报 LLM_UNAVAILABLE。
+   *   没收到 usage 就 `[DONE]`:
+   *   - 收到过 `finish_reason: "stop"`(且有 [DONE]):按字数上界估算 usage(estimateUsage,公式见 estimate.ts),
+   *     usage 事件带 `estimated: true`;
+   *   - 没有 stop(只有 `length`、或没有任何 finish_reason):不发 usage 事件,
+   *     由网关按「没给 usage 就结束」记 ok=0、报 LLM_UNAVAILABLE。缺 [DONE] 见下方 ended-early。
    * - `finish_reason: "length"`:正文到此为止,usage 事件带 `truncated: true` 向上报告(不静默截断)。
    * - 格式错误的 SSE 行:`data:` 内容不是 JSON(且不是 `[DONE]`)时抛 LlmStreamError('bad-sse'),
    *   网关包成 LLM_UNAVAILABLE;注释行(`: keep-alive`)和 `event:`/`id:`/`retry:` 等非 data 字段按 SSE 规范忽略。
@@ -230,6 +235,8 @@ export class DeepSeekClient implements LlmClient {
       let data: string[] = [];
       let usage: LlmUsage | null = null;
       let truncated = false;
+      let stopped = false;
+      let full = '';
       // 处理一个完整事件的 data;返回 true 表示收到 [DONE]
       const onEvent = function* (
         this: DeepSeekClient,
@@ -237,6 +244,8 @@ export class DeepSeekClient implements LlmClient {
       ): Generator<LlmStreamEvent, boolean> {
         if (payload === '[DONE]') {
           if (usage) yield { type: 'usage', usage, ...(truncated ? { truncated: true } : {}) };
+          else if (stopped)
+            yield { type: 'usage', usage: estimateUsage(req.messages, full), estimated: true };
           return true;
         }
         let c: StreamChunk;
@@ -253,8 +262,12 @@ export class DeepSeekClient implements LlmClient {
         }
         const ch = c.choices?.[0];
         const t = ch?.delta?.content;
-        if (typeof t === 'string' && t) yield { type: 'text', text: t };
+        if (typeof t === 'string' && t) {
+          full += t;
+          yield { type: 'text', text: t };
+        }
         if (ch?.finish_reason === 'length') truncated = true;
+        if (ch?.finish_reason === 'stop') stopped = true;
         const u = mapUsage(c.usage);
         if (u) usage = u;
         return false;
