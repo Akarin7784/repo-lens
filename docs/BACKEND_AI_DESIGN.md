@@ -111,6 +111,7 @@ Query 示例（TS，字段名需要对照语法的 `node-types.json` 核实，**
 - **跨子树聚合(#12)**:带 `parentId=P` 时,一端在 P 子树内、另一端 Y 在子树外的边也返回:外端取 Y 在 `LCA(P,Y)` 下的直接子节点(Y 的祖先),内端按上条上卷到可见节点,合并为 `a:<src>-><tgt>`(`type:'imports'`、`aggregated:true`、`weight`=合并的 import 数、`kind` 取最多的一种);同一对端点按方向分别合并,自环不返回,两端都在子树外的边不返回。外端节点(边界节点)一并放进 `nodes`。
   - **边界节点识别**:shared 不加专门字段;前端以 `node.parentId !== P`(请求的 parentId)判断边界节点(P 的直接子节点 `parentId === P`)。
   - **300 名额顺序**:`x:` 外部包(仅 includeExternal,≤50)→ P 的子节点按 `weight` 降序 → 剩余名额按 `weight` 降序给边界节点,被裁掉的边界节点连同其边一起丢弃。P 的子节点自身超过 300 时沿用原截断规则,响应头 `x-graph-truncated: true`(否则 `false`;缓存命中时同样返回)。
+  - **`x-graph-truncated` 的含义**:**只表示 P 的直接子节点(不带 parentId 时为根层 module)因 300 上限被截断**。边界节点因名额不足被丢弃、`x:` 外部包只取前 50 个,都**不**算截断,此时仍为 `false`。前端据此提示"子节点未显示完整",不能用它判断边界节点是否完整。
   - 例:从 `m:packages/core` 展开,`packages/core/src/index.ts` → `packages/utils/src/a.ts` 的 LCA 为根,外端取 `m:packages/utils`,返回 `d:packages/core/src → m:packages/utils`(`aggregated:true`,`weight`=合并的 import 数);反方向 `utils → core` 另成一条。
 - `includeExternal=true` 时由 `file.external_deps` 派生 `x:<包名>` 节点(按引用文件数取前 50,占用 300 名额)及 `x:<src>->x:<pkg>` 边。
 - **`meta.suggestedFocus`(T-003e,可选)**:只在根层请求(不带 parentId)时计算,规则确定且可测试。从根层开始,统计当前层"两端都是该层直接子节点"的投影边条数(不含边界节点和 `x:` 边,includeExternal 不影响结果)。若少于 3 条,就下探到其中**子树 loc 最大**的可展开子节点(module/dir;子树 loc = 子树内所有文件 loc 之和;loc 相同取 id 小的),最多下探 3 层;在边数 ≥3 的那一层停下,或在没有可下探节点时停下。**两点约定(架构师已定)**:① 统计的是投影后的**边条数**(每条聚合边按 1 条算,同一对节点不同 kind 可能是多条),**不是 weight 总和**;② **最多下探 3 层**,第 3 次下探后即使该层边数仍不足 3 条也停止,返回该层节点。`suggestedFocus` 是停下那一层的节点,含义是"前端应直接展示它的子节点"(可直接用它作为 parentId 请求);如果根层的边已经够用(≥3)就不返回该字段。该节点不一定在根层的 nodes 里(例如单根仓库根层只返回 `m:.`)。实测:hono 根层 0 条 → `m:.` 2 条 → `d:src` 80 条,得到 `d:src`;zustand 根层 5 条、zod 根层 4 条,都不返回。
@@ -132,6 +133,13 @@ Query 示例（TS，字段名需要对照语法的 `node-types.json` 核实，**
 | 二进制 | 前 8KB 里出现 NUL 字节就视为二进制，跳过 |
 
 ---
+
+**错误码(API 层,T-003c)**
+错误体统一为 `{error:{code,message}}`(shared `ApiErrorSchema`)。原则:**格式非法 → 400 `BAD_REQUEST`;格式合法但资源不存在 → 404 `REPO_NOT_FOUND`**。
+- 非正整数 repo id(`abc`、`0`、`1.5` 等)在**所有**带 `:id` 的路由都返回 400;格式合法但不存在的 id(如 `999999`)返回 404。
+- `GET /api/repos/:id/nodes/*`:nodeId 不符合 `NodeIdSchema`(如 `bad`)返回 400;格式合法但不存在(如 `f:nope.ts`)返回 404。
+- `GET /api/repos/:id/graph` 使用 **strict** 校验(`GraphQuerySchema.strict()`,`.strict()` 放在 api 侧,shared 的 schema 不变):**只接受 `parentId` 与 `includeExternal`**,其它任何参数(`depth`、`level`,以及 `_t=` 这类缓存破坏参数)一律返回 400;`parentId` 格式非法(无前缀、未知前缀、空串)或 `includeExternal` 不是 `true`/`false` 时也返回 400。格式合法但节点不存在(`m:nope`),或者节点不可展开(file),返回 404。
+- 其余:图未生成 409 `REPO_NOT_READY`,限流 429 `RATE_LIMITED`(见各接口)。
 
 ## 2. 数据库设计
 
