@@ -170,6 +170,8 @@ export const summary = mysqlTable(
   (t) => [
     uniqueIndex('uk_target_commit').on(t.repoId, t.level, t.targetId, t.commitSha),
     index('idx_input').on(t.inputHash),
+    // 摘要复用逐节点查询(findSummaryByInput)用;迁移 0002
+    index('idx_reuse').on(t.repoId, t.level, t.targetId, t.inputHash),
   ],
 );
 

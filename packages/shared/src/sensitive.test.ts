@@ -92,6 +92,13 @@ describe('敏感文件规则', () => {
     ])
       expect(sensitiveContentRule(c)).toBeNull();
   });
+  it('已知取舍:行尾无逗号的 `npmAuthToken: process.env.X` 会被判敏感(文件只给规则摘要)', () => {
+    // 见 BACKEND_AI_DESIGN「敏感规则已知误判」;规则无法区分 YAML 明文值与 JS 表达式
+    expect(sensitiveContentRule('npmAuthToken: process.env.X')).toBe('yarn-npm-auth-token');
+    expect(sensitiveContentRule('  npmAuthToken: process.env.NPMTOKEN')).toBe(
+      'yarn-npm-auth-token',
+    );
+  });
   it('sensitiveRule:路径优先,content=null 只看路径', () => {
     expect(sensitiveRule('.env', null)).toBe('dotenv');
     expect(sensitiveRule('src/a.ts', null)).toBeNull();
