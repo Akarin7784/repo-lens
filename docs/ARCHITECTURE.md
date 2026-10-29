@@ -388,7 +388,7 @@ Qdrant collection `code_chunks`:命名向量 `dense`,384 维(multilingual-e5-sma
 
 降级约定:检索只在 `ready|reused` 时走向量路;其余情况(含 `null`)或查询时 Qdrant 不可用,只用关键词/精确匹配路做 RRF,不报错、不返回 5xx;问答 `done` 事件用可选字段 `retrieval: "hybrid" | "keyword-only"` 标注(见 SSE `done` 一节,shared `chat.ts` 已加)。降级原因只进日志,不进响应:`status:<embeddingStatus>`、`no-vector-store`、`vector-error`。
 
-**查询改写(T-214 PR-2)**:中文问题先经 LLM(DeepSeek,`purpose: chat`,提示词版本 `rw-2`,temperature 固定 0)改写为英文概念关键词串(不输出文件名/路径/扩展名,模型仍输出时由后处理剔除),改写结果用于向量查询,关键词路用「改写结果 + 原问题」;非中文问题不改写。改写结果按 `rewrite:<提示词版本>:<模型>:sha256(问题)` 缓存(`RewriteCache` 接口,回退结果不缓存),同一问题同一提示词版本改写稳定。向量缓存键的模型段为 `model@revision`,因此部署后旧 Redis 向量缓存会各失配一次。检索侧(T-214b):stem 不把 `router` 合并为 `route`,丢弃长度 <2 的词;精确匹配路先符号(含 `类.方法` 的方法名)后路径,按文件去重,最多 10 条。改写失败一律回退原问题、不报错、不新增错误码,回退原因只记日志:`not-chinese`、`budget`(超出 LLM 预算)、`breaker`(熔断打开,`LLM_UNAVAILABLE` 且 cause 为 `CircuitOpenError`)、`unavailable`、`empty`、`error`。
+**查询改写(T-214 PR-2)**:中文问题先经 LLM(DeepSeek,`purpose: chat`,提示词版本 `rw-3`,temperature 固定 0)改写为英文概念关键词串(保留通用类别词及其标识符形态,不输出文件名/路径/扩展名,模型仍输出时由后处理剔除),改写结果用于向量查询,关键词路用「改写结果 + 原问题」;非中文问题不改写。改写结果按 `rewrite:<提示词版本>:<模型>:sha256(问题)` 缓存(`RewriteCache` 接口,回退结果不缓存),同一问题同一提示词版本改写稳定。向量缓存键的模型段为 `model@revision`,因此部署后旧 Redis 向量缓存会各失配一次。检索侧(T-214b):stem 不把 `router` 合并为 `route`,丢弃长度 <2 的词;精确匹配路先符号(含 `类.方法` 的方法名)后路径,按文件去重,最多 10 条。改写失败一律回退原问题、不报错、不新增错误码,回退原因只记日志:`not-chinese`、`budget`(超出 LLM 预算)、`breaker`(熔断打开,`LLM_UNAVAILABLE` 且 cause 为 `CircuitOpenError`)、`unavailable`、`empty`、`error`。
 
 ### 5.4 Redis key 设计
 | Key | 类型 | TTL | 用途 |

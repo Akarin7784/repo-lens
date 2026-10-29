@@ -186,3 +186,58 @@ S1 已作为待修 bug 并入调参集记录(见 RAG_TUNING_QUESTIONS.md 末节)
   - top5: `src/router.ts`, `src/router.ts`, `src/router/linear-router/router.ts`, `src/router/pattern-router/router.ts`, `src/router/pattern-router/router.ts`
 - **S1 后** hit5=0 top1=0 rw=`route matching router matchRoutes findRoute resolvePath`
   - top5: `src/router/pattern-router/router.ts`, `src/helper/route/index.ts`, `src/helper/route/index.ts`, `src/router.ts`, `src/request.ts`
+
+### rw-3(2026-10-29,架构师裁定的单轮,只改改写提示词)
+
+版本:chunker=2,embedText=1,模型 Xenova/multilingual-e5-small@761b726dd34fb83930e26aab4e9ac3899aa1fa78,提示词 rw-3,digest 5aae128c2087(与 rw-2 相同,向量复用)。提示词新增规则:保留主题的通用类别词及其标识符形态(名词、复数、-er/-or 施事名词、PascalCase 类名),仍禁止文件名;示例换为购物车、日志两个与评测无关的领域;提示词不含评测题涉及的具体词(有测试)。判分规则不变,只跑调参集 12 题 + S1。
+
+| | rw-2 | rw-3 |
+|---|---|---|
+| 中文 top5 / top1 | 5/6 / 4/6 | 6/6 / 4/6 |
+| 英文 top5 / top1 | 5/6 / 5/6 | 5/6 / 5/6 |
+| S1 top5 / top1 | 0/1 / 0/1 | 1/1 / 1/1 |
+| 改写费用 | 352 + 58 µUSD | 458 + 75 µUSD |
+
+合并条件(中文前5 ≥5/6;英文前5 ≥5/6 且首位 ≥4/6):**达到**。英文不改写,检索结果与 rw-2 完全一致。英3 仍未命中。改写只采样一次。
+
+逐题:
+
+- **中1** rw-2 hit5=1 top1=1 → rw-3 hit5=1 top1=1。命中状态不变,前 5 顺序/成员有变化。
+  - rw-3 改写:`CORS cross origin middleware Middleware setCors corsOptions configure`
+  - rw-3 top5: `src/middleware/cors/index.ts`, `src/middleware/cors/index.ts`, `src/middleware/secure-headers/secure-headers.ts`, `src/middleware/timing/timing.ts`, `src/middleware/secure-headers/secure-headers.ts`
+- **中2** rw-2 hit5=1 top1=1 → rw-3 hit5=1 top1=1。命中状态不变,前 5 顺序/成员有变化。
+  - rw-3 改写:`request body JSON parse readBody getBody jsonBody RequestBody`
+  - rw-3 top5: `src/request.ts`, `src/utils/body.ts`, `src/request.ts`, `adapters/lambda-edge/src/handler.ts`, `src/utils/body.ts`
+- **中3** rw-2 hit5=0 top1=0 → rw-3 hit5=1 top1=0。rw-3 保留类别词与标识符形态(route/router/params),精确与关键词路重新覆盖 src/router/ 下文件,回到前 5;首位仍是非判定文件。
+  - rw-3 改写:`route routes router Router param params parseRoute parseParams parameter parsing`
+  - rw-3 top5: `src/router.ts`, `src/router.ts`, `src/router.ts`, `src/router/reg-exp-router/matcher.ts`, `src/router.ts`
+- **中4** rw-2 hit5=1 top1=1 → rw-3 hit5=1 top1=1。命中状态不变,前 5 顺序/成员有变化。
+  - rw-3 改写:`streaming response stream Stream returnStream streamResponse SSE chunk`
+  - rw-3 top5: `src/helper/streaming/sse.ts`, `src/helper/streaming/index.ts`, `src/helper/streaming/text.ts`, `src/helper/streaming/sse.ts`, `src/helper/streaming/sse.ts`
+- **中5** rw-2 hit5=1 top1=0 → rw-3 hit5=1 top1=1。改写带回 `JWT`、`jwtMiddleware` 等标识符形态,首位回到 src/middleware/jwt/jwt.ts。
+  - rw-3 改写:`JWT authentication auth middleware verifyToken token validation jwtMiddleware`
+  - rw-3 top5: `src/middleware/jwt/jwt.ts`, `src/utils/jwt/jwt.ts`, `src/middleware/jwt/jwt.ts`, `src/middleware/bearer-auth/index.ts`, `src/middleware/jwt/jwt.ts`
+- **中6** rw-2 hit5=1 top1=1 → rw-3 hit5=1 top1=0。改写多了 `set get read` 等泛词,首位被其他文件占去,首位由命中变未命中(仍在前 5)。
+  - rw-3 改写:`cookie cookies setCookie getCookie readCookie Cookie set get read`
+  - rw-3 top5: `adapters/aws-lambda/src/handler.ts`, `src/helper/cookie/index.ts`, `src/adapter/aws-lambda/handler.ts`, `src/helper/cookie/index.ts`, `src/helper/cookie/index.ts`
+- **英1** rw-2 hit5=1 top1=1 → rw-3 hit5=1 top1=1。无变化
+  - rw-3 改写:`how to set up basic auth middleware`
+  - rw-3 top5: `src/middleware/basic-auth/index.ts`, `src/middleware/basic-auth/index.ts`, `src/middleware/jwt/jwt.ts`, `src/middleware/jwk/jwk.ts`, `src/utils/basic-auth.ts`
+- **英2** rw-2 hit5=1 top1=1 → rw-3 hit5=1 top1=1。无变化
+  - rw-3 改写:`where are route parameters matched in the router`
+  - rw-3 top5: `src/router/pattern-router/router.ts`, `src/router.ts`, `src/helper/route/index.ts`, `src/router/linear-router/router.ts`, `src/helper/route/index.ts`
+- **英3** rw-2 hit5=0 top1=0 → rw-3 hit5=0 top1=0。无变化
+  - rw-3 改写:`how to serve static files`
+  - rw-3 top5: `adapters/bun/src/serve-static.ts`, `src/adapter/bun/serve-static.ts`, `adapters/cloudflare-workers/src/serve-static.ts`, `adapters/cloudflare-workers/src/serve-static.ts`, `src/adapter/cloudflare-workers/serve-static.ts`
+- **英4** rw-2 hit5=1 top1=1 → rw-3 hit5=1 top1=1。无变化
+  - rw-3 改写:`how does the app handle errors and not found`
+  - rw-3 top5: `src/hono-base.ts`, `src/context.ts`, `src/hono-base.ts`, `src/compose.ts`, `src/compose.ts`
+- **英5** rw-2 hit5=1 top1=1 → rw-3 hit5=1 top1=1。无变化
+  - rw-3 改写:`compress response with gzip`
+  - rw-3 top5: `src/middleware/compress/index.ts`, `src/middleware/compress/index.ts`, `src/middleware/compress/index.ts`, `src/middleware/compress/index.ts`, `src/middleware/serve-static/index.ts`
+- **英6** rw-2 hit5=1 top1=1 → rw-3 hit5=1 top1=1。无变化
+  - rw-3 改写:`validate request body with a validator`
+  - rw-3 top5: `src/validator/validator.ts`, `src/validator/validator.ts`, `src/request.ts`, `src/request.ts`, `src/request.ts`
+- **S1** rw-2 hit5=0 top1=0 → rw-3 hit5=1 top1=1。改写含 routing/router/matcher 等类别词形态,判定文件进入首位(S1 记为已知问题,本轮命中不代表已稳定)。
+  - rw-3 改写:`routing route routes router Router match matching path matcher`
+  - rw-3 top5: `src/router/reg-exp-router/matcher.ts`, `src/router.ts`, `src/router/pattern-router/router.ts`, `src/router.ts`, `src/helper/route/index.ts`
