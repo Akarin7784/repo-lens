@@ -78,7 +78,8 @@ export function toChatItem(event: string, data: string): ChatItem {
 
 /**
  * 生产传输:POST {base}/api/repos/:id/chat,请求体按 shared ChatRequestSchema(message / sessionId? / contextNodeIds?)。
- * 注意:后端问答 API 尚未实现(W3 后端 PR),当前会得到 404 → 「问答服务暂未上线」。
+ * 后端路由 POST /api/repos/:id/chat 已实现(#108,apps/api/src/chat/route.ts),但只在 API 配置了问答依赖时注册;
+ * 未注册时得到无 ApiError 体的 404 → 「问答服务暂未上线」。
  */
 export function createFetchTransport(
   base = apiBase(),

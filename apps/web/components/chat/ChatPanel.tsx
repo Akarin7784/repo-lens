@@ -15,6 +15,7 @@ import {
   stripCitationMarkers,
   type ChatTransport,
 } from '../../lib/chat/transport';
+import { getDisclosure, type EmbeddingProvider } from '../../lib/privacy/disclosure';
 
 /** FRONTEND_DESIGN §6.1:20 秒内既没有 token 也没有 done/error,前端主动 abort */
 export const CLIENT_TIMEOUT_MS = 20_000;
@@ -28,6 +29,8 @@ type Props = {
   onCitationClick?: (c: Citation) => void;
   /** 图上选中的节点作为上下文(ChatRequest.contextNodeIds) */
   contextNodeIds?: string[];
+  /** T-234:该仓库任务的 embedding 提供方(RepoStatus.embeddingProvider);缺省 = 未知,按保守口径披露 */
+  embeddingProvider?: EmbeddingProvider;
 };
 
 /**
@@ -35,7 +38,13 @@ type Props = {
  * - 一次只有一个进行中的回答:发新问题 / 重试 / 卸载都会 abort 上一个请求,旧请求的迟到事件被丢弃。
  * - 正文一律按纯文本渲染(React 文本节点,不用 dangerouslySetInnerHTML),模型输出里的 HTML 不会被执行。
  */
-export function ChatPanel({ repoId, transport, onCitationClick, contextNodeIds }: Props) {
+export function ChatPanel({
+  repoId,
+  transport,
+  onCitationClick,
+  contextNodeIds,
+  embeddingProvider,
+}: Props) {
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [input, setInput] = useState('');
   const active = useRef<{ id: number; ctrl: AbortController } | null>(null);
@@ -146,6 +155,9 @@ export function ChatPanel({ repoId, transport, onCitationClick, contextNodeIds }
           setInput('');
         }}
       >
+        <p data-testid="chat-disclosure" className="mb-2 text-[12px] leading-[1.6] text-muted">
+          {getDisclosure(embeddingProvider)}
+        </p>
         {budgetOut && <p className="mb-2 text-[12px] text-muted">今日额度已用完,明天再试。</p>}
         <div className="flex gap-2">
           <textarea
@@ -296,7 +308,7 @@ function AnswerNotes({ a, onRetry }: { a: Answer; onRetry: () => void }) {
     };
   else if (a.status === 'timeout') problem = { text: '回答超时,请重试', retry: true };
   else if (a.status === 'interrupted')
-    problem = { text: '回答中途断开,已保留已输出内容,可重试', retry: true };
+    problem = { text: '回答中途断开,已保留已输出内容(刷新后不保留),可重试', retry: true };
   else if (a.status === 'aborted') problem = { text: '已停止', retry: true };
   if (notes.length === 0 && !problem) return null;
   return (

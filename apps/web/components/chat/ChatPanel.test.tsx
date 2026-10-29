@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createFakeTransport, DEMO_SCRIPT, type FakeStep } from '../../dev/fakeChatStream';
 import { createFetchTransport } from '../../lib/chat/transport';
+import { PROVIDER_DISCLOSURE } from '../../lib/privacy/disclosure';
 import { ChatPanel, CLIENT_TIMEOUT_MS } from './ChatPanel';
 
 function ask(q = '【假数据】示例问题') {
@@ -17,6 +18,24 @@ const errorOf = (code: string, retryable: boolean): FakeStep =>
   }) as ChatEvent;
 
 afterEach(() => vi.useRealTimers());
+
+describe('<ChatPanel> 数据流披露(T-234)', () => {
+  it.each([
+    ['dashscope', PROVIDER_DISCLOSURE.dashscope],
+    ['local', PROVIDER_DISCLOSURE.local],
+  ] as const)('embeddingProvider=%s → 对应文案', (p, text) => {
+    render(<ChatPanel repoId={1} transport={createFakeTransport([])} embeddingProvider={p} />);
+    expect(screen.getByTestId('chat-disclosure')).toHaveTextContent(text);
+  });
+
+  it('未传 embeddingProvider → 未知、保守口径(不当 local)', () => {
+    render(<ChatPanel repoId={1} transport={createFakeTransport([])} />);
+    const el = screen.getByTestId('chat-disclosure');
+    expect(el).toHaveTextContent(PROVIDER_DISCLOSURE.unknown);
+    expect(el).not.toHaveTextContent('不会发送给第三方向量服务');
+    expect(el.className).toContain('text-muted');
+  });
+});
 
 describe('<ChatPanel>(假流,未接真实后端)', () => {
   it('按事件顺序流式渲染:tool 提示 → token 追加 → 引用角标与卡片 → done 附加提示(含 keyword-only 降级)', async () => {
@@ -147,6 +166,8 @@ describe('<ChatPanel>(假流,未接真实后端)', () => {
     render(<ChatPanel repoId={1} transport={createFakeTransport(DEMO_SCRIPT.slice(0, 4))} />);
     ask();
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('回答中途断开'));
+    // T-234:与 #111 一致,注明已输出内容刷新后不保留
+    expect(screen.getByRole('alert')).toHaveTextContent('刷新后不保留');
     expect(lastAnswer()).toHaveTextContent('假流生成的示例回答');
     expect(screen.getByRole('button', { name: /src\/db\/index\.ts:10–48/ })).toBeTruthy();
   });

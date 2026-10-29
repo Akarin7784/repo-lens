@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { THIRD_PARTY_DISCLOSURE } from '../../lib/privacy/disclosure';
+import { PROVIDER_DISCLOSURE, THIRD_PARTY_DISCLOSURE } from '../../lib/privacy/disclosure';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { createApiClient, type ApiClient } from '../../lib/api/client';
@@ -76,6 +76,8 @@ describe('首页提交', () => {
     const next = rest.search(/^## /m);
     const section = next === -1 ? rest : rest.slice(0, next);
     expect(section).toContain(THIRD_PARTY_DISCLOSURE);
+    // T-234:问答面板按提供方显示的三段文案也须逐字出现在本节
+    for (const t of Object.values(PROVIDER_DISCLOSURE)) expect(section).toContain(t);
   });
 
   it('提交返回 422 REPO_NOT_PUBLIC → 表单下显示「只支持公开仓库」,不跳转、不当作网络错误', async () => {
