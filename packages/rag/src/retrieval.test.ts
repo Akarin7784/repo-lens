@@ -3,6 +3,7 @@ import { FakeEmbedder } from './embedder.js';
 import { DashscopeEmbedder, QUERY_CALL, TokenBucket } from './dashscope.js';
 import {
   EXACT_MAX,
+  embeddingMismatch,
   bm25,
   buildKeywordIndex,
   exactMatches,
@@ -226,6 +227,8 @@ describe('hybridSearch 提供方降级(T-214c)', () => {
       embedder: ds,
       vectorStore: vs,
       indexedProvider: 'dashscope',
+      indexedModel: 'text-embedding-v3',
+      indexedDim: 384,
     });
     expect(r).toMatchObject({ retrieval: 'keyword-only', degradedReason: 'vector-error' });
     expect(calls).toBe(1 + QUERY_CALL.retries);
@@ -234,5 +237,63 @@ describe('hybridSearch 提供方降级(T-214c)', () => {
       12_000,
     );
     expect(sleeps.reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(QUERY_CALL.maxRetryAfterMs);
+  });
+});
+
+describe('embedding 同源比较 model/dim(P4-b)', () => {
+  const ds = { provider: 'dashscope' as const, model: 'dashscope:text-embedding-v3', dim: 1024 };
+  it('dashscope:provider/model/dim 全一致(model 去掉 dashscope: 前缀比较)', () => {
+    expect(
+      embeddingMismatch(ds, { provider: 'dashscope', model: 'text-embedding-v3', dim: 1024 }),
+    ).toBeNull();
+  });
+  it('dashscope:model 不同 → model-mismatch;dim 不同 → dim-mismatch', () => {
+    expect(
+      embeddingMismatch(ds, { provider: 'dashscope', model: 'qwen3.7-text-embedding', dim: 1024 }),
+    ).toBe('model-mismatch');
+    expect(
+      embeddingMismatch(ds, { provider: 'dashscope', model: 'text-embedding-v3', dim: 512 }),
+    ).toBe('dim-mismatch');
+  });
+  it('dashscope 旧任务缺 model 或 dim:视为不一致', () => {
+    expect(embeddingMismatch(ds, { provider: 'dashscope', dim: 1024 })).toBe('model-mismatch');
+    expect(embeddingMismatch(ds, { provider: 'dashscope', model: 'text-embedding-v3' })).toBe(
+      'dim-mismatch',
+    );
+  });
+  it('local 缺 model/dim:视为一致(与改动前行为相同);provider 不同仍优先报 provider-mismatch', async () => {
+    const { emb } = await vectors();
+    expect(embeddingMismatch(emb, {})).toBeNull();
+    expect(embeddingMismatch(emb, { provider: null, model: null, dim: null })).toBeNull();
+    expect(embeddingMismatch(ds, { model: 'x', dim: 1 })).toBe('provider-mismatch');
+  });
+  it('hybridSearch 读取 indexedModel/indexedDim:不一致时 keyword-only 且不查向量', async () => {
+    const { vs } = await vectors();
+    let searched = 0;
+    let embedded = 0;
+    const spy = { ...vs, search: async () => (searched++, []) } as unknown as MemoryVectorStore;
+    const fake = {
+      ...ds,
+      embedQuery: async () => (embedded++, new Array(1024).fill(0)),
+    } as unknown as Parameters<typeof hybridSearch>[0]['embedder'];
+    for (const [m, d, why] of [
+      ['qwen3.7-text-embedding', 1024, 'model-mismatch'],
+      ['text-embedding-v3', 64, 'dim-mismatch'],
+    ] as const) {
+      const r = await hybridSearch({
+        ...base,
+        question: 'createPool',
+        rewritten: 'createPool',
+        embeddingStatus: 'ready',
+        embedder: fake,
+        vectorStore: spy,
+        indexedProvider: 'dashscope',
+        indexedModel: m,
+        indexedDim: d,
+      });
+      expect(r).toMatchObject({ retrieval: 'keyword-only', degradedReason: why });
+    }
+    expect(searched).toBe(0);
+    expect(embedded).toBe(0);
   });
 });

@@ -252,7 +252,7 @@ data: {"code":"BUDGET_EXCEEDED","message":"今日 LLM 预算已用完","retryabl
 进度阶段固定为 `queued → cloning → scanning → parsing → graph_ready → summarizing → embedding → done`(`progress.stage` 取其一)。
 进度事件:`progress` / `graph_ready`(图就绪即可渲染,摘要与向量化后台继续)/ `stage_error {stage, message}`(阶段失败)/ `done`。问答事件:`token` / `citation` / `done`,另有可选 `tool`;出错时发 `error {code, message, retryable}` 后**直接结束流,不再发 `done`**,`code ∈ LLM_UNAVAILABLE | BUDGET_EXCEEDED | REPO_NOT_READY | RATE_LIMITED`。
 **流式策略**:非定位类问题照常逐 token 流式;**定位类问题(问"在哪里/哪个文件/哪几行")第一遍不流式**,后端缓冲整段答案并完成引用校验,通过后一次性下发 `token`/`citation`;需重试时用户看不到第一遍内容,前端显示「正在定位…」(不设 reset 事件)。缓冲加重试的总耗时上限 15 秒,超时直接走 `fallback:"retrieval"`。`done.usage = {in, out}`。
-`citation` 字段:`id, path, startLine, endLine, nodeId, moduleId?`;`done.droppedCitations: number`(校验失败被丢弃的引用数,0 表示全部通过);`done.fallback?: "retrieval"`(重试后仍无合法引用,改用检索 top 片段作为引用时出现)。`done.retrieval?: "hybrid" | "keyword-only"`(T-214 定案):本次检索是否用上向量;`embeddingStatus` 非 ok(ready/reused 以外,定义见 #57 / ARCHITECTURE §5 向量化状态)或查询时 Qdrant 不可用时为 `keyword-only`,前端在回答下方显示「已降级为关键词检索」。字段可选、只增不改,旧响应缺省视为未知(前端不显示提示)。
+`citation` 字段:`id, path, startLine, endLine, nodeId, moduleId?`;`done.messageId?: number`(落库的 assistant 消息 id;写 assistant 消息失败时不带,前端按缺失处理);`done.droppedCitations: number`(校验失败被丢弃的引用数,0 表示全部通过);`done.fallback?: "retrieval"`(重试后仍无合法引用,改用检索 top 片段作为引用时出现)。`done.retrieval?: "hybrid" | "keyword-only"`(T-214 定案):本次检索是否用上向量;`embeddingStatus` 非 ok(ready/reused 以外,定义见 #57 / ARCHITECTURE §5 向量化状态)或查询时 Qdrant 不可用时为 `keyword-only`,前端在回答下方显示「已降级为关键词检索」。字段可选、只增不改,旧响应缺省视为未知(前端不显示提示)。
 
 ```jsonc
 // GET /api/repos/:id/nodes/:nodeId   (例:nodeId = f:src/compose.ts)

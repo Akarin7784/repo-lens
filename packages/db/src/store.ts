@@ -32,6 +32,9 @@ export interface TaskStats {
   embeddingChunks?: number;
   /** P4:索引用的 embedding provider;旧任务无此字段 */
   embeddingProvider?: 'local' | 'dashscope';
+  /** P4-b:dashscope 索引时的模型名(不带 dashscope: 前缀)与请求维度;local 不写 */
+  embeddingModel?: string;
+  embeddingDim?: number;
   /** 切块内容 hash 汇总,复用判断用 */
   embeddingDigest?: string;
   [k: string]: unknown;

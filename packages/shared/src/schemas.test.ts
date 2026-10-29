@@ -246,6 +246,8 @@ describe('ChatEventSchema', () => {
         },
       },
       { event: 'done', data: { messageId: 2, droppedCitations: 0, usage: { in: 1, out: 1 } } },
+      // assistant 消息写入失败:done 不带 messageId
+      { event: 'done', data: { droppedCitations: 0, usage: { in: 1, out: 1 } } },
       {
         event: 'done',
         data: {
@@ -292,6 +294,11 @@ describe('ChatEventSchema', () => {
         event: 'done',
         data: { messageId: 1, droppedCitations: 0, retrieval: 'vector', usage: { in: 1, out: 1 } },
       },
+      { event: 'done', data: { messageId: 0, droppedCitations: 0, usage: { in: 1, out: 1 } } },
+      { event: 'done', data: { messageId: -1, droppedCitations: 0, usage: { in: 1, out: 1 } } },
+      { event: 'done', data: { messageId: 1.5, droppedCitations: 0, usage: { in: 1, out: 1 } } },
+      { event: 'done', data: { messageId: '7', droppedCitations: 0, usage: { in: 1, out: 1 } } },
+      { event: 'done', data: { messageId: null, droppedCitations: 0, usage: { in: 1, out: 1 } } },
       { event: 'error', data: { code: 'OOPS', message: 'x', retryable: true } },
     ];
     for (const e of bad)

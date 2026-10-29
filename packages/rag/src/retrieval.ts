@@ -180,9 +180,35 @@ export interface HybridSearchInput {
    * 与当前 embedder.provider 不一致时向量不可比,降级 keyword-only(provider-mismatch)。
    */
   indexedProvider?: string | null;
+  /**
+   * P4-b:task.stats.embeddingModel / embeddingDim(worker 只在 dashscope 时写,model 不带 `dashscope:` 前缀)。
+   * 与当前 embedder 不一致时降级(model-mismatch / dim-mismatch)。旧任务缺字段:local 视为一致,
+   * dashscope 视为不一致(无法证明向量同源)。
+   */
+  indexedModel?: string | null;
+  indexedDim?: number | null;
   limit?: number;
   /** 每路候选数 */
   candidates?: number;
+}
+
+/**
+ * 索引时与当前查询的 embedding 是否同源;不一致返回降级原因,一致返回 null。
+ * 比较 provider + model + dim(不重算 digest:digest 还含切块内容,查询时不可得)。
+ */
+export function embeddingMismatch(
+  embedder: Pick<Embedder, 'provider' | 'model' | 'dim'>,
+  indexed: { provider?: string | null; model?: string | null; dim?: number | null },
+): 'provider-mismatch' | 'model-mismatch' | 'dim-mismatch' | null {
+  const provider = embedder.provider ?? 'local';
+  if ((indexed.provider ?? 'local') !== provider) return 'provider-mismatch';
+  const strict = provider !== 'local';
+  const model = embedder.model.startsWith(`${provider}:`)
+    ? embedder.model.slice(provider.length + 1)
+    : embedder.model;
+  if (indexed.model == null ? strict : indexed.model !== model) return 'model-mismatch';
+  if (indexed.dim == null ? strict : indexed.dim !== embedder.dim) return 'dim-mismatch';
+  return null;
 }
 
 export async function hybridSearch(o: HybridSearchInput): Promise<RetrievalResult> {
@@ -200,9 +226,15 @@ export async function hybridSearch(o: HybridSearchInput): Promise<RetrievalResul
   if (o.embeddingStatus !== 'ready' && o.embeddingStatus !== 'reused')
     degradedReason = `status:${o.embeddingStatus ?? 'none'}`;
   else if (!o.embedder || !o.vectorStore) degradedReason = 'no-vector-store';
-  else if ((o.indexedProvider ?? 'local') !== (o.embedder.provider ?? 'local'))
-    degradedReason = 'provider-mismatch';
   else {
+    const mismatch = embeddingMismatch(o.embedder, {
+      provider: o.indexedProvider,
+      model: o.indexedModel,
+      dim: o.indexedDim,
+    });
+    if (mismatch) degradedReason = mismatch;
+  }
+  if (!degradedReason && o.embedder && o.vectorStore) {
     // dashscope 的 embedQuery 自带 QUERY_CALL(单次 5 秒、最多重试 1 次);仍失败走下面的 vector-error
     try {
       const v = await o.embedder.embedQuery(o.rewritten);
