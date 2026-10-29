@@ -12,6 +12,7 @@ import {
   type PriceTable,
 } from './pricing.js';
 import { LlmError, type LlmRequest } from './types.js';
+import { onServiceUnavailable } from '@repolens/shared';
 
 /** 内存 KV(CI 无 Redis 时也能跑);TTL 只记录不过期 */
 class MemKv implements LlmKv {
@@ -67,7 +68,8 @@ const redisOk = await (async () => {
     r.disconnect();
   }
 })();
-if (!redisOk) console.warn(`[agent] Redis 不可达(${REDIS_URL}),跳过真实 Redis 网关测试`);
+if (!redisOk)
+  onServiceUnavailable('Redis', `[agent] Redis 不可达(${REDIS_URL}),跳过真实 Redis 网关测试`);
 
 function suite(
   name: string,

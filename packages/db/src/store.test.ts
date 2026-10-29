@@ -11,6 +11,7 @@ import {
   redisKeys,
 } from './redis-keys.js';
 import type { GraphInput, Store } from './store.js';
+import { onServiceUnavailable } from '@repolens/shared';
 
 const MYSQL_URL = process.env.TEST_MYSQL_URL ?? 'mysql://root:dev@127.0.0.1:3306/repolens_test';
 const C = 'a'.repeat(40);
@@ -27,7 +28,8 @@ async function mysqlReachable(): Promise<boolean> {
   }
 }
 const hasMysql = await mysqlReachable();
-if (!hasMysql) console.warn(`[db] MySQL 不可达(${MYSQL_URL}),跳过 MysqlStore 集成测试`);
+if (!hasMysql)
+  onServiceUnavailable('MySQL', `[db] MySQL 不可达(${MYSQL_URL}),跳过 MysqlStore 集成测试`);
 
 const graph: GraphInput = {
   files: [

@@ -25,6 +25,7 @@ import {
 } from '@repolens/db';
 import { buildApp, type AnalyzeJobData, type JobQueue } from './app.js';
 import { createGitHost, parseLsRemote, type GitHost } from './githost.js';
+import { onServiceUnavailable } from '@repolens/shared';
 
 describe('GET /health', () => {
   it('返回 ok', async () => {
@@ -81,7 +82,8 @@ async function redisUp() {
   }
 }
 const hasRedis = await redisUp();
-if (!hasRedis) console.warn(`[api] Redis 不可达(${REDIS_URL}),跳过依赖 Redis 的路由测试`);
+if (!hasRedis)
+  onServiceUnavailable('Redis', `[api] Redis 不可达(${REDIS_URL}),跳过依赖 Redis 的路由测试`);
 
 const SHA = '1'.repeat(40);
 // 限流 key(rl:ip:/rl:sub:{ip}:{hour})按 IP 计数,共享 Redis 上会跨次运行累积。

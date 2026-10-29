@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import mysql from 'mysql2/promise';
 import { expectedMigrations, runMigrations, waitForSchema, withRetry } from './migrate.js';
+import { onServiceUnavailable } from '@repolens/shared';
 
 const MYSQL_URL = process.env.TEST_MYSQL_URL ?? 'mysql://root:dev@127.0.0.1:3306/repolens_test';
 const DB = 'repolens_mig_test';
@@ -18,6 +19,7 @@ async function reachable() {
   }
 }
 const hasMysql = await reachable();
+if (!hasMysql) onServiceUnavailable('MySQL', `[db] MySQL 不可达(${DB}),跳过迁移集成测试`);
 
 describe('withRetry', () => {
   it('指数退避、有上限,成功后停止', async () => {

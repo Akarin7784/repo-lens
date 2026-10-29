@@ -17,7 +17,8 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "@repolens/db": "workspace:*"
+    "@repolens/db": "workspace:*",
+    "@repolens/shared": "workspace:*"
   },
   "devDependencies": {
     "ioredis": "5.11.1"
