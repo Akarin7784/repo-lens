@@ -211,6 +211,8 @@
 
 - 2026-10-30:合并 #127(a88c094):`docker-compose.yml` 与 `docs/DEPLOY.md` 里 api healthcheck 由 `localhost` 改为 `127.0.0.1`,避免容器内解析到 IPv6 `::1` 导致 unhealthy(演示机曾用 override 临时绕过)。diff 仅 2 行。smoke 含 compose /health 绿;ci 因 web `ChatPanel.test.tsx` 倒计时跨档 flaky(期望「约 1 分钟」收到「约 2 分钟」,`shouldAdvanceTime` 已知问题)失败,与本 PR 无关,不挡合并;前端仍按原计划修。
 
+- 2026-10-30:合并 #129(a4802f8,T-238 ChatPanel 纯 fake timers):去掉三处 `shouldAdvanceTime`,推进改 `advanceTimersByTimeAsync`,跨档/超时/10s 倒计时推进后同步 expect,不再 waitFor 按真实时间轮询;新增 flushFake。仅改 ChatPanel.test.tsx(+45/−43)。GraphView.api.test 是真实 setTimeout 沉降,非同类,未改;aria-live 节流仍后续。作者变异 M2/M3 被抓,M1 加回 shouldAdvanceTime 本地仍过(flaky 本性已写明)。CI/smoke 绿(run 40931710151)。我对着 diff 审过,文件级 afterEach 仍 `useRealTimers`。
+
 ## 演示检查清单(第 4 周前逐项勾选)
 - [ ] 演示前抽查 hono 的 `embeddingStatus` 为 `ready`(或 `reused`)。
 - [ ] 「镜像构建下载模型」:CI 已验证(GitHub 环境直连 huggingface.co,手动 workflow `worker-model-build.yml` run 40838998679,5 个文件 `sha256sum -c` 全 OK,镜像内 ONNX embedding 维度 384,构建约 58 秒);**演示机(国内网络)上的构建仍待验证**:演示前先在演示机构建好镜像,下载慢时设 `EMBEDDING_MODEL_BASE_URL` 为镜像站(哈希校验不变)。
