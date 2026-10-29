@@ -36,7 +36,8 @@ services:
       # 构建时下载 embedding 模型(T-214);CI 冒烟设 0,配合 EMBEDDER=fake
       args: { EMBEDDING_MODEL_DOWNLOAD: '${EMBEDDING_MODEL_DOWNLOAD:-1}' }
     env_file: .env
-    environment: { REPOS_DIR: /data/repos }
+    # WORKER_CPUS 也传进容器:未设 EMBEDDING_THREADS 时 ONNX 线程数按它向下取整(容器内未实测)
+    environment: { REPOS_DIR: /data/repos, WORKER_CPUS: '${WORKER_CPUS:-2}' }
     volumes: [repos:/data/repos]
     read_only: true
     tmpfs: [/tmp]
