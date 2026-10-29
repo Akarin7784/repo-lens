@@ -61,6 +61,21 @@ describe('<GraphSearch> 序号钳制与读屏(T-224b)', () => {
     expect(onPick).toHaveBeenCalledWith(FIVE[0]!.id);
   });
 
+  it('T-223 顺带:结果 5→0→5 后高亮在第 1 项,ArrowDown 到第 2 项', () => {
+    const { box, onPick, rerender } = setup(FIVE);
+    for (let i = 0; i < 4; i++) key(box, 'ArrowDown');
+    rerender(<GraphSearch nodes={[]} onPick={onPick} />);
+    rerender(<GraphSearch nodes={FIVE} onPick={onPick} />);
+    let opts = screen.getAllByRole('option');
+    expect(opts[0]).toHaveAttribute('aria-selected', 'true');
+    expect(opts[4]).toHaveAttribute('aria-selected', 'false');
+    key(box, 'ArrowDown');
+    opts = screen.getAllByRole('option');
+    expect(opts[1]).toHaveAttribute('aria-selected', 'true');
+    key(box, 'Enter');
+    expect(onPick).toHaveBeenCalledWith(FIVE[1]!.id);
+  });
+
   it('结果变空:不指向任何 option,回车不回调;结果恢复后回车可用', () => {
     const { box, onPick, rerender } = setup(FIVE);
     key(box, 'ArrowDown');

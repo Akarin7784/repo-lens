@@ -42,6 +42,8 @@ export function GraphSearch({
   // T-224c:钳位时把状态也写回钳过的序号,否则结果再变多(5→2→5)会跳回旧的第 5 项。
   // 渲染期间按条件更新自身 state 是 React 允许的写法(只在越界时触发一次,不会循环)
   if (hits.length > 0 && active > activeIdx) setActive(activeIdx);
+  // T-223 顺带:无结果时把内部序号归 0,否则 5→0→5 会回到旧的第 5 项
+  if (hits.length === 0 && active !== 0) setActive(0);
   const expanded = showList && hits.length > 0;
 
   useEffect(() => {

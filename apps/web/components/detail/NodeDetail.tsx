@@ -3,6 +3,7 @@ import type { NodeDetail as NodeDetailData } from '@repolens/shared';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ApiClient } from '../../lib/api/client';
 import { userMessageOf } from '../../lib/api/errors';
+import { CodePreview } from './CodePreview';
 
 /** 图中当前可见层级的一跳邻居(来自 GraphView,不发请求) */
 export type GraphNeighbors = { deps: string[]; dependents: string[] };
@@ -10,7 +11,8 @@ export type GraphNeighbors = { deps: string[]; dependents: string[] };
 type Props = {
   repoId: number;
   nodeId: string;
-  api: Pick<ApiClient, 'getNodeDetail'>;
+  /** getFile 可选:没有时不显示代码预览入口(T-223) */
+  api: Pick<ApiClient, 'getNodeDetail'> & Partial<Pick<ApiClient, 'getFile'>>;
   neighbors?: GraphNeighbors;
   /** 进度流收到 done 时递增:summary 为 null 时据此重取 */
   doneTick?: number;
@@ -118,7 +120,15 @@ export function NodeDetail({
           <Skeleton />
         </div>
       ) : (
-        <Body d={load.data} neighbors={neighbors} analysisDone={analysisDone} onJump={onJump} />
+        <Body
+          key={load.data.id}
+          d={load.data}
+          repoId={repoId}
+          api={api}
+          neighbors={neighbors}
+          analysisDone={analysisDone}
+          onJump={onJump}
+        />
       )}
     </section>
   );
@@ -168,15 +178,21 @@ function Skeleton() {
 
 function Body({
   d,
+  repoId,
+  api,
   neighbors,
   analysisDone,
   onJump,
 }: {
   d: NodeDetailData;
+  repoId: number;
+  api: Partial<Pick<ApiClient, 'getFile'>>;
   neighbors?: GraphNeighbors;
   analysisDone: boolean;
   onJump(id: string): void;
 }) {
+  const [codeOpen, setCodeOpen] = useState(false);
+  const getFile = api.getFile;
   const crumbs = breadcrumbs(d.id, d.path);
   // 只有分析未完成时 null 才表示「生成中」;外部包节点不生成摘要
   const pending = d.summary === null && d.kind !== 'external' && !analysisDone;
@@ -248,6 +264,25 @@ function Body({
           </div>
         ))}
       </dl>
+
+      {d.kind === 'file' && getFile && (
+        <div className="flex min-w-0 flex-col gap-2">
+          <button
+            type="button"
+            aria-expanded={codeOpen}
+            aria-controls="node-code-preview"
+            onClick={() => setCodeOpen((o) => !o)}
+            className="w-fit rounded-control border border-line bg-panel px-3 py-1.5 text-[13px] text-fg hover:border-accent-strong"
+          >
+            {codeOpen ? '收起代码' : '查看代码'}
+          </button>
+          {codeOpen && (
+            <div id="node-code-preview" className="min-w-0">
+              <CodePreview repoId={repoId} path={d.path} api={{ getFile }} />
+            </div>
+          )}
+        </div>
+      )}
 
       {d.exports.length > 0 && (
         <div>

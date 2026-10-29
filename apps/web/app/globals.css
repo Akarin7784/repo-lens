@@ -135,3 +135,8 @@ body {
     transition: none;
   }
 }
+
+/* T-223 代码预览:Shiki 双主题 token,深色主题读 --shiki-dark */
+[data-theme='dark'] .shiki-tok {
+  color: var(--shiki-dark) !important;
+}
