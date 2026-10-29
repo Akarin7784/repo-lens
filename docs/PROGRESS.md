@@ -104,6 +104,13 @@
 - 评审:在含 #43 的 main 上试合并无冲突,337 测试全过,变异检查有效。
 - 非阻塞后续:`turbo.json` 没有 `dev` 任务,在 `apps/web` 里直接跑 `next dev`/`tsc`/`vitest` 时 shared 可能是旧构建,422 会显示成「数据格式不符合约定」。建议加 `dev` 任务(`dependsOn: ["^build"]`)和根目录 `dev` 脚本。
 
+### 2026-10-29 合并 #48(T-211c 摘要按提交缓存,66fb738)与 #49(T-222d 窄屏抽屉等,a24129f)
+- #48:摘要表加 `commit_sha`、`source`(llm|rule),唯一键 `(repo_id, level, target_id, commit_sha)`;迁移 `0001_summary_commit.sql` 幂等(information_schema 检查 + PREPARE);跨提交按 input hash 复用并保留 source;`/nodes/:nodeId` 返回 `summarySource` 和 `inCycle`(schema 中缺省为 null/false)。
+- #48 验证:本机 MariaDB 用旧结构旧数据把迁移跑两遍(直接执行和 runMigrations)通过;CI `smoke` 在真实 MySQL 8.4.13 上用旧表结构、旧行连跑两遍并断言列、唯一键、回填值,日志可见 `migration_0001_run_1/2=ok`。**迁移在 MySQL 8.4 上已由 CI 验证**,演示机 compose 上不必再单独跑(可作最终确认)。
+- #48 非阻塞后续(已并入后端下一个小 PR):worker 只读最近提交的摘要;`commit_sha=''` 孤儿行;api 与 worker 一起更新。
+- #49:768px 以下详情变底部抽屉;选中节点从图中消失时清除选中并关闭面板(深链跳转中保留);turbo `dev` 任务与根目录 `dev` 脚本;真实浏览器截图 `docs/assets/T-222d/`。评审 342 测试全过,14 个探针含 #43 深链场景,变异检查有效。
+- #49 非阻塞后续:窄屏状态条压住缩放按钮且显示「Esc 取消」;截图带 Next dev 角标;README 本地开发步骤仍是 `--filter` 写法,api 的 dev 需先 `pnpm build`;「跳转中保留选中」例外无测试;`55vh` 改 `55dvh`。
+
 ## 演示检查清单(第 4 周前逐项勾选)
 - [ ] 演示机拉代码后先在仓库根目录运行 `pnpm build`(或 `pnpm --filter @repolens/shared build`),避免 shared 旧构建导致错误码显示异常。
 - 演示前提前分析好 hono、zustand、zod、trpc,演示时只走「复用已有结果」的路径,现场不依赖新分析。
