@@ -73,6 +73,16 @@
 - 2026-10-29 14:5x:#38 合并(T-211a,提交 9ce09ee)、#41 合并(T-211b,提交 91b1353)。我在 #38 最新提交 fac482c 与 #41 最新提交 5900157 上串行独立重跑 install、lint、typecheck、build、test(#41 共 243 个)全过,`ci` 与 `smoke` 绿,#38 合入后把 #41 的 base 改为 main,试合并无冲突。#38:api 和 worker 启动时调用 `readLlmConfig`,配置非法则启动失败(用构建产物实跑 `DAILY_LLM_BUDGET_CENTS=abc` 验证,api 的启动失败只有手动验证、没有自动测试);补了 UTC 零点恢复测试;缓存内容损坏按未命中处理并覆盖;文档写明 `dailyBudgetCents=0` 表示禁止调用(缓存仍可命中)。#41:分层摘要 file→dir→module→repo,每层只读下一层摘要;输入哈希(含层级、模型、`PROMPT_VERSION`)相同就复用,同一 commit 重跑零次模型调用;只对 fanIn 前 200 的文件调模型,其余规则摘要;失败重试一次后降级;预算耗尽后剩余节点规则摘要,只发一次 `stage_error`,任务仍 done;记账走 #36 的网关并带 taskId;提示词声明代码内容为不可信数据并转义闭合标签,源码截断到 150 行或 6000 字,输出最多 600 字;`/nodes` 返回真实摘要,smoke 断言 module 摘要非空。后续项(非阻塞):没有单文件超时,T-210b 加;dir 和 module 提示词没有子项总长度上限;源码未过滤 `.env` 等敏感文件;摘要表没有 commit 列,同仓库换 commit 会覆盖旧摘要(架构师定为 T-211c 单独 PR,唯一键改为 `(repo_id, node_id, commit_sha)`);api 路由测试在共享 Redis 上会因限流计数累积误报 429,建议测试用随机 key 前缀或测试前清理。D4(embedding):DeepSeek 官方文档没有 embedding 接口,架构师定为默认本地 ONNX `multilingual-e5-small`(384 维),后端先在 hono 上实测切块数和耗时,超过 5 分钟或中文召回不行再换 OpenAI 兼容接口(那时再请 Eva 另选供应商和 key)。
 - 2026-10-29 15:0x:#39 合并(T-221 悬停预览,提交见 main 上 `(#39)`)。第一轮复验(4496d2f)发现 `NEXT_PUBLIC_AGG_EDGE_OPACITY` 未在 `turbo.json` 声明、Dockerfile 与 compose 没有对应构建参数、文档把它写成启动时可设;前端补了 `turbo.json` 声明、Dockerfile `ARG`/`ENV`(默认 0.3)、compose build args、`.env.example` 和文档,并更正了「turbo 会过滤」的说法(实测 turbo 2 对 Next 自动放行 `NEXT_PUBLIC_*`,现在改为显式声明)。我在新提交 03c23c3 上串行重跑 install、lint、typecheck、build、test(web 80)全过,`ci` 与 `smoke` 绿,试合并无冲突;实测设为 0.4 构建时客户端包内联 0.4,不设则回退 0.3,换值会触发重新构建。悬停约 120ms 后相连的边用选中样式,其余边压暗到 0.6 倍,选中优先,不隐藏任何边,状态栏不变。截图在 `docs/assets/T-221/`(生产构建,0.3/0.4/0.5 各一张加局部放大图)。未验证:compose 里传 0.4 是否真的生效(没有 Docker,只有 CI 证明构建不坏)、暗色、Safari、Firefox、投影仪、触屏和键盘焦点预览。上投影仪前请 Eva 在 0.3/0.4/0.5 里现场选。
 
+### 2026-10-29 合并 #42(T-210b,540f610)
+- 真实 DeepSeek 客户端(`deepseek-flash`),key 只从 `DEEPSEEK_API_KEY` 读取,错误信息先抹 key 再截断;敏感文件(`.env*`、PEM、keystore、常见 key 前缀)不进提示词和切块;按 provider 的熔断器;假 key e2e 测试和手动冒烟脚本。
+- 评审:干净环境 install/lint/typecheck/build/test 全过,28 个绕过用例,变异测试确认 e2e 测试有效;评审中发现 500 响应回显 key 的泄露,作者已在 03ede97 修复。
+- 非阻塞后续:规则表补 `_authToken`/`npm_`/JWT/`sk_test_`/`credentials`/`secrets.*`;文件大小上限与二进制处理;熔断半开再失败立即重开;价格表(flash 输入 $0.30、命中 $0.006、输出 $1.2 每百万 token)需人工对照官方页面。
+
+### 2026-10-29 合并 #44(提交页公开仓库提示,ffc7584)
+- 提交页输入框下加提示"只接受公开仓库。源码内容会发送给第三方模型服务。",`aria-describedby` 关联,校验提示不跳动。
+- 评审:干净环境全过(297 测试),与 main、#43 试合并无冲突。非阻塞:id 写死,复用时改 `useId()`;未实际渲染截图。
+- #43 评审结果:需修改(`?node=` 深链接到未展开节点会被 `suggestedFocus` 覆盖,跳转失败),已反馈前端。
+
 ## 演示检查清单(第 4 周前逐项勾选)
 - 演示前提前分析好 hono、zustand、zod、trpc,演示时只走「复用已有结果」的路径,现场不依赖新分析。
 - 演示环境把 `RATE_LIMIT_NEW_REPOS_PER_HOUR` 调高(默认 5),避免彩排几次后被限流;同时确认 `RATE_LIMIT_SUBMITS_PER_HOUR`(默认 60)够用。
