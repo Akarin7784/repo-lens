@@ -8,7 +8,7 @@ import {
   type Answer,
   type AnswerAction,
 } from '../../lib/chat/answer';
-import { chatErrorText, retryCooldownSec } from '../../lib/chat/errors';
+import { chatErrorText, formatWait, retryCooldownSec } from '../../lib/chat/errors';
 import {
   buildChatRequest,
   ChatTransportError,
@@ -342,14 +342,18 @@ function RetryButton({ cooldown, onRetry }: { cooldown: number; onRetry: () => v
     const t = setTimeout(() => setLeft((s) => s - 1), 1000);
     return () => clearTimeout(t);
   }, [left]);
+  // T-236:倒计时只写在提示行,按钮文字固定为「重试」,等待期间仅禁用
   return (
-    <button
-      type="button"
-      disabled={left > 0}
-      onClick={onRetry}
-      className="rounded-control border border-line px-2 py-0.5 text-fg disabled:opacity-50"
-    >
-      {left > 0 ? `重试(${left}s)` : '重试'}
-    </button>
+    <>
+      {left > 0 && <span data-testid="retry-wait">{formatWait(left)}后可再提问</span>}
+      <button
+        type="button"
+        disabled={left > 0}
+        onClick={onRetry}
+        className="rounded-control border border-line px-2 py-0.5 text-fg disabled:opacity-50"
+      >
+        重试
+      </button>
+    </>
   );
 }

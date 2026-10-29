@@ -17,6 +17,14 @@ export const RATE_LIMIT_COOLDOWN_S = 10;
 /** retryAfterSec 上限:契约为 1–3600(距下一个 UTC 整点);超出按 3600 截断,防止异常值让按钮长期不可点 */
 export const RATE_LIMIT_MAX_COOLDOWN_S = 3600;
 
+/**
+ * 等待时长文案(T-236,架构师定稿):不足 60 秒「N 秒」;60 秒及以上向上取整「约 N 分钟」。
+ * 用于提示行「…后可再提问」;按钮文字不含倒计时。
+ */
+export function formatWait(sec: number): string {
+  return sec < 60 ? `${sec} 秒` : `约 ${Math.ceil(sec / 60)} 分钟`;
+}
+
 /** 契约 v2:429 按 details.reason 细分;缺失或不认识的 reason 用通用 CHAT_ERROR_TEXT.RATE_LIMITED */
 export const RATE_LIMITED_REASON_TEXT: Record<string, string> = {
   rate_limit: '本小时提问次数已用完,请稍后再试',

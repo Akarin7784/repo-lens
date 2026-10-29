@@ -156,10 +156,12 @@ describe('<ChatPanel>(假流,未接真实后端)', () => {
     );
     ask();
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('提问太频繁'));
-    expect(screen.getByRole('button', { name: '重试(10s)' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '重试' })).toBeDisabled();
+    expect(screen.getByTestId('retry-wait')).toHaveTextContent('10 秒后可再提问');
     // 倒计时是逐秒 setTimeout 链,CI 上 React 提交可能晚于计时推进:多推一秒并等待提交,避免时序抖动
     for (let i = 0; i < 11; i++) await act(async () => void vi.advanceTimersByTime(1000));
     await waitFor(() => expect(screen.getByRole('button', { name: '重试' })).toBeEnabled());
+    expect(screen.queryByTestId('retry-wait')).toBeNull();
   });
 
   it('流在 done 前结束 → 「回答中途断开」可重试,保留已输出 token 与可点引用', async () => {
@@ -457,7 +459,10 @@ describe('<ChatPanel>(假流,未接真实后端)', () => {
       const btn = within(lastAnswer()).queryByRole('button', { name: /重试/ });
       if (retry) expect(btn).not.toBeNull();
       else expect(btn).toBeNull();
-      if (status === 429) expect(btn).toHaveTextContent('重试(10s)');
+      if (status === 429) {
+        expect(btn).toHaveTextContent(/^重试$/);
+        expect(within(lastAnswer()).getByTestId('retry-wait')).toHaveTextContent('10 秒后可再提问');
+      }
     },
   );
 });
@@ -500,46 +505,74 @@ describe('<ChatPanel> 契约 v2:429 按 details.reason 细分(T-235)', () => {
         { reason: 'rate_limit', retryAfterSec: 30 },
         /本小时提问次数已用完,请稍后再试/,
         null,
-        '重试(30s)',
+        '30 秒后可再提问',
       ],
       [
         'rate_limit 无 retryAfterSec → 兜底 10s',
         { reason: 'rate_limit' },
         /本小时提问次数已用完/,
         null,
-        '重试(10s)',
+        '10 秒后可再提问',
       ],
       [
         'rate_limit retryAfterSec 非正整数 → 兜底 10s',
         { reason: 'rate_limit', retryAfterSec: '30' },
         /本小时提问次数已用完/,
         null,
-        '重试(10s)',
+        '10 秒后可再提问',
       ],
       [
         'rate_limit retryAfterSec 超上限 → 截到 3600s',
         { reason: 'rate_limit', retryAfterSec: 99999 },
         /本小时提问次数已用完/,
         null,
-        '重试(3600s)',
+        '约 60 分钟后可再提问',
       ],
       [
         'concurrency(即使带了 retryAfterSec 也不用)',
         { reason: 'concurrency', retryAfterSec: 30 },
         /当前提问的人较多,请稍后再试/,
         /本小时/,
-        '重试(10s)',
+        '10 秒后可再提问',
       ],
       [
         '未知 reason',
         { reason: 'something_new', retryAfterSec: 30 },
         /提问太频繁,请稍后再试/,
         /本小时|提问的人较多/,
-        '重试(10s)',
+        '10 秒后可再提问',
       ],
-      ['缺 details', undefined, /提问太频繁,请稍后再试/, /本小时|提问的人较多/, '重试(10s)'],
+      [
+        'rate_limit 59 秒(不足 60,无「约」)',
+        { reason: 'rate_limit', retryAfterSec: 59 },
+        /本小时/,
+        null,
+        '59 秒后可再提问',
+      ],
+      [
+        'rate_limit 60 秒 → 约 1 分钟',
+        { reason: 'rate_limit', retryAfterSec: 60 },
+        /本小时/,
+        null,
+        '约 1 分钟后可再提问',
+      ],
+      [
+        'rate_limit 61 秒 → 约 2 分钟(向上取整)',
+        { reason: 'rate_limit', retryAfterSec: 61 },
+        /本小时/,
+        null,
+        '约 2 分钟后可再提问',
+      ],
+      [
+        'rate_limit 3599 秒 → 约 60 分钟',
+        { reason: 'rate_limit', retryAfterSec: 3599 },
+        /本小时/,
+        null,
+        '约 60 分钟后可再提问',
+      ],
+      ['缺 details', undefined, /提问太频繁,请稍后再试/, /本小时|提问的人较多/, '10 秒后可再提问'],
     ];
-  it.each(cases)('%s', async (_n, details, text, notText, btnText) => {
+  it.each(cases)('%s', async (_n, details, text, notText, waitText) => {
     const fetchImpl = vi.fn(
       async () =>
         new Response(
@@ -561,7 +594,11 @@ describe('<ChatPanel> 契约 v2:429 按 details.reason 细分(T-235)', () => {
     expect(alert.textContent).toMatch(text);
     if (notText) expect(alert.textContent).not.toMatch(notText);
     expect(lastAnswer().textContent).not.toMatch(/NaN|undefined|null/);
-    expect(within(lastAnswer()).getByRole('button', { name: /重试/ })).toHaveTextContent(btnText);
-    expect(within(lastAnswer()).getByRole('button', { name: /重试/ })).toBeDisabled();
+    // T-236:等待时长只在提示行;按钮文字固定「重试」,仅禁用
+    const wait = within(lastAnswer()).getByTestId('retry-wait');
+    expect(wait.textContent).toBe(waitText);
+    const btn = within(lastAnswer()).getByRole('button', { name: /重试/ });
+    expect(btn.textContent).toBe('重试');
+    expect(btn).toBeDisabled();
   });
 });

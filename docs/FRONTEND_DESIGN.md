@@ -322,7 +322,7 @@ async function chat(repoId: number, req: ChatRequest, signal: AbortSignal) {
 | `LLM_UNAVAILABLE` | 模型服务暂时不可用 | 通常有 | 示例仓库可展示检索片段或缓存答案 |
 | `BUDGET_EXCEEDED` | 今日额度已用完，明天再试 | 通常没有 | 禁用输入框，并显示原因 |
 | `REPO_NOT_READY` | 仓库还在分析中（摘要/索引未完成） | 有 | 顶栏小进度条高亮，完成后提示可以提问 |
-| `RATE_LIMITED` | 按契约 v2 的 `error.details.reason` 细分(T-235):`rate_limit`「本小时提问次数已用完,请稍后再试」;`concurrency`「当前提问的人较多,请稍后再试」;缺 reason 或不认识的 reason(宽松解析兜底)用通用「提问太频繁,请稍后再试」 | 有。`rate_limit` 带正整数 `retryAfterSec` 时按它倒计时(秒,上限 3600);其余情况(含 `concurrency`,契约规定不带该字段,带了也忽略)倒计时 10 秒 | — |
+| `RATE_LIMITED` | 按契约 v2 的 `error.details.reason` 细分(T-235):`rate_limit`「本小时提问次数已用完,请稍后再试」;`concurrency`「当前提问的人较多,请稍后再试」;缺 reason 或不认识的 reason(宽松解析兜底)用通用「提问太频繁,请稍后再试」 | 有。`rate_limit` 带正整数 `retryAfterSec` 时按它倒计时(上限 3600 秒);其余情况(含 `concurrency`,契约规定不带该字段,带了也忽略)倒计时 10 秒。T-236:倒计时不写进按钮,按钮文字固定「重试」、等待期间仅禁用;提示行显示「N 秒后可再提问」(不足 60 秒)或「约 N 分钟后可再提问」(60 秒及以上,N=ceil(秒/60),如 60→约 1 分钟、61→约 2 分钟、3600→约 60 分钟) | — |
 
 是否显示重试按钮一律以 `retryable` 为准，表里只是常见情况。
 
