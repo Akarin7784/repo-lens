@@ -151,3 +151,17 @@ export function evalUsageLine(c: EvalEmbeddingChoice, u: EvalIndexUsage | null):
       : '';
   return `${head} reused=0 totalTokens=${u.measuredTokens} batches=${u.batches}${est}`;
 }
+
+/**
+ * 评测里传给 hybridSearch 的「索引来源」。评测的索引与查询总是同一个 embedder,
+ * 所以如实写出 provider/model/dim:dashscope 时不传会被 hybridSearch 当作 local
+ * 而判 provider-mismatch,全部题降级 keyword-only。local 不传(与改动前完全一致)。
+ */
+export function evalIndexedSource(c: EvalEmbeddingChoice): {
+  indexedProvider?: 'dashscope';
+  indexedModel?: string;
+  indexedDim?: number;
+} {
+  if (c.provider === 'local') return {};
+  return { indexedProvider: 'dashscope', indexedModel: c.model, indexedDim: c.dim };
+}

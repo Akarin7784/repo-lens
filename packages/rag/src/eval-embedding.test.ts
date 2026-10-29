@@ -1,9 +1,12 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { FakeEmbedder } from './embedder.js';
 import { DashscopeEmbedder } from './dashscope.js';
 import { chunksDigest, indexChunks } from './indexer.js';
 import { MemoryVectorStore } from './vector-store.js';
+import { hybridSearch } from './retrieval.js';
 import {
+  evalIndexedSource,
   evalUsageLine,
   trackEvalIndexUsage,
   evalEmbeddingLine,
@@ -212,5 +215,86 @@ describe('评测索引用量行(EVAL embedding usage)', () => {
       'EVAL embedding usage reused=0 totalTokens=不适用(local)',
     );
     expect(evalUsageLine(c, t.usage)).not.toContain(FAKE_KEY);
+  });
+});
+
+describe('评测传给 hybridSearch 的索引来源(evalIndexedSource)', () => {
+  const c = selectEvalEmbedding({
+    EMBEDDING_PROVIDER: 'dashscope',
+    DASHSCOPE_API_KEY: FAKE_KEY,
+    DASHSCOPE_EMBEDDING_MODEL: 'qwen3.7-text-embedding',
+    DASHSCOPE_EMBEDDING_DIM: '1024',
+  });
+  const fakeFetch = (async (_url: string, init: RequestInit) => {
+    const input = JSON.parse(String(init.body)).input as string[];
+    return new Response(
+      JSON.stringify({
+        data: input.map((t, index) => ({
+          index,
+          embedding: Array.from({ length: 1024 }, (_, k) => ((t.length + k) % 7) + 1),
+        })),
+        usage: { total_tokens: input.length },
+      }),
+      { status: 200 },
+    );
+  }) as unknown as typeof fetch;
+  const setup = async () => {
+    const emb = new DashscopeEmbedder(c.dashscope!, { fetch: fakeFetch });
+    const chunks = ['src/a.ts', 'src/b.ts'].map((path, i) => ({
+      path,
+      symbol: `f${i}`,
+      startLine: 1,
+      endLine: 3,
+      text: `${path} f${i}\nexport function f${i}() {}`,
+      contentHash: `h${i}`,
+    }));
+    const vs = new MemoryVectorStore();
+    await indexChunks(
+      { repoId: 1, commitSha: 'c1', chunks: chunks as never, batchSize: 2 },
+      emb,
+      vs,
+    );
+    const rows = [...vs.points.values()].map((p) => ({
+      path: p.payload.path,
+      symbol: p.payload.symbol,
+      startLine: p.payload.start_line,
+      endLine: p.payload.end_line,
+      content: chunks.find((x) => x.path === p.payload.path)!.text,
+      qdrantPointId: p.id,
+    }));
+    const q = { repoId: 1, commitSha: 'c1', question: 'f0', rewritten: 'f0', chunks: rows };
+    return { emb, vs, q };
+  };
+
+  it('dashscope:返回真实 provider/model/dim', () => {
+    expect(evalIndexedSource(c)).toEqual({
+      indexedProvider: 'dashscope',
+      indexedModel: 'qwen3.7-text-embedding',
+      indexedDim: 1024,
+    });
+  });
+
+  it('dashscope 带来源走 hybrid;不带(修复前)被当作 local → provider-mismatch,keyword-only', async () => {
+    const { emb, vs, q } = await setup();
+    const base = { ...q, embeddingStatus: 'ready', embedder: emb, vectorStore: vs, limit: 5 };
+    const fixed = await hybridSearch({ ...base, ...evalIndexedSource(c) });
+    expect(fixed.retrieval).toBe('hybrid');
+    expect(fixed.hits.some((h) => h.sources.includes('vector'))).toBe(true);
+    const before = await hybridSearch(base);
+    expect(before).toMatchObject({
+      retrieval: 'keyword-only',
+      degradedReason: 'provider-mismatch',
+    });
+  });
+
+  it('rag-eval.mjs 里每处 hybridSearch 调用都展开 evalIndexedSource(EMB)(共 3 处)', () => {
+    const src = readFileSync(new URL('../../../scripts/rag-eval.mjs', import.meta.url), 'utf8');
+    const calls = [...src.matchAll(/hybridSearch\(\{([\s\S]*?)\}\)/g)].map((m) => m[1]!);
+    expect(calls).toHaveLength(3);
+    for (const body of calls) expect(body).toContain('...evalIndexedSource(EMB)');
+  });
+
+  it('local:不传任何来源字段(与改动前一致)', () => {
+    expect(evalIndexedSource(selectEvalEmbedding({}))).toEqual({});
   });
 });
