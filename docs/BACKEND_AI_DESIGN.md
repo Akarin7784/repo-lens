@@ -223,6 +223,7 @@ CREATE TABLE llm_usage (
 | LLM 响应缓存 | `llm:{sha256(model+prompt)}` | String，TTL 30d |
 | Embedding 缓存 | `emb:{model}:{contentHash}` | String(base64 float32)，TTL 30d |
 | 限流 | `rl:ip:{ip}:{yyyyMMddHH}` | INCR，TTL 1h;**只计真正入队的提交**(新任务或 failed 重试);同仓库同 commit 已有 done/queued/running 任务时直接复用,不计数(T-003d)。超限返回 429 `RATE_LIMITED`,不建任务 |
+| 提交总量(宽松) | `rl:sub:{ip}:{yyyyMMddHH}` | INCR,TTL 1h;`POST /api/repos` 的**每一次**提交都计(包括被拒绝的 400/404/413/422、出错的 500、复用的 200,T-003f),同一来源每小时上限 60(`submitLimitPerHour`),超限返回 429 `RATE_LIMITED`。这个检查在请求最前面做,被它拦下的请求不建任务,也不占新任务名额。被拒绝的提交不进入新任务计数;已计数但最终没有入队的提交(并发下别人先建了未失败任务,或建任务/入队抛错)会 DECR 退还 1 次 |
 | 预算 | `budget:day:{yyyyMMdd}`、`budget:repo:{repoId}` | INCRBY(微美元) |
 | 熔断状态 | `cb:llm:{provider}` | Hash {state, failCount, openedAt} |
 
@@ -260,6 +261,7 @@ sequenceDiagram
   participant W as Worker
   participant R as Redis Stream
   C->>A: POST /api/repos {url}
+  A->>A: 先计提交总量(rl:sub,60/h,任何提交都计)
   A->>A: 校验URL / ls-remote 取 commit / 查已有任务
   A->>A: 仅当需要入队(新任务或 failed 重试)时限流计数
   A->>Q: add('analyze', {repoId, commit}, {jobId: repoId+':'+commit})

@@ -44,6 +44,8 @@ export interface AppDeps {
   queue: JobQueue;
   git: GitHost;
   rateLimitPerHour?: number;
+  /** 同一来源每小时 POST /api/repos 的总提交上限(含被拒绝/出错的提交),默认 60 */
+  submitLimitPerHour?: number;
   maxRepoMb?: number;
   pingIntervalMs?: number;
   logger?: boolean;
@@ -81,17 +83,29 @@ export function buildApp(deps?: AppDeps): FastifyInstance {
   if (!deps) return app;
   const { store, redis, queue, git } = deps;
   const limit = deps.rateLimitPerHour ?? 5;
+  const submitLimit = deps.submitLimitPerHour ?? 60;
   const maxRepoKb = (deps.maxRepoMb ?? 300) * 1024;
 
-  async function rateLimit(ip: string) {
-    const key = redisKeys.rateLimitIp(ip);
+  async function hit(key: string) {
     const [[, n]] = (await redis.multi().incr(key).expire(key, RATE_LIMIT_TTL_S, 'NX').exec()) as [
       [unknown, number],
     ];
-    if (n > limit) throw new HttpError('RATE_LIMITED', `每个 IP 每小时最多提交 ${limit} 次`);
+    return n;
+  }
+  /** 新任务限额(默认 5/h):只计真正入队的提交;超限时不退还(超限请求本身不入队,计数值只用于比较) */
+  async function rateLimit(ip: string) {
+    const n = await hit(redisKeys.rateLimitIp(ip));
+    if (n > limit) throw new HttpError('RATE_LIMITED', `每个 IP 每小时最多提交 ${limit} 个新任务`);
+  }
+  /** 宽松总量计数(默认 60/h):所有提交都计,包括被拒绝、出错、复用的 */
+  async function submitLimitCheck(ip: string) {
+    const n = await hit(redisKeys.submitLimitIp(ip));
+    if (n > submitLimit)
+      throw new HttpError('RATE_LIMITED', `每个 IP 每小时最多提交 ${submitLimit} 次请求`);
   }
 
   app.post('/api/repos', async (req, reply) => {
+    await submitLimitCheck(req.ip);
     const body = CreateRepoRequestSchema.safeParse(req.body);
     if (!body.success)
       throw new HttpError('INVALID_REPO_URL', body.error.issues[0]?.message ?? '请求体无效');
@@ -116,25 +130,42 @@ export function buildApp(deps?: AppDeps): FastifyInstance {
     // 限流只计"真正入队"的提交:同仓库同 commit 已有未失败的任务(done/queued/running)时直接复用,不计数;
     // 新任务或 failed 重试会入队,先计数,超限 429 且不建任务。
     const existing = await store.getTask(jobId);
-    if (!existing || existing.stage === 'failed') await rateLimit(req.ip);
-    const { task, created } = await store.createTask({ jobId, repoId: repo.id, commitSha });
+    const counted = !existing || existing.stage === 'failed';
+    if (counted) await rateLimit(req.ip);
+    // 已计数但最终没有入队(并发下别人先建了未失败的任务,或建任务/入队出错)时退还 1 次
+    let refunded = !counted;
+    const refund = async () => {
+      if (refunded) return;
+      refunded = true;
+      await redis.decr(redisKeys.rateLimitIp(req.ip));
+    };
+    let task: Awaited<ReturnType<typeof store.createTask>>['task'];
+    let created: boolean;
     const data: AnalyzeJobData = { jobId, repoId: repo.id, repoUrl: url, commitSha };
-    let status = statusOf(task.stage);
-    if (created) {
-      await queue.enqueue(data);
-    } else if (task.stage === 'failed') {
-      await store.updateTask(jobId, {
-        stage: 'queued',
-        progress: 0,
-        errorCode: null,
-        errorMsg: null,
-        stats: {},
-        finishedAt: null,
-      });
-      await redis.del(redisKeys.jobEvents(jobId));
-      await queue.removeFailed(jobId);
-      await queue.enqueue(data);
-      status = 'queued';
+    let status: CreateRepoResponse['status'];
+    try {
+      ({ task, created } = await store.createTask({ jobId, repoId: repo.id, commitSha }));
+      status = statusOf(task.stage);
+      if (!created && task.stage !== 'failed') await refund();
+      if (created) {
+        await queue.enqueue(data);
+      } else if (task.stage === 'failed') {
+        await store.updateTask(jobId, {
+          stage: 'queued',
+          progress: 0,
+          errorCode: null,
+          errorMsg: null,
+          stats: {},
+          finishedAt: null,
+        });
+        await redis.del(redisKeys.jobEvents(jobId));
+        await queue.removeFailed(jobId);
+        await queue.enqueue(data);
+        status = 'queued';
+      }
+    } catch (e) {
+      await refund();
+      throw e;
     }
     const res: CreateRepoResponse = {
       repoId: repo.id,
