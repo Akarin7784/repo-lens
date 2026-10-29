@@ -11,7 +11,7 @@ import {
   type TaskBudgetMeter,
 } from '@repolens/rag';
 import { MemoryEventSink } from './events.js';
-import { runPipeline, type PipelineDeps } from './pipeline/run.js';
+import { runEmbedding, runPipeline, type PipelineDeps } from './pipeline/run.js';
 import { makeGitRepo, SAMPLE_REPO, testConfig } from './test-utils.js';
 
 // T-214c(b):外部提供方在 pipeline 里的接线。全部用假 fetch,不连真实接口、不用真实 key。
@@ -42,11 +42,12 @@ function fakeApi(o: { fail?: (n: number) => boolean; usage?: boolean } = {}) {
   return { fetch, bodies, ok };
 }
 
-async function setup(env: Record<string, string> = {}) {
+async function setup(env: Record<string, string> = {}, extra: Record<string, string> = {}) {
   const { url, sha } = makeGitRepo({
     ...SAMPLE_REPO,
     'src/aws.ts': `export const id = '${AWS}';\n`,
     '.env': `TOKEN=${AWS}\n`,
+    ...extra,
   });
   const store = new MemoryStore();
   const repo = await store.upsertRepo({ url, owner: 'o', name: 'n' });
@@ -215,5 +216,56 @@ describe('pipeline 外部 embedding(T-214c b)', () => {
       embeddingSkipReason: 'no-key',
     });
     expect(errs(ev).some((e) => e.message.includes('DASHSCOPE_API_KEY'))).toBe(true);
+  });
+  it('local 与 dashscope 批量取不同值:EMBEDDING_BATCH_SIZE=20 时 dashscope 单批不超过 10', async () => {
+    const many = Object.fromEntries(
+      Array.from({ length: 14 }, (_, k) => [`src/m${k}.ts`, `export const m${k} = ${k};\n`]),
+    );
+    const { store, config, data } = await setup({ EMBEDDING_BATCH_SIZE: '20' }, many);
+    expect(config.embedding.batchSize).toBe(20);
+    expect(config.embedding.dashscope!.batchSize).toBe(10);
+    const api = fakeApi();
+    const deps = {
+      store,
+      config,
+      vectorStore: new MemoryVectorStore(),
+      allowFileProtocol: true,
+      ...wire(config, api),
+    } as Omit<PipelineDeps, 'events'>;
+    await runPipeline(data, { ...deps, events: new MemoryEventSink() });
+    expect((await store.getTask(data.jobId))!.stats.embeddingStatus).toBe('ready');
+    const sizes = api.bodies.map((b) => b.input.length);
+    expect(sizes.reduce((a, b) => a + b, 0)).toBeGreaterThan(10);
+    expect(Math.max(...sizes)).toBe(10);
+  });
+
+  it('空白 chunk 不会被发出:空串与纯空白块在发送前过滤', async () => {
+    const { store, config, data } = await setup();
+    const api = fakeApi();
+    const vectorStore = new MemoryVectorStore();
+    const chunk = (path: string, text: string) => ({
+      path,
+      symbol: null,
+      startLine: 1,
+      endLine: 1,
+      text,
+      contentHash: `h-${path}`,
+    });
+    const prepared = {
+      chunks: [
+        chunk('src/a.ts', 'src/a.ts\nexport const a = 1;'),
+        chunk('src/empty.ts', ''),
+        chunk('src/blank.ts', '  \n\t '),
+        chunk('src/b.ts', 'src/b.ts\nexport const b = 2;'),
+      ],
+      excluded: [],
+    };
+    const deps = { store, config, vectorStore, ...wire(config, api) } as unknown as PipelineDeps;
+    const r = await runEmbedding(data, deps, '/nonexistent', async () => {}, null, prepared);
+    const sent = api.bodies.flatMap((b) => b.input);
+    expect(sent).toHaveLength(2);
+    expect(sent.every((t) => t.trim() !== '')).toBe(true);
+    expect(r.chunks).toBe(2);
+    expect(await vectorStore.count(data.repoId, data.commitSha)).toBe(2);
   });
 });

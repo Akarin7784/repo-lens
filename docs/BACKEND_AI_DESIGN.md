@@ -258,7 +258,7 @@ CREATE TABLE llm_usage (
 - 超时与重试:索引单次 15 秒、最多重试 3 次;查询(问答 `embedQuery`)单次 5 秒、最多重试 1 次,失败由检索降级 `keyword-only`。429/5xx/超时/网络错误按指数退避(1s、2s、4s + 抖动)重试;400/401/403 不重试。429 带 `Retry-After` 时按它等待:索引最多等 10 秒;查询上限 2 秒,超过 2 秒不重试、直接降级 `keyword-only`(查询最坏约 11 秒 = 5s + 1s 退避 + 5s)。响应 `data[].index` 必须是 `[0, 输入条数)` 内的整数、不重复、不缺失,否则归 `bad-response`;读响应体超时 / 中止归 `timeout`(可重试)。6000 字符截断落在高代理项时退一位。
 - 限流:进程内 TPM 令牌桶(`DASHSCOPE_EMBEDDING_TPM`),只对单 worker 有效;多 worker 靠 429 退避兜底,演示只开一个 worker。
 - 错误:`EmbeddingError{kind, status}`,message 只含分类与 HTTP 状态码,**不含第三方原始响应体**(防止回显密钥片段),不挂 `cause`;stats 与日志同样只记分类/状态码/token 数。
-- 预算:`EMBEDDING_TASK_BUDGET_CENTS`(默认 50 美分)独立于摘要的 `LLM_TASK_BUDGET_CENTS=30`。依据:2991 块 × ≤4000 字符上限约 4M token ≈ 2 元 ≈ 30 美分(0.0005 元/千 token,汇率 6.67),`MAX_FILES=5000` 按比例约 50 美分。超限时 `embeddingStatus=skipped`,stats 写原因,不静默(worker 接线在后续 PR)。
+- 预算:`EMBEDDING_TASK_BUDGET_CENTS`(默认 50 美分)独立于摘要的 `LLM_TASK_BUDGET_CENTS=30`。依据:2991 块 × ≤4000 字符上限约 4M token ≈ 2 元 ≈ 30 美分(0.0005 元/千 token,汇率 6.67),`MAX_FILES=5000` 按比例约 50 美分。超限时 `embeddingStatus=skipped`,stats 写原因,不静默(worker 接线见 #90)。预算中途用尽时,此前已成功的批可能已写入 Qdrant;任务状态仍为 skipped,检索只在 `embeddingStatus` 为 ready / reused 时使用向量,所以不会用到这些点。检索查询路径(embedQuery)不受任务预算约束。
 - 隐私:查询改写与查询向量化发送的是用户自己输入的问题,不经 `exclusionRule` 过滤;前端需提示「你输入的问题也会发送给阿里云百炼和大模型服务」。
 
 ### 2.3 向量库（结论：**Qdrant**）
