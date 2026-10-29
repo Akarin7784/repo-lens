@@ -1,6 +1,9 @@
-/* global process, console */
+/* global process, console, URL */
 // T-214 检索评测(手动,CI 不跑):hono @ ed1d5f7,真实 ONNX(e5-small fp32,本地模型目录,不联网)+ 内存向量库 + 查询改写。
 // 用法:pnpm build && node scripts/rag-eval.mjs <tuning|holdout|s1> [--fake-llm]
+// v2(zod 留出集,只跑一次):ZOD_DIR=… EMBEDDING_MODEL_DIR=… node scripts/rag-eval.mjs v2 [--force]
+//   题目从 docs/RAG_HOLDOUT_V2.md 机械解析;必须真实 DeepSeek(不允许 fake);结果同时写入 V2_RESULT_FILE
+//   (默认 /tmp/rl-eval-v2-result.txt),该文件已存在时拒绝再跑,除非 --force(输出里留 FORCE 标记)。
 //   HONO_DIR(默认 /tmp/hono)  EMBEDDING_MODEL_DIR(必填,含 Xenova/multilingual-e5-small)
 //   改写:有 DEEPSEEK_API_KEY 且未加 --fake-llm 时走真实 DeepSeek;否则 FakeLlm(结果须标「改写未运行」)。
 // 只打印题目、命中与 usage;绝不打印 key(输出前抹掉)。向量缓存在 /tmp/rl-eval-vectors.json(只含公开仓库切块向量),
@@ -8,6 +11,8 @@
 // 改写缓存在 /tmp/rl-eval-rewrites.json,key = 问题 + 提示词版本 + 模型(同一问题重跑不再调模型)。
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
+import { appendFileSync } from 'node:fs';
+import { parseHoldoutV2, judgeV2, ZOD_SHA } from './rag-eval-v2-lib.mjs';
 import { analyzeRepo, scanSourceFiles } from '../packages/analyzer/dist/index.js';
 import {
   OnnxEmbedder,
@@ -37,10 +42,17 @@ import {
 } from '../packages/agent/dist/index.js';
 import { MemoryStore } from '../packages/db/dist/index.js';
 
-const SHA = 'ed1d5f72135ccf7e09c17d64dc4af7588dd3e491';
+const HONO_SHA = 'ed1d5f72135ccf7e09c17d64dc4af7588dd3e491';
+const V2 = process.argv[2] === 'v2';
+const SHA = V2 ? ZOD_SHA : HONO_SHA;
 const key = process.env.DEEPSEEK_API_KEY?.trim() ?? '';
 const scrub = (s) => (key ? String(s).split(key).join('***') : String(s));
-const out = (s) => console.log(scrub(s));
+const V2_RESULT = process.env.V2_RESULT_FILE || '/tmp/rl-eval-v2-result.txt';
+let resultReady = false;
+const out = (s) => {
+  console.log(scrub(s));
+  if (V2 && resultReady) appendFileSync(V2_RESULT, scrub(s) + '\n');
+};
 
 const SETS = {
   tuning: [
@@ -109,14 +121,35 @@ const SETS = {
 };
 
 const setName = process.argv[2];
+const FORCE = process.argv.includes('--force');
+if (V2) {
+  // 防误跑:结果文件已存在则拒绝,除非 --force
+  if (existsSync(V2_RESULT) && !FORCE)
+    throw new Error(`v2 结果文件 ${V2_RESULT} 已存在,v2 只许跑一次;确需重跑请显式加 --force`);
+  if (process.argv.includes('--fake-llm')) throw new Error('v2 不允许 --fake-llm');
+  if (!key) throw new Error('v2 需要环境变量 DEEPSEEK_API_KEY(不允许退回 FakeLlm)');
+  // 题目在任何仓库分析前先严格解析,解析失败直接报错
+  SETS.v2 = parseHoldoutV2(
+    readFileSync(new URL('../docs/RAG_HOLDOUT_V2.md', import.meta.url), 'utf8'),
+  ).map((r) => [r.id, r.question, r.want, null]);
+}
 const fake = process.argv.includes('--fake-llm') || !key;
 const DIAG = setName === 'diag-s1';
 const ATTRIB = setName === 'attrib';
 if (!SETS[setName] && !DIAG && !ATTRIB)
-  throw new Error('用法: rag-eval.mjs <tuning|holdout|s1> [--fake-llm]');
-const root = process.env.HONO_DIR ?? '/tmp/hono';
+  throw new Error('用法: rag-eval.mjs <tuning|holdout|s1|v2> [--fake-llm] [--force]');
+if (V2 && !process.env.ZOD_DIR) throw new Error('v2 需要 ZOD_DIR');
+const root = V2 ? process.env.ZOD_DIR : (process.env.HONO_DIR ?? '/tmp/hono');
 const head = execFileSync('git', ['-C', root, 'rev-parse', 'HEAD']).toString().trim();
-if (head !== SHA) throw new Error(`hono HEAD ${head} != ${SHA}`);
+if (head !== SHA) throw new Error(`${V2 ? 'zod' : 'hono'} HEAD ${head} != ${SHA}`);
+const mainSha = execFileSync('git', [
+  '-C',
+  new URL('..', import.meta.url).pathname,
+  'rev-parse',
+  'HEAD',
+])
+  .toString()
+  .trim();
 const modelDir = process.env.EMBEDDING_MODEL_DIR;
 if (!modelDir) throw new Error('需要 EMBEDDING_MODEL_DIR');
 
@@ -166,9 +199,16 @@ out(
   `EVAL versions chunker=${V.chunker} embedText=${V.embedText} model=${emb.model}@${revision} prompt=${REWRITE_PROMPT_VERSION} digest=${digest.slice(0, 12)}`,
 );
 const vs = new MemoryVectorStore();
-const cache = '/tmp/rl-eval-vectors.json';
+// v2 用独立缓存文件,键除 digest(已含各版本)外再显式核对 commit、切块/拼接版本、模型修订与块数
+const cache = V2 ? '/tmp/rl-eval-vectors-v2.json' : '/tmp/rl-eval-vectors.json';
 const cached = existsSync(cache) ? JSON.parse(readFileSync(cache, 'utf8')) : null;
-if (cached?.digest === digest && cached.points?.length === chunks.length) {
+const cacheKeyOk =
+  !V2 ||
+  (cached?.sha === SHA &&
+    cached?.chunker === V.chunker &&
+    cached?.embedText === V.embedText &&
+    cached?.revision === revision);
+if (cacheKeyOk && cached?.digest === digest && cached.points?.length === chunks.length) {
   for (const p of cached.points) vs.points.set(p.id, p);
   out(`EVAL vectors reused (digest match)`);
 } else {
@@ -176,7 +216,15 @@ if (cached?.digest === digest && cached.points?.length === chunks.length) {
   await indexChunks({ repoId: 1, commitSha: SHA, chunks, batchSize: 16 }, emb, vs);
   writeFileSync(
     cache,
-    JSON.stringify({ digest, n: chunks.length, points: [...vs.points.values()] }),
+    JSON.stringify({
+      digest,
+      n: chunks.length,
+      sha: SHA,
+      chunker: V.chunker,
+      embedText: V.embedText,
+      revision,
+      points: [...vs.points.values()],
+    }),
   );
   out(`EVAL embedded ${chunks.length} chunks in ${((Date.now() - t0) / 1000).toFixed(0)}s`);
 }
@@ -352,7 +400,24 @@ let top5 = 0;
 let top1 = 0;
 let calls = 0;
 let cost = 0;
-const per = { 中: [0, 0, 0, 0, 0], 英: [0, 0, 0, 0, 0], H: [0, 0, 0, 0, 0], S: [0, 0, 0, 0, 0] };
+const per = {
+  中: [0, 0, 0, 0, 0],
+  英: [0, 0, 0, 0, 0],
+  H: [0, 0, 0, 0, 0],
+  S: [0, 0, 0, 0, 0],
+  V: [0, 0, 0, 0, 0],
+};
+let failed = 0;
+if (V2) {
+  if (fake || cfg.provider !== 'deepseek')
+    throw new Error(`v2 要求 llm=deepseek,实际 ${cfg.provider}`);
+  writeFileSync(V2_RESULT, '');
+  resultReady = true;
+  if (FORCE) out(`EVAL v2 FORCE-RERUN(--force:结果文件此前已存在或被显式覆盖)`);
+  out(
+    `EVAL v2 start main=${mainSha} zod=${SHA} chunks=${chunks.length} chunker=${V.chunker} embedText=${V.embedText} model=${emb.model}@${revision} prompt=${REWRITE_PROMPT_VERSION} digest=${digest} llm=${cfg.provider}/${cfg.chatModel}`,
+  );
+}
 for (const [id, q, want, syms] of SETS[setName]) {
   let log;
   const rewritten = await rewriteQuery(q, {
@@ -367,6 +432,13 @@ for (const [id, q, want, syms] of SETS[setName]) {
   )
     calls++;
   cost += log?.costMicroUsd ?? 0;
+  if (V2 && !log?.used) {
+    // 改写失败:该题记为失败,不降级为原问题检索
+    failed++;
+    per.V[0]++;
+    out(`EVAL ${id} FAILED rewrite=${log?.reason ?? 'unknown'} hit5=0 top1=0 q="${q}"(未检索)`);
+    continue;
+  }
   const r = await hybridSearch({
     repoId: 1,
     commitSha: SHA,
@@ -383,6 +455,28 @@ for (const [id, q, want, syms] of SETS[setName]) {
   const bFirst = base[0] ? okHit(base[0], want, syms) : false;
   const hit = r.hits.some((h) => okHit(h, want, syms));
   const first = r.hits[0] ? okHit(r.hits[0], want, syms) : false;
+  if (V2) {
+    const paths = r.hits.map((h) => h.path);
+    const j = judgeV2(paths, want);
+    const degraded = r.retrieval !== 'hybrid';
+    if (degraded) failed++;
+    const ok5 = j.hit5 && !degraded;
+    const ok1 = j.top1 && !degraded;
+    per.V[0]++;
+    per.V[1] += ok5 ? 1 : 0;
+    per.V[2] += ok1 ? 1 : 0;
+    top5 += ok5 ? 1 : 0;
+    top1 += ok1 ? 1 : 0;
+    out(
+      `EVAL ${id} hit5=${ok5 ? 1 : 0} top1=${ok1 ? 1 : 0} firstHitRank=${j.firstRank ?? '无'} retrieval=${r.retrieval}${degraded ? ` FAILED(降级:${r.degradedReason ?? '?'})` : ''} rewrite=${log.cacheHit ? 'cached' : 'used'} q="${q}" rw="${rewritten}"`,
+    );
+    out(`   want: ${want.join(' ; ')}`);
+    for (const [i, h] of r.hits.entries())
+      out(
+        `   ${i + 1}. ${h.path}:${h.startLine}-${h.endLine} ${h.symbol ?? '-'} [${h.sources.join(',')}]${judgeV2([h.path], want).hit5 ? ' ✓' : ''}`,
+      );
+    continue;
+  }
   const g = per[id[0]];
   g[0]++;
   g[1] += hit ? 1 : 0;
@@ -404,6 +498,10 @@ for (const [k, [n, a, b, c, d]] of Object.entries(per))
     out(
       `EVAL group ${k}: top5 ${a}/${n} top1 ${b}/${n} | 仅向量(原问题,无改写)基线 top5 ${c}/${n} top1 ${d}/${n}`,
     );
+if (V2)
+  out(
+    `EVAL v2 summary failed=${failed} main=${mainSha} zod=${SHA} chunks=${chunks.length} digest=${digest} llm=${cfg.provider}/${cfg.chatModel}`,
+  );
 out(
   `EVAL ${setName} total top5=${top5}/${SETS[setName].length} top1=${top1}/${SETS[setName].length} chunks=${chunks.length} llm=${fake ? 'fake(改写未运行)' : 'deepseek'} rewriteCalls=${calls} costMicroUsd=${cost} prompt=${REWRITE_PROMPT_VERSION} chunker=${V.chunker} embedText=${V.embedText} revision=${revision}`,
 );
