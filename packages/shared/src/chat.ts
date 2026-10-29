@@ -25,6 +25,8 @@ export const ChatDoneSchema = z.object({
   messageId: z.number().int().positive(),
   droppedCitations: z.number().int().nonnegative(),
   fallback: z.literal('retrieval').optional(),
+  /** T-214 定案:本次检索是否用上向量;keyword-only 时前端显示「已降级为关键词检索」。可选,只增不改 */
+  retrieval: z.enum(['hybrid', 'keyword-only']).optional(),
   usage: z.object({ in: z.number().int().nonnegative(), out: z.number().int().nonnegative() }),
 });
 export const ChatDoneEventSchema = z.object({ event: z.literal('done'), data: ChatDoneSchema });
