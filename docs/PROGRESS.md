@@ -139,6 +139,13 @@
 
 - 2026-10-29 17:1x:#64 合并(T-223 节点文件预览)。我在 head 8e868b7 上独立重跑 install、lint、typecheck、build、test(web 160 等,全过),在 main 6213d1d 上试合并无冲突,试合并结果上 lint、typecheck、web 测试通过,`ci` 与 `smoke` 绿。内容:展开「查看代码」时才动态加载 Shiki(`shiki/core` 加 JS 引擎,语法与主题随构建打包,没有 CDN、没有 wasm),首屏 `/a/[id]` 仍是 196 kB;tokens 以 React 文本节点渲染,没有 `dangerouslySetInnerHTML`;已排除按 `sensitive`/`too-large`/`binary` 分文案,`FILE_NOT_FOUND` 单独处理,三种 409 按 `details.reason` 分文案(未知值回退通用文案);AbortController 切节点;最多显示 2000 行并提示「仅显示前 N 行」,单行超过 2000 字符截断且不高亮;GraphSearch 5→0→5 无结果时下标置 0。变异检查:改用 `dangerouslySetInnerHTML`(3 个 XSS 测试失败)、去掉置 0、改错 `SNAPSHOT_MISSING` 和 `binary` 的文案映射、去掉 abort 后检查,各有测试失败。后续项:行号跳转未做(UI 和 API 暂无行参数);大文件高亮在主线程同步执行,耗时没实测,演示前在 hono 大文件上看一眼;离线时预览能否高亮和投影机分辨率下 Shiki chunk 首次加载耗时未验证;后端不一致三项(架构师口径:先判 binary 再判体积、`REPOS_DIR_NOT_CONFIGURED` 保留为防御分支、`details.reason` 保持严格枚举,新增须同时改 shared 和前端),由后端放入 T-214 PR-2 之后的小 PR;`errors.ts` 第 32 行注释过时。
 
+### 2026-10-29 · #65 worker cpus 可配置(WORKER_CPUS,默认 2)
+
+- 做了什么:docker-compose 里 worker 的 `cpus` 由写死 1.5 改为 `${WORKER_CPUS:-2}`(未设或设为空串都得 2);`.env.example`、README、ARCHITECTURE 同步,文档写明演示机至少 4 核 4 GB,并把过时的 `mem_limit 2g` 更正为 3g。只改配置和文档,无代码改动。
+- 怎么验证的:独立评审在干净 worktree 里 frozen-lockfile 安装、lint、typecheck、build、全量测试(`--concurrency=1`)全部通过;main 试合并无冲突;用 yaml 库解析 compose 并逐个检查插值(未设、空串、1、4)。ci 与 smoke 均为绿。
+- 没有验证的:本机没有 Docker,未跑 `docker compose config`,docker 实际接受该值、超过宿主机核数时的行为都未实测;容器内真实向量化速度未测,文档里的 3.6 / 7.0 块/秒是 taskset 绑核的本地基准。
+- 遗留(不阻塞):ONNX 线程数没有与 `WORKER_CPUS` 关联,cpus=2 时线程数可能超过配额被限流,吞吐可能低于基准,容器内实测时一起看,必要时加 `EMBEDDING_THREADS`;`docs/notes/embed-lock-bench.md` 里「worker 限 1.5 CPU」是旧说法待更新。
+
 ## 演示检查清单(第 4 周前逐项勾选)
 - [ ] 演示前抽查 hono 的 `embeddingStatus` 为 `ready`(或 `reused`)。
 - [ ] 「镜像构建下载模型」:CI 已验证(GitHub 环境直连 huggingface.co,手动 workflow `worker-model-build.yml` run 40838998679,5 个文件 `sha256sum -c` 全 OK,镜像内 ONNX embedding 维度 384,构建约 58 秒);**演示机(国内网络)上的构建仍待验证**:演示前先在演示机构建好镜像,下载慢时设 `EMBEDDING_MODEL_BASE_URL` 为镜像站(哈希校验不变)。
@@ -171,4 +178,4 @@ API_BASE=http://localhost:4000 TIMEOUT_MIN=15 bash scripts/demo-prep.sh
 
 依次 `POST /api/repos` 提交四个仓库,轮询 `GET /api/repos/:id` 到 `done`/`failed`/超时,打印耗时、文件、模块、边和根层节点数;任一失败非零退出。脚本只做过 `bash -n` 与 shellcheck 检查,没有对真实 API 运行过。
 - [ ] 现场演示只走预分析加复用,不现场分析新仓库:按本机测速(taskset 绑核、单核 1 线程约 3.6 块/秒,见 `docs/notes/embed-lock-bench.md`),hono 的 1434 块首次向量化约 6.6 分钟,worker 限 1.5 核也要约 4 到 5 分钟。这个耗时只来自本机测速,尚未在 worker 容器内实测。
-- [ ] 演示机至少 4 核、4 GB 内存(架构师裁定):worker 容器的 `cpus` 不要卡太低,现在的 1.5 要改成可配置,默认值在 4 核机器上不低于 2(待后端做,未实现)。hono 用 `scripts/demo-prep.sh` 提前跑好并保留结果,现场只做问答和已分析仓库浏览;演示默认不现场分析任何新仓库;zustand 这类小仓库的现场分析只是备选,要等在演示机上实测过耗时、确认只需一两分钟,才能写进演示脚本。
+- [ ] 演示机至少 4 核、4 GB 内存(架构师裁定):worker 容器的 `cpus` 不要卡太低,worker 容器的 `cpus` 已改为可配置 `WORKER_CPUS`,默认 2(#65 已做;吞吐数字仅为本地基准,容器内尚未实测;ONNX 线程数未与 cpus 关联,容器内实测时一并确认)。hono 用 `scripts/demo-prep.sh` 提前跑好并保留结果,现场只做问答和已分析仓库浏览;演示默认不现场分析任何新仓库;zustand 这类小仓库的现场分析只是备选,要等在演示机上实测过耗时、确认只需一两分钟,才能写进演示脚本。
