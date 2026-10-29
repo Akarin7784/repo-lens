@@ -6,7 +6,7 @@ import { RedisEventSink } from './events.js';
 import { ANALYZE_JOB_OPTS, processAnalyzeJob, type AnalyzeJobData } from './queue.js';
 import { makeGitRepo, SAMPLE_REPO, testConfig } from './test-utils.js';
 
-const REDIS_URL = process.env.TEST_REDIS_URL ?? 'redis://127.0.0.1:6379';
+const REDIS_URL = process.env.TEST_REDIS_URL ?? 'redis://127.0.0.1:6379/7'; // 库号占用表见 packages/agent/src/llm/llm.test.ts
 async function redisUp() {
   const r = new Redis(REDIS_URL, {
     lazyConnect: true,
