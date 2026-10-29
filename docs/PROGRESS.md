@@ -68,6 +68,26 @@
 - 演示环境把 `RATE_LIMIT_NEW_REPOS_PER_HOUR` 调高(默认 5),避免彩排几次后被限流;同时确认 `RATE_LIMIT_SUBMITS_PER_HOUR`(默认 60)够用。
 - 状态栏的节点数和边数口径要和画布一致,避免被现场对数字(见 2026-10-29 的 84 与 80 讨论)。
 - 暗色、Safari、Firefox、投影仪、大图性能还没验证,演示前在真实设备上过一遍。
+
+### T-205 预分析(2026-10-29)
+**预分析尚未在真实环境执行,需要能跑 compose 的演示机。** 下表是不起 compose、直接调用 `packages/analyzer`(`scanRepo` + `analyzeRepo`,与 worker parsing 阶段同一入口,按 worker 默认 `MAX_REPO_MB=300`、`MAX_FILES=5000` 判断)对 `--depth 1` 浅克隆的干跑结果,Node 20.20.2,架构师本机。
+
+| 仓库 | commit | 结果 | 耗时 | 工作区 | 文件 | 节点(module/dir/file) | 边 | 跨模块聚合对 | cycles | unresolved | 布局规则 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| honojs/hono | ed1d5f7 | 成功 | 0.86s | 4.8MB | 240 | 338(9/89/240) | 607 | 0 | 5 | 27 | workspace |
+| pmndrs/zustand | 382d29c | 成功 | 0.18s | 2.0MB | 18 | 23(4/1/18) | 23 | 5 | 0 | 2 | src-subdir |
+| colinhacks/zod | b1f6ba0 | 成功 | 0.61s | 14.8MB | 175 | 196(6/15/175) | 476 | 4 | 1 | 28 | workspace |
+| trpc/trpc | 708753f | 成功 | 0.64s | 7.2MB | 267 | 348(9/72/267) | 795 | 16 | 1 | 50 | workspace |
+
+说明:耗时只含扫描和解析,不含克隆、入库、SSE;「边」是入库的 file→file 原始边;「跨模块聚合对」是两端上卷到不同 module 的 (源, 目标) 去重数,近似根层聚合边,API 实际投影以 `projection.ts` 为准。四个仓库都没触发 300MB / 5000 文件上限,monorepo 与路径别名没有导致失败;unresolved 未逐条核对。
+
+脚本用法(需 api + worker + MySQL + Redis 已运行,api 以 `RATE_LIMIT_NEW_REPOS_PER_HOUR>=50` 启动):
+
+```bash
+API_BASE=http://localhost:4000 TIMEOUT_MIN=15 bash scripts/demo-prep.sh
+```
+
+依次 `POST /api/repos` 提交四个仓库,轮询 `GET /api/repos/:id` 到 `done`/`failed`/超时,打印耗时、文件、模块、边和根层节点数;任一失败非零退出。脚本只做过 `bash -n` 与 shellcheck 检查,没有对真实 API 运行过。
 - 2026-10-29 13:3x:#24(提交 9e9b3ba)、#25(提交 2409353)、#26(提交 3c7d529)合并,main 上三次提交的 `ci` 与 `smoke` 都是 success。复验在各自最新提交上串行跑 install、lint、typecheck、build、test 全过(api 53、shared 24、web 61、analyzer 32、worker 16、db 9),三个依次叠到 main 也无冲突。#24:`GET /api/repos/:id` 返回 `repo` 和 `commitSha`,`commitSha` 优先取最近一次已完成任务的 commit,没有已完成任务才取最新任务的。#25:只有仓库地址不合法才用 `INVALID_REPO_URL`,缺 `repoUrl` 和其他校验错误用 `BAD_REQUEST`,框架 4xx 保留 400、413、415 原状态码、错误体 code 统一 `BAD_REQUEST`。#26:`RATE_LIMIT_NEW_REPOS_PER_HOUR`(默认 5)与 `RATE_LIMIT_SUBMITS_PER_HOUR`(默认 60)都由环境变量配置,被拒绝或出错的提交不计 5 次,复用已有结果不计 5 次但计 60 次,超过 60 次返回 429 且不建任务,非法值使 api 启动失败。已知小问题(非阻塞):`limits.ts` 与 `.env.example` 注释里把路由写成 `POST /api/analyze`(实际是 `POST /api/repos`);退回计数时按当前时间重算 key,请求跨整点时会少算一次;超过 5 次后计数值继续上涨(有意)。**第 1 周完成**:从粘贴 GitHub 地址到交互式依赖图的链路在 CI 的真实 MySQL 8.4 + Redis + worker 上走通,前端读真实接口,聚合边、环边、首屏自动下探都已落地。未完成与未验证见「后续项」和「演示检查清单」。下一步:第 2 周(分层摘要、节点详情、Qdrant 索引、环边改读 `inCycle`、状态栏口径),任务拆分交给架构师。
 - 2026-10-29 13:4x:#31 合并(提交 730a731)。状态栏改为「当前显示 N 节点 / M 条边」,数字严格等于画布上画出的节点和边;hono `d:src` 的 84 条边 = 80 条内部边 + 4 条来自 `d:perf-measures` 和 `d:runtime-tests` 的边界聚合边,展开后 `m:.` 层的 2 条聚合边不再渲染,此口径已写入 `FRONTEND_DESIGN.md`。我在最新提交 42d5681 上独立重跑 lint、typecheck、build、test 全过(web 61),`ci` 与 `smoke` 绿。仍待前端:环边改读 `edge.inCycle`,`suggestedFocus` 回调竞态、文件类型判断和失败停止测试三个小问题。
 - 2026-10-29 13:5x:#32 合并(提交 63955d5)。前端环边只读 `edge.inCycle === true`(原始边和聚合边同一规则),状态栏「环边 K」数画出的 inCycle 边;`suggestedFocus` 自动展开补了三处:自动请求返回后若用户已手动操作则丢弃结果(成功与失败都一样,不更新状态也不报错)、只处理 `m:` 与 `d:` 节点、失败即停止。我在最新提交 3a1b593 上独立串行重跑 install、lint、typecheck、build、test(不用缓存)全过,与 main 试合并无冲突,`ci` 与 `smoke` 绿。清理项(非阻塞):`toFlow.ts:21` 注释仍写「meta.cycles 的某个环上」,`state.ts` 里 `cycles` 的收集与 `mergeCycles` 现在是死代码,「迟到结果被丢弃」只测了成功分支。第 1 周遗留的前端项到此全部关闭,下一步等 `docs/WEEK2_PLAN.md`。
