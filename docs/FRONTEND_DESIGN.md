@@ -82,7 +82,7 @@ flowchart LR
 └─ <StatusBar />
 ```
 
-首页由 `<RepoInput>`（URL 校验 + 语言预检提示）和 `<SampleRepoGrid>` 组成。仓库地址输入框下方用次要文字（`text-muted`）常驻一行提示：「只接受公开仓库。源码内容会发送给第三方模型服务。」进度页包含 `<StageStepper stages=[queued,cloning,scanning,parsing,graph_ready,summarizing,embedding,done]>`、`<ProgressBar>`、`<LogTail>`（最近 20 条 message），以及 `<StageErrorCard stage message>`。收到 `graph_ready` 后立即跳到工作台；摘要和向量化在后台继续，工作台顶栏用 `<BackgroundProgress>` 小进度条显示 summarizing/embedding 的进度。
+首页由 `<RepoInput>`（URL 校验 + 语言预检提示）和 `<SampleRepoGrid>` 组成。仓库地址输入框下方用次要文字（`text-muted`）常驻一行提示：「只支持公开仓库。源码内容会发送给第三方模型服务。」提交失败时，表单下方的 `role="status"` 行显示错误码对应的中文文案（`lib/api/errors.ts` 的 `ERROR_TEXT`），不跳转；其中私有仓库返回 422 `REPO_NOT_PUBLIC`，显示「只支持公开仓库。」，与上面的常驻提示同一措辞，不会被当成网络错误。进度页包含 `<StageStepper stages=[queued,cloning,scanning,parsing,graph_ready,summarizing,embedding,done]>`、`<ProgressBar>`、`<LogTail>`（最近 20 条 message），以及 `<StageErrorCard stage message>`。收到 `graph_ready` 后立即跳到工作台；摘要和向量化在后台继续，工作台顶栏用 `<BackgroundProgress>` 小进度条显示 summarizing/embedding 的进度。
 
 ## 3. 依赖图渲染选型
 
@@ -223,6 +223,8 @@ function aggregateEdges(raw: GraphEdge[], visibleAncestor: (id: string) => strin
 
 > T-004 已实现：单击选中（选中节点 `--accent-strong` 2px 描边 + 引用高亮底色，一跳邻居保持不透明，相连边加粗并改用 `--accent-strong`，其余节点/边淡出到 15%，展开后的容器不淡出）、▸ 与双击展开、Esc/点击空白取消。右栏详情尚未实现，暂由左下状态条显示所选节点路径与依赖/被依赖条数；`?node=`、文件树联动、Shift 多选未实现。
 
+> T-222 已实现右栏 `<NodeDetail>`（`apps/web/components/detail/NodeDetail.tsx`）：调用 `GET /api/repos/:id/nodes/:nodeId`，显示面包屑、类型、摘要、LOC/入度/出度、导出符号、`topDependents`，以及当前图中可见层级的一跳依赖/被依赖（接口本身只返回 `topDependents`）。列表项可点击跳转：目标未加载时按 suggestedFocus 同一套逐层展开后再选中。摘要为 `null` 时显示骨架并在 `done` 后重新请求，空字符串显示「暂无摘要」；接口没有摘要来源字段，所以不区分规则摘要和模型摘要。切换节点时取消旧请求并丢弃过期响应；`?node=` 已写入 URL，进入页面时会读取。`inCycle`、文件树联动、「问问这个模块」仍未实现。
+
 详情面板内容（`<NodeDetail>`）：
 - 头部：图标 + 路径面包屑（可点，用于跳转父节点）+ 类型标签。
 - 摘要：LLM 生成的 `summary`。为 `null`（摘要还没生成，后台仍在 summarizing）时显示 3 行骨架屏，收到 `done` 进度事件后重新请求。
@@ -247,6 +249,12 @@ interface NodeDetail {
   inCycle: boolean;                   // T-211c:在某个 SCC 成员集合中(module 看其下文件)
 }
 ```
+
+> **T-222d 详情面板收尾**（#43 评审的非阻塞后续）：
+> - **窄屏抽屉**：视口 ≥768px（Tailwind `md`）时详情仍是 360px 右栏；<768px 时未选中节点不显示详情区（图占满），选中后详情变为占下方 55vh 的底部抽屉。抽屉在文档流内（工作区改为 `flex-col md:flex-row`），图区随之缩到上方而不是被盖住；图区尺寸变化时 `ResizeObserver` 防抖 150ms 后 `fitView`。抽屉顶部「关闭」按钮通过 `GraphView` 的 `clearRequest` 取消选中，与 Esc、点空白一致（`?node=` 随之从 URL 去掉）。窄屏隐藏图例（否则盖住约一半图区）。
+> - **折叠后不保留旧详情**：选中节点因所在目录被折叠或「全部收起」而不在画布上时，清除选中并关闭详情（回调 `onSelectionChange(null)`）。没有选「标注该节点当前未显示」：状态栏和高亮都以画布为准，面板单独显示一个看不到的节点会让「依赖于（图中可见层级）」列表与画面对不上；需要时可从面包屑或 `?node=` 再跳回去，跳转会自动展开。唯一例外是外部跳转进行中（`pendingJump` 非空，含 `?node=` 首次打开），这时节点暂不可见是正常的，保持原状态，因此 #43 的深链接逻辑不变。
+> - 同时修正一个潜在问题：选中回调曾写成 `return onSelectionChange(null)`，若回调有返回值会被 React 当作 effect 清理函数调用而报错。
+> - 真实浏览器验证（Chromium/Playwright，hono 本地数据，`LLM_PROVIDER=fake`）截图：`docs/assets/T-222d/desktop-detail.png`、`desktop-after-collapse.png`、`narrow-drawer.png`（390×844）、`narrow-closed.png`。Safari、Firefox、深色模式未验证。
 
 ## 6. 对话与图高亮联动
 

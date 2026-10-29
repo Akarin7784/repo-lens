@@ -1,10 +1,12 @@
 import {
   CreateRepoResponseSchema,
   GraphDataSchema,
+  NodeDetailSchema,
   RepoStatusSchema,
   type CreateRepoRequest,
   type CreateRepoResponse,
   type GraphData,
+  type NodeDetail,
   type RepoStatus,
 } from '@repolens/shared';
 import { apiBase } from './config';
@@ -22,6 +24,8 @@ export type ApiClient = {
   getRepoStatus(repoId: number): Promise<RepoStatus>;
   /** truncated 来自响应头 x-graph-truncated:只表示 P 的直接子节点被截断(边界节点不计) */
   getGraph(repoId: number, parentId: string | null): Promise<GraphData & { truncated: boolean }>;
+  /** GET /api/repos/:id/nodes/:nodeId;nodeId 整体 encodeURIComponent(后端两种写法都接受)。signal 用于切换节点时取消过期请求 */
+  getNodeDetail(repoId: number, nodeId: string, signal?: AbortSignal): Promise<NodeDetail>;
   /** SSE 地址(EventSource 需要完整 URL) */
   jobEventsUrl(jobId: string): string;
 };
@@ -84,6 +88,10 @@ export function createApiClient(
       );
       return { ...data, truncated: res.headers.get('x-graph-truncated') === 'true' };
     },
+    getNodeDetail: (repoId, nodeId, signal) =>
+      request(`/api/repos/${repoId}/nodes/${encodeURIComponent(nodeId)}`, NodeDetailSchema, {
+        signal,
+      }),
     jobEventsUrl: (jobId) => `${base}/api/jobs/${encodeURIComponent(jobId)}/events`,
   };
 }

@@ -94,7 +94,25 @@
 - 评审:在含 #46 的最新 main 上试合并无冲突,325 测试全过;变异检查(删掉返回 422 的那行)新用例失败;9 个临时补测(限流、非 JSON、缺字段、SHA ref 等)全过。
 - 非阻塞后续:提交页提示"只接受公开仓库"与错误文案"只支持公开仓库"措辞统一(前端);已有漏洞:ref 为 40 位 SHA 且无 token 时跳过 ls-remote,私有或不存在的仓库会照常建任务并扣额度,到 clone 才失败,可在 `repoInfo` 明确 404 时拒绝(403 限流不能拒);文档细节:ARCHITECTURE 错误码表后缺空行,BACKEND_AI_DESIGN 约 533 行"先 git ls-remote 检查公开仓库"是旧说法。
 
+### 2026-10-29 合并 #43(T-222 节点详情面板)
+- 右栏节点详情:摘要(分析中骨架,外部包节点或分析完成但为空显示「暂无摘要」)、导出名、扇入扇出、图中可见一跳邻居;切换节点取消旧请求并丢弃迟到响应;`?node=` 深链接。
+- 首轮评审发现阻塞项:`?node=` 指向第一屏以外的节点会跳转失败(根层加载时 `suggestedFocus` 覆盖了待跳转目标)。作者修复(根层加载时用 `revealFocus(pendingJump)`),复审 head 18f670a:7 个探针场景通过,变异检查确认新测试有效,336 测试全过。
+- 未验证:真实浏览器渲染(仅 jsdom);窄屏抽屉(右栏固定 360px,后续);选中节点被折叠后详情保留旧内容(影响小)。
+
+### 2026-10-29 合并 #47(提交页文案统一 + REPO_NOT_PUBLIC 测试)
+- 提交页提示改为「只支持公开仓库。源码内容会发送给第三方模型服务。」,与 `REPO_NOT_PUBLIC` 报错文案一致;新测试用真实 api 客户端模拟 422,断言状态行文案、只请求一次、不跳转、按钮可再点。
+- 评审:在含 #43 的 main 上试合并无冲突,337 测试全过,变异检查有效。
+- 非阻塞后续:`turbo.json` 没有 `dev` 任务,在 `apps/web` 里直接跑 `next dev`/`tsc`/`vitest` 时 shared 可能是旧构建,422 会显示成「数据格式不符合约定」。建议加 `dev` 任务(`dependsOn: ["^build"]`)和根目录 `dev` 脚本。
+
+### 2026-10-29 合并 #48(T-211c 摘要按提交缓存,66fb738)与 #49(T-222d 窄屏抽屉等,a24129f)
+- #48:摘要表加 `commit_sha`、`source`(llm|rule),唯一键 `(repo_id, level, target_id, commit_sha)`;迁移 `0001_summary_commit.sql` 幂等(information_schema 检查 + PREPARE);跨提交按 input hash 复用并保留 source;`/nodes/:nodeId` 返回 `summarySource` 和 `inCycle`(schema 中缺省为 null/false)。
+- #48 验证:本机 MariaDB 用旧结构旧数据把迁移跑两遍(直接执行和 runMigrations)通过;CI `smoke` 在真实 MySQL 8.4.13 上用旧表结构、旧行连跑两遍并断言列、唯一键、回填值,日志可见 `migration_0001_run_1/2=ok`。**迁移在 MySQL 8.4 上已由 CI 验证**,演示机 compose 上不必再单独跑(可作最终确认)。
+- #48 非阻塞后续(已并入后端下一个小 PR):worker 只读最近提交的摘要;`commit_sha=''` 孤儿行;api 与 worker 一起更新。
+- #49:768px 以下详情变底部抽屉;选中节点从图中消失时清除选中并关闭面板(深链跳转中保留);turbo `dev` 任务与根目录 `dev` 脚本;真实浏览器截图 `docs/assets/T-222d/`。评审 342 测试全过,14 个探针含 #43 深链场景,变异检查有效。
+- #49 非阻塞后续:窄屏状态条压住缩放按钮且显示「Esc 取消」;截图带 Next dev 角标;README 本地开发步骤仍是 `--filter` 写法,api 的 dev 需先 `pnpm build`;「跳转中保留选中」例外无测试;`55vh` 改 `55dvh`。
+
 ## 演示检查清单(第 4 周前逐项勾选)
+- [ ] 演示机拉代码后先在仓库根目录运行 `pnpm build`(或 `pnpm --filter @repolens/shared build`),避免 shared 旧构建导致错误码显示异常。
 - 演示前提前分析好 hono、zustand、zod、trpc,演示时只走「复用已有结果」的路径,现场不依赖新分析。
 - 演示环境把 `RATE_LIMIT_NEW_REPOS_PER_HOUR` 调高(默认 5),避免彩排几次后被限流;同时确认 `RATE_LIMIT_SUBMITS_PER_HOUR`(默认 60)够用。
 - 状态栏的节点数和边数口径要和画布一致,避免被现场对数字(见 2026-10-29 的 84 与 80 讨论)。
