@@ -464,7 +464,7 @@ type GraphData = { nodes: GraphNode[] /* ≤300，id 唯一 */; edges: GraphEdge
 
 温暖的米白纸感、深炭灰文字、陶土色强调、衬线标题、大留白、克制的动效。**不使用 Claude/Anthropic 的名称、logo、星芒图形或其任何商标素材，产品使用自己的名称（RepoLens）。**
 
-- **字体**（`next/font/local` 自托管，T-225）：标题 Source Serif 4（中文走系统衬线回退：Noto Serif CJK SC / Source Han Serif SC / Noto Serif SC / Songti SC，不再加载中文网页字体）；正文与 UI 用 Inter（回退 system-ui、PingFang SC）；代码用 JetBrains Mono。三个字体都是 fontsource 的 OFL 可变字体 latin 子集（wght 轴），放在 `apps/web/app/fonts/`，共 139,596 字节，来源和许可见 `apps/web/app/fonts/LICENSES.md`。构建和运行都不访问外网；latin 以外的字符（例如 `→`）由系统字体显示。
+- **字体**（`next/font/local` 自托管，T-225）：标题 Source Serif 4，正文与 UI 用 Inter，代码用 JetBrains Mono。**中文回退**（T-225b，架构师裁定）：不打包中文网页字体，三组字体栈都在西文字体后面接同一组系统无衬线字体 `--font-cjk-fallback`：`"PingFang SC"`（Mac）→ `"Microsoft YaHei"`（Windows）→ `"Noto Sans CJK SC"`（Linux），最后是通用族（衬线栈和 UI 栈是 `sans-serif`，代码栈是 `monospace`）。拉丁字符走衬线，中文自动落到无衬线。这组字体只在 `apps/web/app/globals.css` 定义一次，`cjk-fallback.test.ts` 会检查名称和顺序。中文正文、问答回答区和 UI 控件都用这条规则（问答回答区目前还没有实现，实现时直接用 `--font-sans` 或 `--font-serif`，不要另写字体栈）。目前只在 Linux（Noto Sans CJK SC）上截图看过；Windows 微软雅黑和 Mac 苹方的效果未验证。三个字体都是 fontsource 的 OFL 可变字体 latin 子集（wght 轴），放在 `apps/web/app/fonts/`，共 139,596 字节，来源和许可见 `apps/web/app/fonts/LICENSES.md`。构建和运行都不访问外网；latin 以外的字符（例如 `→`）由系统字体显示。
 - **圆角**：卡片 12px，按钮/输入框 10px，标签全圆 999px，首页大输入框 16px。阴影 `0 1px 2px rgba(31,30,29,.06)`，浮层 `0 8px 24px rgba(31,30,29,.08)`。
 - **动效**：200–300 ms ease-out；展开子节点时节点位置 300 ms 过渡；「正在思考…」用三点呼吸动画；`prefers-reduced-motion` 时关闭过渡。
 
@@ -568,6 +568,7 @@ zustand（秒出图）和 zod（默认 module 层、按需下钻）不在 3 分�
 - [ ] 跑一遍 hono 的固定问题，确认 citation 能高亮、droppedCitations 提示正常显示。
 - [ ] 设置中的「缩放自动收起」保持关闭；确认渲染器为 React Flow（没有误切到 Cytoscape）。
 - [ ] Cursor 中已配置 MCP server（stdio），`ask_repo` 用 hono 的 repoId 跑通一次。
+- [ ] Windows/Mac 中文字体实机看一次（未验证，T-225b）：演示机定下来后，在实机上打开首页、节点详情和含中文摘要的节点（例如 hono 的 `vite.config.ts`），确认中文显示为微软雅黑或苹方，再把截图补到这里。不要用 Linux 截图代替（Linux 的对照截图在 `docs/assets/T-225b/`）。
 - [ ] 断网构建与运行：字体已自托管（T-225），`next build` 和页面运行都不需要外网；演示机上断开外网，确认可以构建、页面可以打开、字体正常（中文标题使用演示机系统里的衬线字体，提前看一眼效果）。
 - [ ] 演示前一天在演示机上完整实跑一遍（含 Cursor 的 MCP 调用），并确认主流程录屏和 MCP 录屏都在本地可播放。
 - [ ] 投屏验收：在投影仪/低亮度显示器上实测一遍，按第 8 章「投屏验收」逐项检查。

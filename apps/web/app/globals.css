@@ -33,13 +33,18 @@
   --node-muted: #5c5b59;
   --edge: #8a8579;
 
-  /* 中文衬线:不加载网页字体,按系统已装字体回退(T-225);变量名保留,兼容原 next/font 的写法 */
-  --font-noto-serif-sc: 'Noto Serif CJK SC', 'Source Han Serif SC', 'Source Han Serif CN';
-  --font-serif:
-    var(--font-source-serif), 'Source Serif 4', var(--font-noto-serif-sc), 'Noto Serif SC',
-    'Songti SC', Georgia, serif;
-  --font-sans: var(--font-inter), 'Inter', system-ui, 'PingFang SC', 'Noto Sans SC', sans-serif;
-  --font-mono: var(--font-jetbrains), 'JetBrains Mono', ui-monospace, monospace;
+  /*
+   * 字体栈集中定义处(T-225b,架构师裁定)。不打包中文网页字体,也不引用任何外链。
+   * 拉丁字符走前面的西文字体;中文字符自动落到 --font-cjk-fallback 里的系统无衬线字体:
+   * PingFang SC(Mac)→ Microsoft YaHei(Windows)→ Noto Sans CJK SC(Linux),通用族放最后。
+   * --font-noto-serif-sc 是旧变量名,保留以兼容,现在指向同一组中文回退字体。
+   */
+  --font-cjk-fallback: 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC';
+  --font-noto-serif-sc: var(--font-cjk-fallback);
+  --font-serif: var(--font-source-serif), 'Source Serif 4', var(--font-cjk-fallback), sans-serif;
+  --font-sans: var(--font-inter), 'Inter', var(--font-cjk-fallback), system-ui, sans-serif;
+  --font-mono:
+    var(--font-jetbrains), 'JetBrains Mono', var(--font-cjk-fallback), ui-monospace, monospace;
 
   --shadow-sm: 0 1px 2px rgba(31, 30, 29, 0.06);
   --shadow-pop: 0 8px 24px rgba(31, 30, 29, 0.08);
