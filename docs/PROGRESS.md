@@ -119,6 +119,8 @@
 
 - 2026-10-29 15:4x:#54 合并(RAG 留出集,纯文档,提交 c87ce84,此提交即留出集冻结点,此后题目不再改)。`docs/RAG_HOLDOUT.md` 8 道中文留出题(hono ed1d5f7)加单列的「演示冒烟题」S1(「路由匹配在哪个文件?」,每次都跑、照实写、不计入达标线);`docs/RAG_TUNING_QUESTIONS.md` 12 道调参题(中英各 6)。达标线:8 题前 5 条命中不少于 6 题。约束:调参与改写提示词(含示例)不得出现留出集原话或中文关键词组合,留出集在调参结束后只跑一次。评审过程:我指出原 H2 与原 H4 改写成英文后与调参题英 2 重叠,架构师改判后两题已替换为「Context 对象是做什么的」(`src/context.ts` 的 `Context`)和「中间件之间怎么传递数据」(`set`/`get`/`var`),我逐一对照 hono 源码核对通过,8 题与 12 题逐题比较无实质重叠。已知提示:H2 题面含类名 `Context`,检索较容易,解读结果时需打折扣;H5 与调参题中2、英6 在改写后都含 request body,H4 与中6 词面都含 set/get,写改写提示词示例时避免这两组词。
 
+- 2026-10-29 15:5x:#53 合并(README 与注释清理,提交 7946a7e)、#55 合并(T-224 路径搜索,提交 c87d437)。我在两个 PR 的最新提交(c4667e4、58c7205)上串行独立重跑 install、lint、typecheck、build、test(web 分别为 108、120,其余包全过),并在含 #52 的 main 上试合并后复测 web,`ci` 与 `smoke` 绿,无冲突。#53:仓库 ESLint 未加载 react-hooks 插件,所以不加禁用行,改在 jumpStopped 清理 effect 上写明原因。#55:图左上搜索框只搜已加载的非外部节点,不区分大小写,文件名精确与前缀优先,最多 8 条;`/` 聚焦(在输入框内不抢焦点)、↑↓、回车跳转、Esc 清空(不触发全局取消选中);跳转沿 parentId 链逐层展开、选中、居中并更新 `?node=`;顺带修 `nextFocusStep` 在全部收起后卡住。三处变异检查(去外部过滤、降低精确匹配优先级、`outermostCollapsed` 改取最内层)均被测试抓到。截图 `docs/assets/T-224/` 6 张。后续项(非阻塞):节点加载后结果变少时选中序号可能越界、回车无反应(应在结果变化时钳位);无结果时 `aria-expanded` 仍为 true,可加 `aria-live` 提示;搜索框与进度横幅同为 z-20,窄屏可能遮挡;PR 正文补写 Safari、Firefox、深色模式、真机未测;只搜已加载节点,服务端搜索依赖后端接口、暂未做;#53 注释措辞应说明中止过一次后才会过早清理。T-223 代码预览等后端 `/files`(T-213)。
+
 ## 演示检查清单(第 4 周前逐项勾选)
 - [ ] 演示前抽查 hono 的在环节点:节点详情里环上的文件显示「在环中」,数量与状态栏环边数相符(`inCycle` 须与图投影同源,不依赖 `stats`)。 具体抽查:`/nodes` 对 `src/helper/streaming/index.ts`、`src/helper/streaming/text.ts`、`src/jsx/dom/render.ts` 返回 true,`src/hono.ts` 为 false;ed1d5f7 应为 5 个环、12 个文件(CI smoke 的 `ci-smoke-cycles.mjs` 同样断言)。
 - [ ] 演示机内存至少 4 GB(本地 e5 embedding 峰值约 2.5 GB,见 D4 与 T-214);embedding 批大小可配置。
