@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import type { ApiClient } from '../../lib/api/client';
+import { createApiClient, type ApiClient } from '../../lib/api/client';
 import { ApiRequestError } from '../../lib/api/errors';
 import { DemoRepoList } from './DemoRepoList';
 import { RepoUrlInput } from './RepoUrlInput';
@@ -51,8 +51,31 @@ describe('首页提交', () => {
 
   it('输入框下方显示公开仓库与第三方模型提示', () => {
     render(<RepoUrlInput api={{} as unknown as ApiClient} />);
-    const notice = screen.getByText('只接受公开仓库。源码内容会发送给第三方模型服务。');
+    const notice = screen.getByText('只支持公开仓库。源码内容会发送给第三方模型服务。');
     expect(notice).toHaveClass('text-muted');
     expect(screen.getByLabelText('GitHub 仓库地址')).toHaveAttribute('aria-describedby', notice.id);
+  });
+
+  it('提交返回 422 REPO_NOT_PUBLIC → 表单下显示「只支持公开仓库」,不跳转、不当作网络错误', async () => {
+    push.mockClear();
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({ error: { code: 'REPO_NOT_PUBLIC', message: '只支持公开仓库' } }),
+          { status: 422, headers: { 'content-type': 'application/json' } },
+        ),
+    );
+    const api = createApiClient('http://api.test', fetchImpl as unknown as typeof fetch);
+    render(<RepoUrlInput api={api} />);
+    fireEvent.change(screen.getByLabelText('GitHub 仓库地址'), {
+      target: { value: 'https://github.com/someone/private-repo' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '分析' }));
+    const status = screen.getByRole('status');
+    await waitFor(() => expect(status.textContent).toBe('只支持公开仓库。'));
+    expect(status.textContent).not.toContain('无法连接分析服务');
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(push).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: '分析' })).not.toBeDisabled();
   });
 });

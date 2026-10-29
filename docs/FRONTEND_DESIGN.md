@@ -82,7 +82,7 @@ flowchart LR
 └─ <StatusBar />
 ```
 
-首页由 `<RepoInput>`（URL 校验 + 语言预检提示）和 `<SampleRepoGrid>` 组成。仓库地址输入框下方用次要文字（`text-muted`）常驻一行提示：「只接受公开仓库。源码内容会发送给第三方模型服务。」进度页包含 `<StageStepper stages=[queued,cloning,scanning,parsing,graph_ready,summarizing,embedding,done]>`、`<ProgressBar>`、`<LogTail>`（最近 20 条 message），以及 `<StageErrorCard stage message>`。收到 `graph_ready` 后立即跳到工作台；摘要和向量化在后台继续，工作台顶栏用 `<BackgroundProgress>` 小进度条显示 summarizing/embedding 的进度。
+首页由 `<RepoInput>`（URL 校验 + 语言预检提示）和 `<SampleRepoGrid>` 组成。仓库地址输入框下方用次要文字（`text-muted`）常驻一行提示：「只支持公开仓库。源码内容会发送给第三方模型服务。」提交失败时，表单下方的 `role="status"` 行显示错误码对应的中文文案（`lib/api/errors.ts` 的 `ERROR_TEXT`），不跳转；其中私有仓库返回 422 `REPO_NOT_PUBLIC`，显示「只支持公开仓库。」，与上面的常驻提示同一措辞，不会被当成网络错误。进度页包含 `<StageStepper stages=[queued,cloning,scanning,parsing,graph_ready,summarizing,embedding,done]>`、`<ProgressBar>`、`<LogTail>`（最近 20 条 message），以及 `<StageErrorCard stage message>`。收到 `graph_ready` 后立即跳到工作台；摘要和向量化在后台继续，工作台顶栏用 `<BackgroundProgress>` 小进度条显示 summarizing/embedding 的进度。
 
 ## 3. 依赖图渲染选型
 

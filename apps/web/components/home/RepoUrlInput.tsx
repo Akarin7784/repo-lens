@@ -38,7 +38,7 @@ export function RepoUrlInput({ api }: { api?: ApiClient }) {
         </button>
       </div>
       <p id="repo-url-notice" className="mt-2 px-1 text-[12px] text-muted">
-        只接受公开仓库。源码内容会发送给第三方模型服务。
+        只支持公开仓库。源码内容会发送给第三方模型服务。
       </p>
       <p role="status" className="mt-1 min-h-5 text-[13px] text-muted">
         {hint}
