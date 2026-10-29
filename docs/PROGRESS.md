@@ -213,6 +213,8 @@
 
 - 2026-10-30:合并 #129(a4802f8,T-238 ChatPanel 纯 fake timers):去掉三处 `shouldAdvanceTime`,推进改 `advanceTimersByTimeAsync`,跨档/超时/10s 倒计时推进后同步 expect,不再 waitFor 按真实时间轮询;新增 flushFake。仅改 ChatPanel.test.tsx(+45/−43)。GraphView.api.test 是真实 setTimeout 沉降,非同类,未改;aria-live 节流仍后续。作者变异 M2/M3 被抓,M1 加回 shouldAdvanceTime 本地仍过(flaky 本性已写明)。CI/smoke 绿(run 40931710151)。我对着 diff 审过,文件级 afterEach 仍 `useRealTimers`。
 
+- 2026-10-30:合并 #128(91c2dca,#126 非阻塞 2–5 跟进):抽出 \`mysqlServerRootUrl\`/\`mysqlUrlWithDb\`(WHATWG URL 设 pathname,无库名不再被吃成 \`mysql://\`);\`probeService\` 第 N 次(i>1)才连上时 warn 且文案无「不可达」;最坏耗时注释(不加 PROBE_ATTEMPTS);脱敏边界单测锁定现状(口令含空格/无 scheme)。4 文件,仅测试基础设施。架构师与独立审查均无阻塞。CI/smoke 绿(run 40932255496)。不声称证明原 flaky 根因。
+
 ## 演示检查清单(第 4 周前逐项勾选)
 - [ ] 演示前抽查 hono 的 `embeddingStatus` 为 `ready`(或 `reused`)。
 - [ ] 「镜像构建下载模型」:CI 已验证(GitHub 环境直连 huggingface.co,手动 workflow `worker-model-build.yml` run 40838998679,5 个文件 `sha256sum -c` 全 OK,镜像内 ONNX embedding 维度 384,构建约 58 秒);**演示机(国内网络)上的构建仍待验证**:演示前先在演示机构建好镜像,下载慢时设 `EMBEDDING_MODEL_BASE_URL` 为镜像站(哈希校验不变)。
