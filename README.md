@@ -27,6 +27,8 @@ pnpm build && pnpm test && pnpm lint && pnpm typecheck   # 新 clone 必须先 b
 pnpm dev                                   # turbo run dev → web http://localhost:3000 + api(node --watch dist/index.js)
 ```
 
+> 全容器部署时 worker 的 CPU 上限由 `WORKER_CPUS` 设置(默认 2,不得超过宿主机核数,4 核演示机建议 2~3),向量化耗时随核数近似线性,见 ARCHITECTURE §6.1。
+
 > 注意(已实测):turbo 默认 strict env 模式,`pnpm dev` 不会把 shell 里的 `DATABASE_URL`/`REDIS_URL` 等传给 api,api 会报「DATABASE_URL 未设置」退出;worker 没有 dev 脚本。需要后端时在另一个终端直接启动:`DATABASE_URL=... REDIS_URL=... pnpm --filter @repolens/api start`(端口 `API_PORT`,默认 4000)和 `pnpm --filter @repolens/worker start`。
 
 ## 目录
