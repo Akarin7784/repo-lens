@@ -1,0 +1,252 @@
+import { randomUUID } from 'node:crypto';
+import { MemoryStore } from '@repolens/db';
+import { Redis } from 'ioredis';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { readLlmConfig, createLlmClient } from './config.js';
+import { FakeLlm } from './fake.js';
+import { LlmGateway, cacheHash, type LlmKv } from './gateway.js';
+import {
+  DEFAULT_PRICES,
+  costMicroUsd,
+  UnknownModelPriceError,
+  type PriceTable,
+} from './pricing.js';
+import { LlmError, type LlmRequest } from './types.js';
+
+/** 内存 KV(CI 无 Redis 时也能跑);TTL 只记录不过期 */
+class MemKv implements LlmKv {
+  m = new Map<string, string>();
+  ttl = new Map<string, number>();
+  async get(k: string) {
+    return this.m.get(k) ?? null;
+  }
+  async set(k: string, v: string, _mode: 'EX', s: number) {
+    this.m.set(k, v);
+    this.ttl.set(k, s);
+    return 'OK';
+  }
+  async incrby(k: string, n: number) {
+    const v = Number(this.m.get(k) ?? 0) + n;
+    this.m.set(k, String(v));
+    return v;
+  }
+  async expire(k: string, s: number) {
+    this.ttl.set(k, s);
+    return 1;
+  }
+}
+
+// 测试价格:每 token 1 micro-USD(进出同价),便于算预算
+const PRICES: PriceTable = {
+  ...DEFAULT_PRICES,
+  'test-model': { inputPerMTok: 1, outputPerMTok: 1 },
+};
+const req = (content: string, extra: Partial<LlmRequest> = {}): LlmRequest => ({
+  model: 'test-model',
+  messages: [{ role: 'user', content }],
+  purpose: 'summary',
+  repoId: 1,
+  taskId: 11,
+  ...extra,
+});
+
+const REDIS_URL = process.env.TEST_REDIS_URL ?? 'redis://127.0.0.1:6379/9';
+const redisOk = await (async () => {
+  const r = new Redis(REDIS_URL, {
+    lazyConnect: true,
+    maxRetriesPerRequest: 0,
+    connectTimeout: 1000,
+  });
+  try {
+    await r.connect();
+    await r.ping();
+    return true;
+  } catch {
+    return false;
+  } finally {
+    r.disconnect();
+  }
+})();
+if (!redisOk) console.warn(`[agent] Redis 不可达(${REDIS_URL}),跳过真实 Redis 网关测试`);
+
+function suite(
+  name: string,
+  makeKv: () => Promise<{ kv: LlmKv; cleanup: () => Promise<void> }>,
+  enabled = true,
+) {
+  describe.skipIf(!enabled)(name, () => {
+    let kv: LlmKv;
+    let cleanup: () => Promise<void>;
+    let prefix: string;
+    beforeAll(async () => {
+      ({ kv, cleanup } = await makeKv());
+    });
+    afterAll(async () => cleanup?.());
+
+    const make = (o: { daily?: number; task?: number; fake?: FakeLlm } = {}) => {
+      prefix = `rl-dev-t210:${randomUUID()}:`;
+      const client = o.fake ?? new FakeLlm();
+      const usage = new MemoryStore();
+      const gw = new LlmGateway({
+        client,
+        kv,
+        usage,
+        prices: PRICES,
+        dailyBudgetCents: o.daily ?? 500,
+        taskBudgetCents: o.task,
+        keyPrefix: prefix,
+        now: () => new Date('2026-10-29T05:00:00Z'),
+      });
+      return { gw, client, usage };
+    };
+
+    it('首次调用模型并记账,同样请求第二次命中缓存:不调模型、费用 0、记 cache_hit', async () => {
+      const { gw, client, usage } = make();
+      const a = await gw.complete(req('hello'));
+      expect(a.cacheHit).toBe(false);
+      expect(a.costMicroUsd).toBe(a.usage.tokensIn + a.usage.tokensOut);
+      const b = await gw.complete(req('hello'));
+      expect(b).toMatchObject({ text: a.text, usage: a.usage, cacheHit: true, costMicroUsd: 0 });
+      expect(client.calls).toBe(1);
+      const rows = await usage.llmUsageByTask(11);
+      expect(rows.map((r) => [r.cacheHit, r.ok, r.costMicroUsd])).toEqual([
+        [false, true, a.costMicroUsd],
+        [true, true, 0],
+      ]);
+      expect(await gw.spentToday()).toBe(a.costMicroUsd);
+      expect(await gw.spentByTask(11)).toBe(a.costMicroUsd);
+      // 缓存 key 带前缀且 TTL 30 天
+      expect(await kv.get(`${prefix}llm:${cacheHash(req('hello'))}`)).not.toBeNull();
+    });
+
+    it('请求内容、模型或参数不同不会串缓存', async () => {
+      const { gw, client } = make();
+      await gw.complete(req('x'));
+      await gw.complete(req('x', { maxTokens: 50 }));
+      await gw.complete(req('x', { json: true }));
+      await gw.complete(req('x', { model: 'gpt-4o-mini' }));
+      expect(client.calls).toBe(4);
+    });
+
+    it('日预算用完抛 BUDGET_EXCEEDED(scope=daily),不调模型、不记账;缓存命中仍可用', async () => {
+      const { gw, client, usage } = make({ daily: 0 });
+      await expect(gw.complete(req('a'))).rejects.toMatchObject({
+        code: 'BUDGET_EXCEEDED',
+        scope: 'daily',
+      });
+      expect(client.calls).toBe(0);
+      expect(await usage.llmUsageByTask(11)).toEqual([]);
+    });
+
+    it('日预算跨过上限后下一次调用被拦', async () => {
+      // 1 美分 = 10000 micro-USD;每次约 4~10 token,放大 maxTokens 无用,改用大 prompt
+      const { gw, client } = make({ daily: 1 });
+      const big = 'x'.repeat(4 * 6000); // ≈6000 token 输入 → ≈6000+ micro-USD
+      await gw.complete(req(big + '1'));
+      await gw.complete(req(big + '2')); // 调用前 ~6000 < 10000,放行;之后 >10000
+      const err = await gw.complete(req(big + '3')).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(LlmError);
+      expect(err).toMatchObject({ code: 'BUDGET_EXCEEDED', scope: 'daily' });
+      expect(client.calls).toBe(2);
+      // 已缓存的请求不受预算影响
+      expect((await gw.complete(req(big + '1'))).cacheHit).toBe(true);
+    });
+
+    it('单任务预算(D2)只拦本任务,其他任务与无 taskId 调用不受影响', async () => {
+      const { gw } = make({ task: 1 });
+      const big = 'y'.repeat(4 * 11000);
+      await gw.complete(req(big));
+      await expect(gw.complete(req('next'))).rejects.toMatchObject({
+        code: 'BUDGET_EXCEEDED',
+        scope: 'task',
+      });
+      await expect(gw.complete(req('next', { taskId: 12 }))).resolves.toMatchObject({
+        cacheHit: false,
+      });
+      await expect(
+        gw.complete(req('next', { taskId: undefined, purpose: 'chat' })),
+      ).resolves.toBeTruthy();
+    });
+
+    it('模型失败:记 ok=0、抛 LLM_UNAVAILABLE、不写缓存不计费', async () => {
+      const fake = new FakeLlm({ fail: (r) => r.messages[0]!.content === 'boom' });
+      const { gw, usage } = make({ fake });
+      const err = await gw.complete(req('boom')).catch((e: unknown) => e);
+      expect(err).toMatchObject({ code: 'LLM_UNAVAILABLE' });
+      expect((err as Error).cause).toBeInstanceOf(Error);
+      expect((await usage.llmUsageByTask(11)).map((r) => r.ok)).toEqual([false]);
+      expect(await gw.spentToday()).toBe(0);
+      expect(await kv.get(`${prefix}llm:${cacheHash(req('boom'))}`)).toBeNull();
+    });
+
+    it('未知模型没有价格,拒绝调用', async () => {
+      const { gw, client } = make();
+      await expect(gw.complete(req('a', { model: 'nope' }))).rejects.toBeInstanceOf(
+        UnknownModelPriceError,
+      );
+      expect(client.calls).toBe(0);
+    });
+  });
+}
+
+suite('LlmGateway(内存 KV)', async () => ({ kv: new MemKv(), cleanup: async () => {} }));
+suite(
+  'LlmGateway(真实 Redis,独立库号 + rl-dev-t210: 前缀)',
+  async () => {
+    const r = new Redis(REDIS_URL, { maxRetriesPerRequest: 1 });
+    return {
+      kv: r,
+      cleanup: async () => {
+        const keys = await r.keys('rl-dev-t210:*');
+        if (keys.length) await r.del(...keys);
+        await r.quit();
+      },
+    };
+  },
+  redisOk,
+);
+
+describe('FakeLlm', () => {
+  it('确定性:同请求同输出,不同请求不同输出;json 模式可解析', async () => {
+    const f = new FakeLlm();
+    const r = { model: 'fake', messages: [{ role: 'user' as const, content: 'abc' }] };
+    expect(await f.call(r)).toEqual(await new FakeLlm().call(r));
+    expect((await f.call({ ...r, messages: [{ role: 'user', content: 'abd' }] })).text).not.toBe(
+      (await f.call(r)).text,
+    );
+    const j = JSON.parse((await f.call({ ...r, json: true })).text) as { summary: string };
+    expect(j.summary).toMatch(/^fake summary /);
+    expect((await f.call({ ...r, maxTokens: 1 })).usage.tokensOut).toBe(1);
+  });
+});
+
+describe('pricing', () => {
+  it('按每百万 token 美元计价,向上取整为 micro-USD', () => {
+    expect(costMicroUsd(DEFAULT_PRICES['gpt-4o-mini']!, 1000, 100)).toBe(210);
+    expect(costMicroUsd(DEFAULT_PRICES['gpt-4o-mini']!, 1, 0)).toBe(1);
+    expect(costMicroUsd(DEFAULT_PRICES.fake!, 1000, 1000)).toBe(0);
+  });
+});
+
+describe('readLlmConfig', () => {
+  it('默认 fake、日预算 500 美分、任务预算 30 美分,不需要 key', () => {
+    const c = readLlmConfig({});
+    expect(c).toMatchObject({ provider: 'fake', dailyBudgetCents: 500, taskBudgetCents: 30 });
+    expect(createLlmClient(c)).toBeInstanceOf(FakeLlm);
+  });
+  it('读取预算环境变量并校验', () => {
+    expect(
+      readLlmConfig({ DAILY_LLM_BUDGET_CENTS: '0', LLM_TASK_BUDGET_CENTS: ' 50 ' }),
+    ).toMatchObject({
+      dailyBudgetCents: 0,
+      taskBudgetCents: 50,
+    });
+    expect(() => readLlmConfig({ DAILY_LLM_BUDGET_CENTS: '-1' })).toThrow(/DAILY_LLM_BUDGET_CENTS/);
+    expect(() => readLlmConfig({ DAILY_LLM_BUDGET_CENTS: '5.5' })).toThrow(
+      /DAILY_LLM_BUDGET_CENTS/,
+    );
+  });
+  it('真实 provider 尚未实现(待 D1),显式报错而不是悄悄用 fake', () => {
+    expect(() => readLlmConfig({ LLM_PROVIDER: 'openai', LLM_API_KEY: 'k' })).toThrow(/D1/);
+  });
+});

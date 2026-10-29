@@ -126,7 +126,15 @@ importers:
         specifier: 5.11.1
         version: 5.11.1
 
-  packages/agent: {}
+  packages/agent:
+    dependencies:
+      '@repolens/db':
+        specifier: workspace:*
+        version: link:../db
+    devDependencies:
+      ioredis:
+        specifier: 5.11.1
+        version: 5.11.1
 
   packages/analyzer:
     dependencies:

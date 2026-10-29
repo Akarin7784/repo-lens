@@ -5,6 +5,8 @@ import mysql from 'mysql2/promise';
 import * as schema from './schema.js';
 import type {
   GraphInput,
+  LlmUsageInput,
+  LlmUsageRow,
   RepoRow,
   Store,
   StoredGraph,
@@ -83,6 +85,42 @@ export class MysqlStore implements Store {
     if (Object.keys(set).length)
       await this.db.update(schema.repo).set(set).where(eq(schema.repo.id, id));
   }
+  async insertLlmUsage(row: LlmUsageInput) {
+    await this.db.insert(schema.llmUsage).values({
+      repoId: row.repoId ?? null,
+      taskId: row.taskId ?? null,
+      sessionId: row.sessionId ?? null,
+      purpose: row.purpose,
+      model: row.model,
+      tokensIn: row.tokensIn,
+      tokensOut: row.tokensOut,
+      costMicroUsd: row.costMicroUsd,
+      cacheHit: row.cacheHit ? 1 : 0,
+      ok: row.ok ? 1 : 0,
+    });
+  }
+
+  async llmUsageByTask(taskId: number): Promise<LlmUsageRow[]> {
+    const rows = await this.db
+      .select()
+      .from(schema.llmUsage)
+      .where(eq(schema.llmUsage.taskId, taskId))
+      .orderBy(schema.llmUsage.id);
+    return rows.map((r) => ({
+      id: r.id,
+      repoId: r.repoId,
+      taskId: r.taskId,
+      sessionId: r.sessionId,
+      purpose: r.purpose,
+      model: r.model ?? '',
+      tokensIn: r.tokensIn ?? 0,
+      tokensOut: r.tokensOut ?? 0,
+      costMicroUsd: r.costMicroUsd ?? 0,
+      cacheHit: r.cacheHit === 1,
+      ok: r.ok === 1,
+    }));
+  }
+
   async createTask(input: { jobId: string; repoId: number; commitSha: string }) {
     const res = await this.db
       .insert(schema.analysisTask)

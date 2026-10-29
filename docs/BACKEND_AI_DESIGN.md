@@ -224,6 +224,8 @@ CREATE TABLE llm_usage (
 | 任务去重锁 | `lock:repo:{repoId}:{commit}` | String NX，TTL 30min |
 | 图缓存 | `graph:v{N}:{repoId}:{commitSha}:{parentId|root}`(N=投影版本,改投影逻辑时递增) | String(JSON, gzip)，TTL 7d |
 | LLM 响应缓存 | `llm:{sha256(model+prompt)}` | String，TTL 30d |
+| LLM 日花费 | `llm:spend:day:{yyyyMMdd}`（UTC） | String 计数（micro-USD），TTL 2d |
+| LLM 任务花费 | `llm:spend:task:{taskId}` | String 计数（micro-USD），TTL 7d |
 | Embedding 缓存 | `emb:{model}:{contentHash}` | String(base64 float32)，TTL 30d |
 | 限流 | `rl:ip:{ip}:{yyyyMMddHH}` | INCR，TTL 1h;**只计真正入队的提交**(新任务或 failed 重试);同仓库同 commit 已有 done/queued/running 任务时直接复用,不计数(T-003d);被拒绝或出错的提交也不计。每来源每小时上限默认 5,环境变量 `RATE_LIMIT_NEW_REPOS_PER_HOUR`。超限返回 429 `RATE_LIMITED`,不建任务 |
 | 提交总量(宽松) | `rl:sub:{ip}:{yyyyMMddHH}` | INCR,TTL 1h;`POST /api/repos` 的**每一次**提交都计(包括被拒绝的 400/404/413/422、出错的 500、复用的 200,T-003f),同一来源每小时上限默认 60,环境变量 `RATE_LIMIT_SUBMITS_PER_HOUR`(复用不占新仓库额度,但计入这里,是便宜的防刷兜底),超限返回 429 `RATE_LIMITED`。这个检查在请求最前面做,被它拦下的请求不建任务,也不占新任务名额。被拒绝的提交不进入新任务计数;已计数但最终没有入队的提交(并发下别人先建了未失败任务,或建任务/入队抛错)会 DECR 退还 1 次 |
@@ -446,11 +448,18 @@ flowchart TD
 | 缓存 | 摘要按 `input_hash` 缓存；embedding 按 `content_hash` 缓存；相同问题（规范化后）+ 同一 commit 缓存回答 24h |
 | 批处理 | function 摘要一批 10–20 个；embedding 一次请求 64 条 |
 | 削量 | 只摘导出的和 ≥8 行的函数；测试、示例目录（`__tests__`、`*.spec.ts`）只建 chunk，不做摘要 |
-| 预算 | 单仓库分析预算 $0.50（演示仓库不限）；单次问答输入 ≤ 8k / 输出 ≤ 800 tokens；全站每日 $5；超了预算就跳过 summarize，只做 embed |
+| 预算 | 单次分析任务预算 $0.30（`LLM_TASK_BUDGET_CENTS=30`，按 WEEK2_PLAN D2；原写 $0.50，已同步）；单次问答输入 ≤ 8k / 输出 ≤ 800 tokens；全站每日 $5（`DAILY_LLM_BUDGET_CENTS=500`）；超了预算抛 `BUDGET_EXCEEDED`，摘要阶段对剩余文件改用规则摘要并发 `stage_error`，任务仍为 done，只做 embed |
 | 限流 | 匿名用户每 IP 每小时 5 个新仓库(`RATE_LIMIT_NEW_REPOS_PER_HOUR`)、POST 总量 60 次(`RATE_LIMIT_SUBMITS_PER_HOUR`)、30 次问答；BullMQ `limiter: {max: 20, duration: 1000}` 控制对 LLM 的 QPS |
 | 统计 | 每次调用写 `llm_usage`（token 数来自响应里的 `usage` 字段）；`done` 事件带 costUsd；后台做按天/按用途的成本看板 |
 
-**统一 LLM 网关**（`lib/llm.ts`）：所有调用都经过它，负责缓存 → 预算检查 → 熔断 → 调用 → 记账，备用 provider 按顺序切换（见 §10.4）。
+**统一 LLM 网关**（`packages/agent` 的 `LlmGateway`，T-210）：所有调用都经过它，负责缓存 → 预算检查 → 熔断 → 调用 → 记账，备用 provider 按顺序切换（见 §10.4）。
+
+T-210 已实现的部分（不依赖 D1）：
+- 缓存：`llm:{sha256(model + messages + maxTokens/temperature/json)}`，TTL 30d；命中不查预算、不计费，记一条 `cache_hit=1` 的 `llm_usage`。
+- 预算：Redis 计数 `llm:spend:day:{yyyyMMdd UTC}`（TTL 2d）与 `llm:spend:task:{taskId}`（TTL 7d），单位 micro-USD；调用前检查、调用后 INCRBY，并发时最多超出（并发数 − 1）次调用的花费。超限抛 `BUDGET_EXCEEDED`（scope = daily / task），不调用模型、不写 `llm_usage`。
+- 记账：每次调用写 `llm_usage`；费用按价格表（每百万 token 美元）换算成 micro-USD 并向上取整；不在价格表里的模型拒绝调用。模型失败写 `ok=0` 并抛 `LLM_UNAVAILABLE`，重试与规则降级由调用方（T-211，D6）负责。
+- `FakeLlm`：确定性输出、不联网、不需要 key；`LLM_PROVIDER` 目前只接受 `fake`。
+- 待 D1：真实 OpenAI 兼容客户端、`cb:llm:{provider}` 连续失败熔断、备用 provider。
 
 ---
 

@@ -65,6 +65,53 @@ function suite(name: string, make: () => Promise<Store>, enabled = true) {
     });
     afterAll(async () => s?.close());
 
+    it('llm_usage 写入与按任务读回(T-210)', async () => {
+      const r = await s.upsertRepo({ url: 'https://github.com/o/llm', owner: 'o', name: 'llm' });
+      const { task } = await s.createTask({
+        jobId: `${r.id}:${'c'.repeat(40)}`,
+        repoId: r.id,
+        commitSha: 'c'.repeat(40),
+      });
+      const base = { repoId: r.id, taskId: task.id, purpose: 'summary' as const, model: 'm' };
+      await s.insertLlmUsage({
+        ...base,
+        tokensIn: 10,
+        tokensOut: 5,
+        costMicroUsd: 12,
+        cacheHit: false,
+        ok: true,
+      });
+      await s.insertLlmUsage({
+        ...base,
+        tokensIn: 0,
+        tokensOut: 0,
+        costMicroUsd: 0,
+        cacheHit: true,
+        ok: true,
+      });
+      await s.insertLlmUsage({
+        ...base,
+        tokensIn: 0,
+        tokensOut: 0,
+        costMicroUsd: 0,
+        cacheHit: false,
+        ok: false,
+      });
+      const rows = await s.llmUsageByTask(task.id);
+      expect(rows.map((u) => [u.costMicroUsd, u.cacheHit, u.ok])).toEqual([
+        [12, false, true],
+        [0, true, true],
+        [0, false, false],
+      ]);
+      expect(rows[0]).toMatchObject({
+        repoId: r.id,
+        taskId: task.id,
+        purpose: 'summary',
+        tokensIn: 10,
+        tokensOut: 5,
+      });
+    });
+
     it('repo upsert 幂等、task 按 jobId 幂等', async () => {
       const r1 = await s.upsertRepo({ url: 'https://github.com/o/n', owner: 'o', name: 'n' });
       const r2 = await s.upsertRepo({ url: 'https://github.com/o/n', owner: 'o', name: 'n' });
@@ -118,6 +165,9 @@ suite(
 
 describe('redis keys', () => {
   it('与文档一致', () => {
+    expect(redisKeys.llmCache('ab')).toBe('llm:ab');
+    expect(redisKeys.llmSpendDay(new Date('2026-10-29T23:59:00Z'))).toBe('llm:spend:day:20261029');
+    expect(redisKeys.llmSpendTask(7)).toBe('llm:spend:task:7');
     expect(redisKeys.jobEvents('1:abc')).toBe('job:1:abc:events');
     expect(GRAPH_PROJECTION_VERSION).toBe(5);
     expect(redisKeys.graph(1, C, null)).toBe(`graph:v5:1:${C}:root`);
