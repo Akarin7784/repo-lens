@@ -737,6 +737,44 @@ describe.skipIf(!hasRedis)('路由(真实 Redis + 内存 Store)', () => {
     await app.close();
   });
 
+  it('/nodes:路径命中敏感规则的文件 exports 为空(即使库里残留 symbols)', async () => {
+    const app = make();
+    const repo = await store.upsertRepo({
+      url: 'https://github.com/o/sens',
+      owner: 'o',
+      name: 'sens',
+    });
+    await store.createTask({ jobId: publicJobId(repo.id, SHA), repoId: repo.id, commitSha: SHA });
+    const f = (path: string) => ({
+      path,
+      lang: 'ts',
+      loc: 3,
+      contentHash: 'h',
+      moduleId: 'm:.',
+      dirPath: path.split('/').slice(0, -1).join('/') || '.',
+      externalDeps: [],
+    });
+    const sym = (path: string, name: string) => ({
+      path,
+      name,
+      kind: 'function' as const,
+      startLine: 1,
+      endLine: 1,
+      exported: true,
+    });
+    await store.saveGraph(repo.id, SHA, {
+      files: [f('config/secrets.ts'), f('src/ok.ts')],
+      symbols: [sym('config/secrets.ts', 'FAKE_TOKEN'), sym('src/ok.ts', 'ok')],
+      edges: [],
+    });
+    await store.updateTask(publicJobId(repo.id, SHA), { stage: 'graph_ready', progress: 50 });
+    const get = async (id: string) =>
+      NodeDetailSchema.parse((await app.inject(`/api/repos/${repo.id}/nodes/${id}`)).json());
+    expect((await get('f:config/secrets.ts')).exports).toEqual([]);
+    expect((await get('f:src/ok.ts')).exports).toEqual(['ok']);
+    await app.close();
+  });
+
   it('图未生成 409,节点详情', async () => {
     const app = make();
     const b = (await post(app, 'https://github.com/a/pending')).json();

@@ -488,6 +488,7 @@ T-210b（DeepSeek，D1）：
 - 命中后：
   - 摘要：只做规则摘要，输入只有路径、语言、行数。不含源码，也不含导出名和 import：导出名是从源码里抽出来的标识符，可能就是常量名或值本身，与其逐个甄别不如一律不带。`contentHash` 也置空。worker 读文件时判定（`exclusionRule(path, code)`），`summarizeRepo` 见到 `sensitive` 再强制一次。
   - README / package.json 内容命中特征时不进 repo 提示词。
+  - 符号:worker 持久化图时跳过这类文件的 symbols,`/nodes/f:<文件>` 返回空 `exports`;api 再按路径规则兜一次。
 - 超限与二进制：扫描阶段已跳过 >500KB 与前 8KB 含 NUL 的文件（不成为图节点）；送模型/切块前再用 `exclusionRule` = 敏感规则 → `unsendableContentRule`（UTF-8 字节数 > `MAX_SEND_BYTES` 500KB 记 `too-large`，含 NUL 记 `binary`）兜一次，命中同样只给规则摘要、不送模型、不切块。
   - embedding / RAG：分析器对命中文件 `chunks = []` 并标 `ParsedFile.sensitive`，因此不会被切块、向量化或作为检索来源；图节点与导入关系保留。
   - `/files`（T-213）：命中文件不返回内容，只返回 `SENSITIVE_PLACEHOLDER`「已排除」提示。这一条写进 T-213 的验收标准和测试。

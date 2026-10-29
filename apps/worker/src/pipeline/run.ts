@@ -114,7 +114,11 @@ export async function toGraphInput(root: string, r: AnalyzeResult): Promise<Grap
       dirPath: posix.dirname(n.path),
       externalDeps: n.externalDeps ?? [],
     });
-    for (const s of parsedByPath.get(n.path)?.symbols ?? []) symbols.push({ path: n.path, ...s });
+    const parsed = parsedByPath.get(n.path);
+    // 命中敏感 / 超限 / 二进制规则的文件不持久化 symbols:导出名可能就是常量名或值本身,
+    // 与摘要处清空 exports 保持一致,/nodes 对这类文件返回空 exports
+    if (parsed?.sensitive) continue;
+    for (const s of parsed?.symbols ?? []) symbols.push({ path: n.path, ...s });
   }
   const edges = r.graph.edges.map((e) => ({
     srcId: e.source,
