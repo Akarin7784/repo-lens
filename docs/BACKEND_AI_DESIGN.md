@@ -351,6 +351,8 @@ data: {"jobId":"12:a1b2c3d","status":"done","stats":{"files":412,"chunks":2900,"
 - 规则摘要:file 为路径、语言、行数、导出名;dir 为路径、文件数、行数、主要子项;repo 为名称、文件数、模块列表。model 记为 `rule`,同样按 input_hash 复用。
 - 复用:库里已有行的 input_hash 与本次一致时直接复用,不经过网关,所以同 commit 重跑不新增 llm_usage。
 - 失败(D6):LLM 不可用或 JSON 解析失败时,改写 user 消息重试 1 次(避开已缓存的坏响应),仍失败就用规则摘要。
+- 单文件超时:每次文件摘要调用(每次尝试)默认 30s 超时(`fileTimeoutMs`,`DEFAULT_FILE_TIMEOUT_MS`),超时按失败处理,即重试 1 次,仍超时用规则摘要,次数记在 `SummarizeResult.timedOut`。超时只是摘要流程不再等;底层 HTTP 请求由客户端自己的超时(DeepSeek 60s)中止,迟到的响应仍可能记账。
+- dir/module 子项总长度上限:提示词里子项摘要(id + 摘要)总长不超过 `CHILDREN_MAX_CHARS`=8000 字符,按子项 id 顺序装入,至少保留 1 个,超出的不放进提示词,只写「另有 N 个子项因长度上限省略」。input_hash 只看实际放进去的子项和省略数;没超上限的目录 hash 不变,照常复用。
 - 成本上限与降级:每个任务受 `LLM_TASK_BUDGET_CENTS`(默认 30¢)约束,全站受日预算约束。网关一抛 `BUDGET_EXCEEDED`,剩余节点全部改用规则摘要,已复用的 LLM 摘要保留。summarizing 阶段只发一次 `stage_error`,任务仍然 done。摘要阶段的意外异常同样只发一次 stage_error,然后跳过摘要。
 - 并发:进程内池,默认 4;尚未接独立的 summarize 队列和全局 limiter。跨仓库按 content_hash 复用尚未实现。
 

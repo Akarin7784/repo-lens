@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { randomInt } from 'node:crypto';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -80,8 +81,14 @@ const hasRedis = await redisUp();
 if (!hasRedis) console.warn(`[api] Redis 不可达(${REDIS_URL}),跳过依赖 Redis 的路由测试`);
 
 const SHA = '1'.repeat(40);
+// 限流 key(rl:ip:/rl:sub:{ip}:{hour})按 IP 计数,共享 Redis 上会跨次运行累积。
+// 每次运行随机取一段 IP(10.a.b.x),每个请求都带独立 IP,避免误报 429。
+const IP_BASE = randomInt(0, 250 * 200);
 let ipSeq = 0;
-const nextIp = () => `10.${process.pid % 250}.${Math.floor(++ipSeq / 250)}.${ipSeq % 250}`;
+const nextIp = () => {
+  const n = IP_BASE * 250 + ++ipSeq;
+  return `10.${Math.floor(n / 62500) % 250}.${Math.floor(n / 250) % 250}.${n % 250}`;
+};
 
 describe.skipIf(!hasRedis)('路由(真实 Redis + 内存 Store)', () => {
   const redis = new Redis(REDIS_URL, { maxRetriesPerRequest: null });
@@ -95,7 +102,18 @@ describe.skipIf(!hasRedis)('路由(真实 Redis + 内存 Store)', () => {
     enqueue: async (d) => void jobs.push(d),
     removeFailed: async () => {},
   };
-  const make = () => buildApp({ store, redis, queue, git, logger: false, pingIntervalMs: 50 });
+  const make = () => {
+    const app = buildApp({ store, redis, queue, git, logger: false, pingIntervalMs: 50 });
+    // 未显式带 x-forwarded-for 的请求补一个独立 IP,不落到共享的 127.0.0.1 计数上
+    const inject = app.inject.bind(app) as (o: unknown) => ReturnType<typeof app.inject>;
+    const withIp = (o: string | { headers?: Record<string, string> }) =>
+      typeof o === 'string'
+        ? { url: o, headers: { 'x-forwarded-for': nextIp() } }
+        : { ...o, headers: { 'x-forwarded-for': nextIp(), ...o.headers } };
+    app.inject = ((o: string | { headers?: Record<string, string> }) =>
+      inject(withIp(o))) as unknown as typeof app.inject;
+    return app;
+  };
   beforeEach(() => {
     store = new MemoryStore();
     jobs = [];
