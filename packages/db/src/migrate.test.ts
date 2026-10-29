@@ -1,25 +1,27 @@
 import { describe, expect, it } from 'vitest';
 import mysql from 'mysql2/promise';
 import { expectedMigrations, runMigrations, waitForSchema, withRetry } from './migrate.js';
-import { onServiceUnavailable } from '@repolens/shared';
+import { probeService } from '@repolens/shared';
 
 const MYSQL_URL = process.env.TEST_MYSQL_URL ?? 'mysql://root:dev@127.0.0.1:3306/repolens_test';
+// 探测只连服务器根(不带库名):另一测试文件可能正在 DROP/CREATE 默认库,带库名会撞上 Unknown database
+const SERVER_URL = MYSQL_URL.replace(/\/[^/]*$/, '/');
 const DB = 'repolens_mig_test';
 const url = MYSQL_URL.replace(/\/[^/]*$/, `/${DB}`);
 
-async function reachable() {
-  try {
-    const c = await mysql.createConnection({ uri: MYSQL_URL, connectTimeout: 1500 });
-    await c.query(`DROP DATABASE IF EXISTS ${DB}`);
-    await c.query(`CREATE DATABASE ${DB}`);
-    await c.end();
-    return true;
-  } catch {
-    return false;
-  }
-}
-const hasMysql = await reachable();
-if (!hasMysql) onServiceUnavailable('MySQL', `[db] MySQL 不可达(${DB}),跳过迁移集成测试`);
+const hasMysql = await probeService(
+  'MySQL',
+  '[db] MySQL 不可达(repolens_mig_test),跳过迁移集成测试',
+  async () => {
+    const c = await mysql.createConnection({ uri: SERVER_URL, connectTimeout: 5000 });
+    try {
+      await c.query('DROP DATABASE IF EXISTS repolens_mig_test');
+      await c.query('CREATE DATABASE repolens_mig_test');
+    } finally {
+      await c.end().catch(() => {});
+    }
+  },
+);
 
 describe('withRetry', () => {
   it('指数退避、有上限,成功后停止', async () => {

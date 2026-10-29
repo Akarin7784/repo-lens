@@ -11,25 +11,26 @@ import {
   redisKeys,
 } from './redis-keys.js';
 import type { GraphInput, Store } from './store.js';
-import { onServiceUnavailable } from '@repolens/shared';
+import { probeService } from '@repolens/shared';
 
 const MYSQL_URL = process.env.TEST_MYSQL_URL ?? 'mysql://root:dev@127.0.0.1:3306/repolens_test';
+// 探测只连服务器根(不带库名):另一测试文件可能正在 DROP/CREATE 默认库,带库名会撞上 Unknown database
+const SERVER_URL = MYSQL_URL.replace(/\/[^/]*$/, '/');
 const C = 'a'.repeat(40);
 
-async function mysqlReachable(): Promise<boolean> {
-  try {
-    const c = await mysql.createConnection({ uri: MYSQL_URL, connectTimeout: 1500 });
-    await c.query('DROP DATABASE IF EXISTS repolens_test');
-    await c.query('CREATE DATABASE repolens_test');
-    await c.end();
-    return true;
-  } catch {
-    return false;
-  }
-}
-const hasMysql = await mysqlReachable();
-if (!hasMysql)
-  onServiceUnavailable('MySQL', `[db] MySQL 不可达(${MYSQL_URL}),跳过 MysqlStore 集成测试`);
+const hasMysql = await probeService(
+  'MySQL',
+  '[db] MySQL 不可达(repolens_test),跳过 MysqlStore 集成测试',
+  async () => {
+    const c = await mysql.createConnection({ uri: SERVER_URL, connectTimeout: 5000 });
+    try {
+      await c.query('DROP DATABASE IF EXISTS repolens_test');
+      await c.query('CREATE DATABASE repolens_test');
+    } finally {
+      await c.end().catch(() => {});
+    }
+  },
+);
 
 const graph: GraphInput = {
   files: [

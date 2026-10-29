@@ -11,28 +11,27 @@ import {
   indexChunks,
   withEmbedLock,
 } from '@repolens/rag';
-import { onServiceUnavailable } from '@repolens/shared';
+import { probeService } from '@repolens/shared';
 
 // 本机 Redis 共用:默认 db 6 + 进程唯一前缀,不碰其他库和 key
 const REDIS_URL = process.env.TEST_REDIS_URL ?? 'redis://127.0.0.1:6379/6'; // 库号占用表见 packages/agent/src/llm/llm.test.ts
-async function redisUp() {
-  const r = new Redis(REDIS_URL, {
-    lazyConnect: true,
-    connectTimeout: 1000,
-    maxRetriesPerRequest: 0,
-  });
-  try {
-    await r.connect();
-    await r.ping();
-    return true;
-  } catch {
-    return false;
-  } finally {
-    r.disconnect();
-  }
-}
-const hasRedis = await redisUp();
-if (!hasRedis) onServiceUnavailable('Redis', `[worker] Redis 不可达,跳过向量化锁集成测试`);
+const hasRedis = await probeService(
+  'Redis',
+  '[worker] Redis 不可达,跳过向量化锁集成测试',
+  async () => {
+    const r = new Redis(REDIS_URL, {
+      lazyConnect: true,
+      connectTimeout: 5000,
+      maxRetriesPerRequest: 0,
+    });
+    try {
+      await r.connect();
+      if ((await r.ping()) !== 'PONG') throw new Error('ping 未返回 PONG');
+    } finally {
+      r.disconnect();
+    }
+  },
+);
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const chunks = Array.from({ length: 3 }, (_, i) => ({

@@ -3,12 +3,7 @@ import { request } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Redis } from 'ioredis';
-import {
-  ApiErrorSchema,
-  ChatEventSchema,
-  onServiceUnavailable,
-  type ChatEvent,
-} from '@repolens/shared';
+import { ApiErrorSchema, ChatEventSchema, probeService, type ChatEvent } from '@repolens/shared';
 import { MemoryStore, redisKeys, type CodeChunkRow, type TaskStats } from '@repolens/db';
 import {
   DEFAULT_PRICES,
@@ -44,25 +39,24 @@ import { readChatLimits } from '../limits.js';
 
 // 未设 TEST_REDIS_URL 时用专用 db 11(不连共享 db 0;agent llm.test 用 5、worker embed-lock 用 6)
 const REDIS_URL = process.env.TEST_REDIS_URL ?? 'redis://127.0.0.1:6379/11';
-async function redisUp() {
-  const r = new Redis(REDIS_URL, {
-    lazyConnect: true,
-    connectTimeout: 1000,
-    maxRetriesPerRequest: 0,
-  });
-  try {
-    await r.connect();
-    return (await r.ping()) === 'PONG';
-  } catch {
-    return false;
-  } finally {
-    r.disconnect();
-  }
-}
-const hasRedis = await redisUp();
 // REQUIRE_DB_TESTS=1(CI)时不可达直接抛错,不允许静默跳过
-if (!hasRedis)
-  onServiceUnavailable('Redis', `[api chat] Redis 不可达(${REDIS_URL}),跳过问答路由测试`);
+const hasRedis = await probeService(
+  'Redis',
+  '[api chat] Redis 不可达,跳过问答路由测试',
+  async () => {
+    const r = new Redis(REDIS_URL, {
+      lazyConnect: true,
+      connectTimeout: 5000,
+      maxRetriesPerRequest: 0,
+    });
+    try {
+      await r.connect();
+      if ((await r.ping()) !== 'PONG') throw new Error('ping 未返回 PONG');
+    } finally {
+      r.disconnect();
+    }
+  },
+);
 
 const SHA = '2'.repeat(40);
 const IP_BASE = randomInt(0, 250 * 200);
