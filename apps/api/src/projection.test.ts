@@ -160,4 +160,46 @@ describe('跨子树聚合边', () => {
     expect([one.truncated, one.droppedBoundary]).toEqual([true, 2]);
     expect(() => GraphDataSchema.parse(one.graph)).not.toThrow();
   });
+
+  it('meta.cycles:按 SCC 成员集合投影(含边界节点),去重排序,落进同一节点的不返回', () => {
+    const scc = [
+      // 跨子树 SCC(成员按 id 排序,不是路径)
+      [`f:${C}deep/x.ts`, `f:${C}index.ts`, `f:${U}a.ts`],
+      // 同一子树内的 SCC
+      [`f:${C}deep/x.ts`, `f:${C}deep/y.ts`],
+    ];
+    const at = (parentId: string | null) =>
+      projectGraph(ix, {
+        repoId: 1,
+        commitSha: 'a'.repeat(40),
+        parentId,
+        includeExternal: false,
+        cycles: scc,
+      })!.meta.cycles;
+    // 展开 deep:x.ts 可见,index.ts 与 utils 映射为边界节点;旧实现只看可见节点会丢掉第一项
+    expect(at('d:packages/core/src/deep')).toEqual([
+      ['f:packages/core/src/deep/x.ts', 'f:packages/core/src/index.ts', 'm:packages/utils'],
+      ['f:packages/core/src/deep/x.ts', 'f:packages/core/src/deep/y.ts'],
+    ]);
+    // 展开 core/src:x、y 都落进 d:deep → 第二项是 deep 内部的环,不返回
+    expect(at('d:packages/core/src')).toEqual([
+      ['d:packages/core/src/deep', 'f:packages/core/src/index.ts', 'm:packages/utils'],
+    ]);
+    // 根层:两项分别映射成 {core, utils} 与 {core},只保留前者
+    expect(at(null)).toEqual([['m:packages/core', 'm:packages/utils']]);
+    // 成员全在子树外(只落在边界节点上)的环不返回
+    expect(at('m:packages/utils')).toEqual([['d:packages/utils/src', 'm:packages/core']]);
+    // 映射后集合相同的 SCC 只返回一次,且与成员顺序无关
+    const dup = projectGraph(ix, {
+      repoId: 1,
+      commitSha: 'a'.repeat(40),
+      parentId: null,
+      includeExternal: false,
+      cycles: [
+        [`f:${C}index.ts`, `f:${U}a.ts`],
+        [`f:${U}b.ts`, `f:${C}deep/y.ts`],
+      ],
+    })!;
+    expect(dup.meta.cycles).toEqual([['m:packages/core', 'm:packages/utils']]);
+  });
 });
