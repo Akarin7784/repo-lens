@@ -215,7 +215,10 @@ volumes: { repos: {}, mysql: {}, qdrant: {}, caddy_data: {} }
 
 
 ### 4.1 api / worker 环境变量(逐个按代码核对)
-上表是演示机取值;本表只列变量名、代码默认值、用途、是否必填,不含任何取值或密钥。核对口径:main `43bad5e` 中 `process.env` / 配置读取处(位置见「代码位置」列)。「启动失败」指非法值在读取配置时抛错,进程不起来;报错只列变量名,不回显值。
+上表是演示机取值;本表只列变量名、代码默认值、用途、是否必填,不含任何取值或密钥。核对口径:main `628cd33` 中 `process.env` / 配置读取处(位置见「代码位置」列)。
+
+- **api 与 LLM / embedding 配置:非法值启动失败。** 「启动失败」指读取配置时抛错,进程不起来。报错口径:非密钥变量会在报错里回显非法值(packages/agent/src/llm/config.ts:39、46、55、77;apps/api/src/limits.ts:13);密钥类不回显(`DEEPSEEK_API_KEY` 只报未设置,config.ts:73–74;`CHAT_USER_KEY_SECRET` 只报长度不足,limits.ts:37–39);embedding 配置(packages/rag/src/config.ts:138)只列变量名,不回显值。
+- **worker 自身的数值变量(`MAX_FILES`、`MAX_REPO_MB`、`CLONE_TIMEOUT_MS`、`PARSE_TIMEOUT_MS`、`PARSE_CONCURRENCY`、`WORKER_CONCURRENCY`):非法值静默回退默认值,不报错、不打日志**(apps/worker/src/config.ts:23 `num()`,只判断 `Number.isFinite`,所以负数、小数也会原样通过)。worker 读取的 LLM / embedding 变量与 api 一样,非法即启动失败(config.ts:36–37)。
 
 | 变量 | 读取方 | 代码默认 | 用途 | 必填 | 代码位置 |
 |---|---|---|---|---|---|
@@ -224,7 +227,7 @@ volumes: { repos: {}, mysql: {}, qdrant: {}, caddy_data: {} }
 | API_PORT | api | 4000 | 监听端口 | 否 | apps/api/src/index.ts:36 |
 | NODE_ENV | api | 无 | 为 `test` 时关闭日志 | 否 | apps/api/src/app.ts:75 |
 | GITHUB_TOKEN | api | 无 | GitHub API 只读令牌,提高限额 | 否 | apps/api/src/index.ts:85 |
-| MAX_REPO_MB | api / worker | 300 | 仓库体积上限 | 否 | apps/api/src/index.ts:86;apps/worker/src/config.ts:31 |
+| MAX_REPO_MB | api / worker | 300 | 仓库体积上限 | 否(api、worker 都用 `Number()`/`num()` 直接读,不校验) | apps/api/src/index.ts:86;apps/worker/src/config.ts:31 |
 | REPOS_DIR | api / worker | 系统临时目录下 `repolens-repos` | 仓库快照目录(api 只读) | 否(compose 两边须一致) | apps/api/src/index.ts:88;apps/worker/src/config.ts:29 |
 | RATE_LIMIT_NEW_REPOS_PER_HOUR | api | 5 | 每 IP 每小时新任务数 | 否;正整数,非法则启动失败 | apps/api/src/limits.ts:19 |
 | RATE_LIMIT_SUBMITS_PER_HOUR | api | 60 | 每 IP 每小时提交次数 | 否;同上 | apps/api/src/limits.ts:20 |
@@ -232,14 +235,14 @@ volumes: { repos: {}, mysql: {}, qdrant: {}, caddy_data: {} }
 | CHAT_MAX_CONCURRENT_STREAMS | api | 8 | 问答流全局并发(进程内计数,多实例各算各的) | 否;同上 | apps/api/src/limits.ts:42 |
 | CHAT_STREAM_TIMEOUT_MS | api | 90000 | 单次问答流总时限 | 否;同上 | apps/api/src/limits.ts:44 |
 | CHAT_USER_KEY_SECRET | api | 无 | 生成 `chat_session.user_key` 的密钥;去首尾空白后须 ≥32 字节,短于 32 字节启动失败;未设置时 user_key 存 null,启动日志打 warn | 否(建议设置) | apps/api/src/limits.ts:37–39;apps/api/src/index.ts:102–103 |
-| MAX_FILES | worker | 5000 | 单仓库文件数上限 | 否 | apps/worker/src/config.ts:30 |
-| CLONE_TIMEOUT_MS | worker | 120000 | clone 超时 | 否 | apps/worker/src/config.ts:32 |
-| PARSE_TIMEOUT_MS | worker | 5000 | 单文件解析超时 | 否 | apps/worker/src/config.ts:33 |
-| PARSE_CONCURRENCY | worker | 8 | 解析并发 | 否 | apps/worker/src/config.ts:34 |
-| WORKER_CONCURRENCY | worker | 2 | 任务并发 | 否 | apps/worker/src/config.ts:35 |
+| MAX_FILES | worker | 5000 | 单仓库文件数上限 | 否;非法值静默回退默认 | apps/worker/src/config.ts:30 |
+| CLONE_TIMEOUT_MS | worker | 120000 | clone 超时 | 否;非法值静默回退默认 | apps/worker/src/config.ts:32 |
+| PARSE_TIMEOUT_MS | worker | 5000 | 单文件解析超时 | 否;非法值静默回退默认 | apps/worker/src/config.ts:33 |
+| PARSE_CONCURRENCY | worker | 8 | 解析并发 | 否;非法值静默回退默认 | apps/worker/src/config.ts:34 |
+| WORKER_CONCURRENCY | worker | 2 | 任务并发 | 否;非法值静默回退默认 | apps/worker/src/config.ts:35 |
 | LLM_PROVIDER | api / worker | `fake` | `fake` 或 `deepseek` | 否 | packages/agent/src/llm/config.ts:53 |
 | DEEPSEEK_API_KEY | api / worker | 无 | DeepSeek 密钥(只记是否已设置,不进配置对象) | `LLM_PROVIDER=deepseek` 时必填,缺失启动失败 | packages/agent/src/llm/config.ts:73–74、:101 |
-| DEEPSEEK_BASE_URL | api / worker | 代码常量 `DEEPSEEK_DEFAULT_BASE_URL` | DeepSeek 接口地址,须 http(s) | 否 | packages/agent/src/llm/config.ts:75;packages/agent/src/llm/deepseek.ts:4 |
+| DEEPSEEK_BASE_URL | api / worker | 代码常量 `DEEPSEEK_DEFAULT_BASE_URL` | DeepSeek 接口地址。只在 `LLM_PROVIDER=deepseek` 时校验,且只校验以 `http://` 或 `https://` 开头(`http://` 也能通过);fake 下不读 | 否 | packages/agent/src/llm/config.ts:75–77;packages/agent/src/llm/deepseek.ts:4 |
 | LLM_SUMMARY_MODEL / LLM_CHAT_MODEL | api / worker | 代码常量 `DEEPSEEK_DEFAULT_MODEL` | 摘要模型 / 问答模型;fake 下忽略 | 否 | packages/agent/src/llm/config.ts:80–81 |
 | DAILY_LLM_BUDGET_CENTS | api / worker | 500 | 全站每日 LLM 预算(美分,非负整数) | 否 | packages/agent/src/llm/config.ts:57 |
 | LLM_TASK_BUDGET_CENTS | api / worker | 30 | 单任务 LLM 预算(美分,非负整数) | 否 | packages/agent/src/llm/config.ts:58 |
@@ -254,7 +257,7 @@ volumes: { repos: {}, mysql: {}, qdrant: {}, caddy_data: {} }
 | DASHSCOPE_EMBEDDING_BASE_URL | api / worker | 代码内置官方地址常量 | 只允许 https 与白名单主机 | 否 | packages/rag/src/config.ts:65 |
 | DASHSCOPE_EMBEDDING_MODEL | api / worker | `DASHSCOPE_DEFAULT_MODEL` | embedding 模型 | 否 | packages/rag/src/config.ts:69 |
 | DASHSCOPE_EMBEDDING_DIM | api / worker | 模型能力表 defaultDim | 向量维度,按能力表校验 | 否 | packages/rag/src/config.ts:71;packages/rag/src/models.ts |
-| DASHSCOPE_EMBEDDING_TPM | worker | 模型能力表 defaultTpm(≥1000) | 进程内令牌桶 | 否 | packages/rag/src/config.ts:72 |
+| DASHSCOPE_EMBEDDING_TPM | api / worker | 模型能力表 defaultTpm(≥1000) | 本进程令牌桶的每分钟 token 上限(api 查询向量与 worker 索引各自一个桶),**不是百炼账号限额**;能力表默认值是本地取值(qwen3.7-text-embedding 与 -flash 为文档值 1,000,000 留 20% 余量的 800,000;text-embedding-v3 沿用 1,000,000,未验证) | 否 | packages/rag/src/config.ts:72;packages/rag/src/models.ts:22–23、37、45、55;packages/rag/src/dashscope.ts:127 |
 | EMBEDDING_TASK_BUDGET_CENTS | worker | 50 | 单任务 embedding 预算;0 = 不调外部 embedding | 否 | packages/rag/src/config.ts:73 |
 | QDRANT_URL | api / worker | 无 | 向量库地址;未设置 = 无向量库,检索 keyword-only | 否(要混合检索则必填) | packages/rag/src/config.ts:77 |
 | QDRANT_API_KEY | api / worker | 无 | 向量库密钥 | 否 | packages/rag/src/config.ts:78 |
@@ -263,16 +266,20 @@ volumes: { repos: {}, mysql: {}, qdrant: {}, caddy_data: {} }
 不由 api/worker 进程读取:`EMBEDDING_MODEL_DOWNLOAD`(worker 镜像构建参数,apps/worker/Dockerfile:15)、`MYSQL_ROOT_PASSWORD`(mysql 容器)、`NEXT_PUBLIC_AGG_EDGE_OPACITY`(web 构建期)。
 
 ### 4.2 运行时口径(只写 main 已有行为)
-- **api 与 worker 的 DASHSCOPE_* / EMBEDDING_* / QDRANT_* 必须一致**(建议同一个环境文件)。两边都调 `readEmbeddingConfig`,collection 名按 provider/模型/维度派生(`qdrantCollectionFor`)。不一致时不报错,问答静默退化为只用关键词。检查:api 启动日志 `llm config loaded` 的 `chatRetrieval`(`hybrid` / `keyword-only`,apps/api/src/index.ts:104–111);注意它只说明 api 是否构造了向量库,两边模型/维度不一致时仍可能是 `hybrid`,要再看问答 `done.retrieval` 是否为 `keyword-only`。
+- **api 与 worker 的 DASHSCOPE_* / EMBEDDING_* / QDRANT_* 必须一致**(建议同一个环境文件)。两边都调 `readEmbeddingConfig`,collection 名按 provider/模型/维度派生(`qdrantCollectionFor`)。不一致时不报错,问答静默退化为只用关键词。排查入口:
+  1. api 启动日志 `llm config loaded` 的 `chatRetrieval`(apps/api/src/index.ts:104–111)只看 api 是否建出了向量库,**provider/模型/维度不一致时仍可能显示 `hybrid`**。
+  2. 每次问答时,api 把该 commit 的 done 任务 stats 里记录的索引 provider / model / dim(建索引时 worker 写入,不从环境变量推断)与 api 当前的查询 embedder 比对(packages/rag/src/retrieval.ts:202–215 `embeddingMismatch`,调用在 :233–238;apps/api/src/chat/route.ts:320–323)。不一致则 `done.retrieval='keyword-only'`,`degradedReason` 依次判 `provider-mismatch` → `model-mismatch` → `dim-mismatch`。旧任务缺 model/dim 时:dashscope 视为不一致(记 model-/dim-mismatch),local 视为一致。
+  3. `degradedReason` 不在 `done` 事件里,只在 api 日志 `chat retrieval degraded`(info 级,带 repoId、sessionId、degradedReason,apps/api/src/chat/route.ts:327–331)。同一日志也覆盖其它降级原因:`status:<embeddingStatus>`、`no-vector-store`、`vector-error`(retrieval.ts:228–247)。
+  4. 以上只来自代码和单元测试;**部署后用真实 key 验证再回填**。
 - **问答限流的 Redis 故障返回 500 `INTERNAL`**:`rl:chat` 计数(INCR + EXPIRE)出错不降级放行,走全局错误处理(apps/api/src/chat/route.ts:138;apps/api/src/app.ts:79–88)。
 - **429 `RATE_LIMITED` 的 details**:超小时次数为 `{ reason: 'rate_limit', retryAfterSec }`(到下个整点的秒数);并发满为 `{ reason: 'concurrency' }`,不带 retryAfterSec,并回退刚扣的计数,回退失败只打 warn(apps/api/src/chat/route.ts:138–150)。限流键的 IPv6 /64 归并见 §8。
 - **persistAssistant 不在超时竞态内**:`CHAT_STREAM_TIMEOUT_MS` 只中止上游生成;流结束后写 assistant 消息是普通 await,写库期间到时不会打断写库(apps/api/src/chat/route.ts:207–209、265–285、406)。可接受,已知。
-- **估算计费**:流式调用拿不到 usage 时网关按估算记账(`ok=1`),同时打一条含 `estimated` 的 warn;`llm_usage` 表没有 estimated 列,事后只能靠日志区分估算与真实用量(packages/agent/src/llm/gateway.ts:194–195、263)。
+- **估算计费**:流式调用拿不到 usage 时网关按估算记账(`ok=1`),同时打一条含 `estimated` 的 warn;`llm_usage` 表没有 estimated 列,事后只能靠日志区分估算与真实用量(packages/agent/src/llm/gateway.ts:195–196、250–259)。
 - **真实服务未跑过**:以上全部来自代码与本地 / CI 单元测试(fake provider、fake embedder);真实 DeepSeek 与真实 DashScope 从未调用过,超时、限流、估算在真实服务下的表现均**未验证**。
 
 ## 5. 延迟与降级(价格与延迟均未验证)
 - 香港机访问北京站百炼接口有跨境链路,延迟**未验证**。
-- 查询路径:query 向量化 5 s 超时、重试 1 次;Retry-After > 2 s 直接失败;失败或 provider/模型/维度不匹配 → 只用关键词检索(`done.retrieval='keyword-only'`,P4 接路由后才会真正设置)。最坏约 11 s(Retry-After ≤ 2 s 时 ≤ 12 s)。
+- 查询路径:query 向量化 5 s 超时、重试 1 次;Retry-After > 2 s 直接失败;失败或 provider/模型/维度不匹配 → 只用关键词检索(问答路由已接入:`done.retrieval='keyword-only'`,原因见 api 日志 `chat retrieval degraded` 的 `degradedReason`,§4.2)。最坏约 11 s(Retry-After ≤ 2 s 时 ≤ 12 s)。
 - 索引路径:15 s 超时、3 次重试,Retry-After 封顶 10 s。
 - 是否改用 `dashscope-intl.aliyuncs.com`:仅作待实测选项,不下结论(intl 需对应地域 key,是否可用未验证)。
 - 待实测(在演示机上执行,结果只写进演示脚本):
