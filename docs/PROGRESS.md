@@ -217,6 +217,8 @@
 
 - 2026-10-30:合并 #130(eba524f)与 #131(02d13a9)。#130 gateway E:`redactSecrets` 抽到 `llm/redact.ts`(每次 `new RegExp`),deepseek/gateway 共用并去掉 sticky `SK_PATTERN`;llm.test 误命名「补行 warn」改为「缓存写失败 warn」,补 zero-cost insert 含 sk- 脱敏与 errMsg 边界(短 sk-/多 key/空串);不脱敏 `LlmError.cause`(上层只读 `cause.name`)。#131 worker C:`buildJobDeps` 抽出装配、index 连库后调用;去掉脆的源码 grep 测;CachedEmbedder 同文本二次不增 fetch;DEPLOY 旧「无 key 退回 baseEmbedder」结论已清。架构师与独立审查均无阻塞。非阻塞后续:BACKEND_AI_DESIGN 仍写旧 `SK_PATTERN` 路径;index 接线仍无行为级测;onGraphPersisted 逐 key del(键量通常不大)。CI/smoke 均绿。开源 PR 队列暂空。
 
+- 2026-10-30:合并 #132(8f59441,T-239 展开/收起保持视图)与 #133(a2d3821,P0)。起因:演示机上不带 SHA 的提交报「仓库不存在」,根因是 api 镜像(node:20-alpine)没有 git,`git ls-remote` 失败被吞成 404(只有 40 位 SHA 不跑 git,所以之前验证没暴露);演示机已手动给 api 装 git 临时修复。#132:布局 effect 不再无条件 fitView,用户点击前记锚点(被点节点屏幕坐标+zoom),布局后 setViewport 保持缩放与锚点位置;后续小 PR:toggle catch 清锚点、状态无变化不留锚点、setViewport 加 duration。#133:新增 `detect.ts` 语言判定(有 tsconfig*.json 时 TS/JS 占比≥20%,无 tsconfig ≥50%;.vue/.svelte 不计入分母),去掉 projection 写死的 language,worker 在 graph_ready 前写 `repos.lang_main`(NULL/空串回退 typescript 并 warn,枚举外仍 500),api Dockerfile 装 git,githost 区分 git 缺失/超时/输出过大→503 GIT_UNAVAILABLE 与真不存在→404,smoke 加不带 ref 提交,文案改「目前仅支持 TypeScript/JavaScript 仓库」。架构师与独立审查均无阻塞(首轮审查的 Vue 误判阻塞已修)。非阻塞后续:ls-remote 网络失败(128)区分、占比口径统一、同步遍历提前退出、图缓存 key 带语言、Vue 单文件组件未解析需在 UI 提示。部署后需跑 `SELECT id FROM repos WHERE lang_main IS NULL`,并重新部署 main 后删除演示机 override 里的 api image 行。
+
 ## 演示检查清单(第 4 周前逐项勾选)
 - [ ] 演示前抽查 hono 的 `embeddingStatus` 为 `ready`(或 `reused`)。
 - [ ] 「镜像构建下载模型」:CI 已验证(GitHub 环境直连 huggingface.co,手动 workflow `worker-model-build.yml` run 40838998679,5 个文件 `sha256sum -c` 全 OK,镜像内 ONNX embedding 维度 384,构建约 58 秒);**演示机(国内网络)上的构建仍待验证**:演示前先在演示机构建好镜像,下载慢时设 `EMBEDDING_MODEL_BASE_URL` 为镜像站(哈希校验不变)。
