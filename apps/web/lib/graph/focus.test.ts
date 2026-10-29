@@ -30,3 +30,25 @@ describe('nextFocusStep(suggestedFocus 逐层下探)', () => {
     expect(nextFocusStep(l2, new Set(['m:.']), 'f:a.ts')).toBeNull();
   });
 });
+
+describe('nextFocusStep:已加载但祖先被折叠(T-224,沿 parentId 链)', () => {
+  const nodes = [
+    n('m:.', 'module', null),
+    n('d:src', 'dir', 'm:.'),
+    n('d:src/a', 'dir', 'd:src'),
+    n('f:src/a/x.ts', 'file', 'd:src/a'),
+  ];
+  it('focus 已加载、祖先都折叠:从最外层开始逐层展开', () => {
+    expect(nextFocusStep(nodes, new Set(), 'd:src/a')).toBe('m:.');
+    expect(nextFocusStep(nodes, new Set(['m:.']), 'd:src/a')).toBe('d:src');
+    expect(nextFocusStep(nodes, new Set(['m:.', 'd:src']), 'd:src/a')).toBe('d:src/a');
+    expect(nextFocusStep(nodes, new Set(['m:.', 'd:src', 'd:src/a']), 'd:src/a')).toBeNull();
+  });
+  it('focus 自己仍展开着但祖先被折叠:先展开祖先', () => {
+    expect(nextFocusStep(nodes, new Set(['d:src', 'd:src/a']), 'd:src/a')).toBe('m:.');
+  });
+  it('focus 未加载:覆盖它的最深容器若祖先被折叠,同样先展开祖先', () => {
+    expect(nextFocusStep(nodes, new Set(), 'd:src/a/deep')).toBe('m:.');
+    expect(nextFocusStep(nodes, new Set(['m:.', 'd:src']), 'd:src/a/deep')).toBe('d:src/a');
+  });
+});
