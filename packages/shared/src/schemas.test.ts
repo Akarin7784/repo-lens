@@ -369,7 +369,12 @@ describe('API DTO', () => {
         true,
       );
     expect(NodeDetailSchema.safeParse({ ...d, summarySource: 'other' }).success).toBe(false);
-    expect(NodeDetailSchema.safeParse({ ...d, inCycle: undefined }).success).toBe(false);
+    // 只增不减:旧响应缺两个新字段仍能解析,按 null/false 补齐
+    const old: Record<string, unknown> = { ...d };
+    delete old.summarySource;
+    delete old.inCycle;
+    expect(NodeDetailSchema.parse(old)).toMatchObject({ summarySource: null, inCycle: false });
+    expect(NodeDetailSchema.safeParse({ ...d, inCycle: 'yes' }).success).toBe(false);
   });
 });
 
