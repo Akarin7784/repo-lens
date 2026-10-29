@@ -1,8 +1,6 @@
 # repo-lens 演示机部署方案(DEPLOY)
 
-> **草案,标「未验证」的都不是结论。** 基于 main `6c0367c`;代码核对在 `1381ce8` 上做,`1381ce8..6c0367c` 只改了评测脚本、rag 评测与 worker 测试及文档,本文引用的 api/worker/compose 文件未变。
-
-> 基于 main `1381ce8` 的仓库现状。标「未验证」「待实测」的都不是结论。本文只出方案,不改代码;落地代码另开小 PR。
+> **草案,标「未验证」「待实测」的都不是结论。** 基于 main `6c0367c`;代码核对在 `1381ce8` 上做,`1381ce8..6c0367c` 未改本文引用的文件(只改了评测脚本、rag 评测、worker 测试与文档)。本文只出方案,不改代码;落地代码另开小 PR。
 
 ## 0. 待 Eva 确认的前置项(集中)
 | # | 问题 | 现状 / 默认 |
@@ -130,10 +128,9 @@ volumes: { repos: {}, mysql: {}, qdrant: {}, caddy_data: {} }
   auto_https off
 }
 :80 {
-  @sse path /api/jobs/*/events /api/repos/*/chat
   @nosse not path /api/jobs/*/events /api/repos/*/chat
   encode @nosse gzip zstd          # 只压缩非 SSE 路径
-  handle /api/* { reverse_proxy api:4000 { flush_interval -1 header_up X-Forwarded-For {remote_host} } }
+  handle /api/* { reverse_proxy api:4000 { flush_interval -1 header_up X-Forwarded-For {remote_host} } }  # 未验证:Caddy 默认丢弃不受信客户端的 XFF 并重写,这行可能多余,留着不影响;以第 61 次返回 429 的实测为准
   handle { reverse_proxy web:3000 }
 }
 ```
@@ -250,11 +247,13 @@ curl -so /dev/null -w "size=%{size_download} t=%{time_total}\n" -H 'Accept-Encod
 - [ ] 镜像 TAG 已推送并可拉取
 
 **部署后冒烟**
+
+- [ ] `curl -sI http://<服务器IP>/` 返回 200,不是 301 或 308 跳转(证明 `auto_https off` 生效、没被强制跳到 443)。
 - [ ] 在演示机上跑一遍迁移(空库 0000–0003),api/worker 健康
 - [ ] `docker compose ps` 全 healthy;`ss -tlnp` 只见 80/22;Caddy 日志无证书申请;云安全组入站只有 22(限来源 IP)与 80
 - [ ] 提交 zustand,用 `http://<服务器IP>` 实测进度流(`/api/jobs/:id/events`)逐条到达,不是结束时一次性到达:`curl -N http://<服务器IP>/api/jobs/<id>/events`
 - [ ] P4 合并后:对着真实聊天路由再核对一遍 Caddy 配置(路径匹配、flush、不压缩),再实测问答流逐字输出
-- [ ] 伪造 X-Forwarded-For 实测(用「提交」限流,不建任何任务)。
+- [ ] 伪造 X-Forwarded-For 实测(用「提交」限流,不建任何任务)。**必须从演示机外面的电脑发,不要在服务器本机发**:本机请求在 Caddy 眼里是 Docker 网桥地址,清理限流键会找错。
   - 代码口径(main 1381ce8,`apps/api/src/app.ts` 92–160、`packages/db/src/redis-keys.ts`):
     - 提交限流 `rl:sub:<ip>:<小时桶>`,阈值 `RATE_LIMIT_SUBMITS_PER_HOUR`(默认 60),在解析请求体**之前**计数,所有 `POST /api/repos` 都算(含 400、复用、出错);第 61 次起 429 `RATE_LIMITED`。
     - 新任务限流 `rl:ip:<ip>:<小时桶>`,阈值 `RATE_LIMIT_NEW_REPOS_PER_HOUR`(默认 5),只计真正入队的新任务或 failed 重试;同仓库同 commit 已有未失败任务时复用、不计数,所以对同一仓库重复提交不会触发它。
