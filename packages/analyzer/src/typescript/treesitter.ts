@@ -11,6 +11,7 @@ import type {
 } from '../types.js';
 import { extOf } from './lang.js';
 import { IMPORT_QUERY, SYMBOL_QUERY } from './queries.js';
+import { recoverChunks, splitClass } from './chunking.js';
 
 type SyntaxNode = ParserT.SyntaxNode;
 // 原生绑定是 CJS,在 ESM 包里用 createRequire 加载;加载失败统一包装成 PARSER_UNAVAILABLE
@@ -164,6 +165,7 @@ export function parseWithTreeSitter(file: SourceFile, opts: ParseOptions = {}): 
   }
 
   const symbols: ParsedSymbol[] = [];
+  const classNodes = new Map<ParsedSymbol, SyntaxNode>();
   for (const m of grammar.symbols.matches(root)) {
     const name = m.captures.find((c) => c.name === 'name')?.node;
     const decl = m.captures.find((c) => c.name !== 'name');
@@ -189,20 +191,28 @@ export function parseWithTreeSitter(file: SourceFile, opts: ParseOptions = {}): 
       (value.type === 'arrow_function' || value.type === 'function_expression')
         ? 'function'
         : (decl.name as SymbolKind);
-    symbols.push({
+    const sym: ParsedSymbol = {
       name: name.text,
       kind,
       startLine: node.startPosition.row + 1,
       endLine: node.endPosition.row + 1,
       exported: isExported(node),
-    });
+    };
+    symbols.push(sym);
+    if (kind === 'class') classNodes.set(sym, node);
   }
 
   const loc = file.content.length === 0 ? 0 : file.content.split('\n').length;
-  // 切块:顶层声明(方法归属其类,不单独成块);没有声明时整文件一块
-  const chunks: CodeChunk[] = symbols
+  // 切块(版本见 @repolens/shared CHUNKER_VERSION):顶层声明一块;大类按方法拆块(chunking.ts);
+  // 语法树出错时按顶层声明起始行兜底;没有声明时整文件一块
+  let chunks: CodeChunk[] = symbols
     .filter((s) => s.kind !== 'method')
-    .map((s) => ({ symbol: s.name, startLine: s.startLine, endLine: s.endLine }));
+    .flatMap((s) => {
+      const node = classNodes.get(s);
+      const split = node ? splitClass(node, s.name) : null;
+      return split ?? [{ symbol: s.name, startLine: s.startLine, endLine: s.endLine }];
+    });
+  if (root.hasError) chunks = recoverChunks(root, file.content, chunks);
   if (chunks.length === 0 && loc > 0) chunks.push({ symbol: null, startLine: 1, endLine: loc });
 
   return {
