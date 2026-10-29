@@ -10,3 +10,4 @@ export * from './vector-store.js';
 export * from './indexer.js';
 export * from './lock.js';
 export * from './retrieval.js';
+export * from './eval-embedding.js';
