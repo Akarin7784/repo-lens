@@ -18,8 +18,11 @@ export interface LlmCall {
 }
 
 export interface LlmUsage {
+  /** 输入 token 总数(含 provider 上下文缓存命中的部分) */
   tokensIn: number;
   tokensOut: number;
+  /** 其中命中 provider 上下文缓存的输入 token(DeepSeek prompt_cache_hit_tokens);不提供则为 0 */
+  cachedTokensIn?: number;
 }
 
 /** 底层客户端返回;usage 取自响应的 usage 字段(真实 provider)或 FakeLlm 的估算 */
@@ -28,7 +31,7 @@ export interface LlmCallResult {
   usage: LlmUsage;
 }
 
-/** 底层模型客户端:真实 OpenAI 兼容实现待 D1,目前只有 FakeLlm */
+/** 底层模型客户端:FakeLlm(默认)与 DeepSeekClient(OpenAI 兼容) */
 export interface LlmClient {
   readonly provider: string;
   call(req: LlmCall): Promise<LlmCallResult>;
