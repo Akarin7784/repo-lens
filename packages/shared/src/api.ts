@@ -67,13 +67,20 @@ export const ApiErrorSchema = z.object({
       details: z
         .object({
           reason: z.enum([...REPO_NOT_READY_REASONS, ...RATE_LIMITED_REASONS]).optional(),
-          retryAfterSec: z.number().int().positive().optional(),
+          /** 只能与 reason='rate_limit' 同现;正整数秒,≤3600(小时桶) */
+          retryAfterSec: z.number().int().positive().max(3600).optional(),
         })
         .passthrough()
         .optional(),
     })
     .superRefine((e, ctx) => {
       const reason = e.details?.reason;
+      if (e.details?.retryAfterSec !== undefined && reason !== 'rate_limit')
+        ctx.addIssue({
+          code: 'custom',
+          path: ['details', 'retryAfterSec'],
+          message: "retryAfterSec 只能与 reason='rate_limit' 同现",
+        });
       if (reason === undefined) return;
       const rl = (RATE_LIMITED_REASONS as readonly string[]).includes(reason);
       if (rl !== (e.code === 'RATE_LIMITED'))
@@ -81,12 +88,6 @@ export const ApiErrorSchema = z.object({
           code: 'custom',
           path: ['details', 'reason'],
           message: `reason ${reason} 与 code ${e.code} 不匹配`,
-        });
-      if (reason === 'concurrency' && e.details?.retryAfterSec !== undefined)
-        ctx.addIssue({
-          code: 'custom',
-          path: ['details', 'retryAfterSec'],
-          message: 'concurrency 不带 retryAfterSec',
         });
     }),
 });
