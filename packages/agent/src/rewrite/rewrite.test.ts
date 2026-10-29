@@ -119,8 +119,8 @@ describe('查询改写 rewriteQuery(T-214)', () => {
       expect(REWRITE_SYSTEM.toLowerCase()).not.toContain(w);
   });
 
-  it('提示词不引导输出文件名:规则禁止,示例答案不含文件名;版本为 rw-2', () => {
-    expect(REWRITE_PROMPT_VERSION).toBe('rw-2');
+  it('提示词不引导输出文件名:规则禁止,示例答案不含文件名;版本为 rw-3', () => {
+    expect(REWRITE_PROMPT_VERSION).toBe('rw-3');
     expect(REWRITE_SYSTEM).toMatch(/Never output file names/);
     for (const l of REWRITE_SYSTEM.split('\n').filter((x) => x.startsWith('Q:')))
       expect(l.split(' A: ')[1]).not.toMatch(/\.[cm]?[jt]sx?\b|\//);
@@ -172,5 +172,28 @@ describe('查询改写 rewriteQuery(T-214)', () => {
     };
     await rewriteQuery('队列在哪?', { gateway: gw(new StubLlm(() => '')), model: 'm', cache });
     expect(store.size).toBe(0);
+  });
+
+  it('rw-3 提示词不含评测相关的具体词,缓存键带 rw-3', () => {
+    const banned = [
+      'router',
+      'route',
+      'jwt',
+      'cors',
+      'cookie',
+      'stream',
+      'static',
+      'gzip',
+      'compress',
+      'validat',
+      'middleware',
+      'param',
+      'json',
+      'token',
+      'auth',
+    ];
+    const lower = REWRITE_SYSTEM.toLowerCase();
+    for (const w of banned) expect(lower).not.toContain(w);
+    expect(rewriteCacheKey('q', 'm')).toMatch(/^rewrite:rw-3:m:/);
   });
 });

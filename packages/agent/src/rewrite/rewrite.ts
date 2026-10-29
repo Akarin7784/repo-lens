@@ -8,14 +8,14 @@ import { createHash } from 'node:crypto';
 import type { LlmGateway } from '../llm/gateway.js';
 import { LlmError } from '../llm/types.js';
 
-/** 提示词或后处理改动必须递增;它是改写缓存 key 的一部分。rw-2:不输出文件名 */
-export const REWRITE_PROMPT_VERSION = 'rw-2';
+/** 提示词或后处理改动必须递增;它是改写缓存 key 的一部分。rw-2:不输出文件名;rw-3:保留类别词及其标识符形态 */
+export const REWRITE_PROMPT_VERSION = 'rw-3';
 
 /** 改写固定温度 0:同一问题、同一提示词版本的结果可复现 */
 export const REWRITE_TEMPERATURE = 0;
 
 /**
- * 改写提示词。示例刻意选与被测仓库无关的通用主题(数据库连接池、命令行参数),
+ * 改写提示词。示例刻意选与被测仓库无关的通用主题(购物车、日志),
  * 不得出现验收留出集(docs/RAG_HOLDOUT.md)的题目原话或中文关键词组合。
  */
 export const REWRITE_SYSTEM = [
@@ -24,11 +24,12 @@ export const REWRITE_SYSTEM = [
   '- Output one line only: English keywords, no explanation, no quotes.',
   '- Keep identifiers and English words from the question unchanged.',
   '- Add likely code identifiers (camelCase function or class names) and concept words a codebase would use.',
+  '- Keep the general category word of the topic and its identifier forms: noun, plural, agent noun ending in -er/-or, PascalCase class name (e.g. log, logs, logger, Logger).',
   '- Never output file names, paths or file extensions (no .ts, .js, no slashes).',
   '- At most 16 words.',
   'Examples:',
-  'Q: 连接池的创建代码? A: database connection pool create createPool acquire release',
-  'Q: 命令行参数的解析逻辑? A: parse command line arguments argv parseArgs cli options',
+  'Q: 购物车总价的计算逻辑? A: shopping cart carts Cart CartItem total price calculateTotal subtotal',
+  'Q: 日志写出的代码? A: logging log logs logger Logger writeLog level appender',
 ].join('\n');
 
 export interface RewriteLog {
