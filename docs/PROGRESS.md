@@ -180,6 +180,8 @@
 - 2026-10-29:合并 #98(50e7ec3,P4-a):`GET /api/repos/:id` 同源透出可选 `embeddingProvider`(local|dashscope,来自 worker 已写入的 `stats.embeddingProvider`,非法值与旧任务省略);shared schema 只增不改;ARCHITECTURE 同步。已核对:diff 六个文件,worker 确已写该字段,CI 与 smoke 绿,作者报 3 个变异被抓住(我未独立复跑)。未验证:API 集成测试我未在本机复跑;接口只透出 provider,不含 model/dim(P4 检索仍需比较 stats 中的 embeddingModel/embeddingDim);`done.messageId` 仍为必填,待前端先改可选。
 - 2026-10-29:合并 #100(964557c):修复评测脚本三处 `hybridSearch` 未传索引来源的问题(`evalIndexedSource`);该 bug 自 #92 起存在,只影响 dashscope 评测(会把整轮判成 provider-mismatch、全部降级为 keyword-only),local 不受影响,调优轮尚未开跑故无作废结果。已核对:diff 三个文件,CI 与 smoke 绿,作者报串行全量测试通过与 3 个变异被抓住(我未独立复跑)。未验证:未用真实百炼跑过评测;`hybridSearch` 目前尚不读 `indexedModel`/`indexedDim`,model/dim 比较待 P4-b。
 - 2026-10-29:合并 #99(ee58785,前端):`answer.ts` 的 `done.messageId` 改为可选,为后端放宽 shared 做前置。已核对:diff 仅 answer.ts 与一条类型层测试,web 内无读取 messageId 处,CI 与 smoke 绿。未验证:shared 仍要求该字段,无运行时用例,未测端到端。下一步:后端单独开 PR 放宽 shared。
+- 2026-10-29:合并 #102(e354a6c):shared 的 `done.messageId` 改为可选(写 assistant 消息失败时不带),ARCHITECTURE/BACKEND_AI_DESIGN 同步;前端 #99 已按可选处理。已核对:diff 四个文件,CI 与 smoke 绿。未验证:API 尚未发 chat done 事件,无端到端覆盖。
+- 2026-10-29:合并 #101(0b875ea,P4-b):检索比较索引与查询的 embedding provider/model/dim(`embeddingMismatch`);TaskStats 声明 embeddingModel/embeddingDim。已核对:worker 写的是不带前缀的 model,比较时去掉 `dashscope:` 前缀;旧 dashscope 任务缺字段会 keyword-only(需重索引);local 缺字段仍视为一致。CI 与 smoke 绿。未验证:未用真实百炼跑过;作者报突变与串行全量通过(我未独立复跑)。
 
 ## 演示检查清单(第 4 周前逐项勾选)
 - [ ] 演示前抽查 hono 的 `embeddingStatus` 为 `ready`(或 `reused`)。
