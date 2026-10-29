@@ -1,5 +1,6 @@
 'use client';
 import { useState } from 'react';
+import { THIRD_PARTY_DISCLOSURE } from '../../lib/privacy/disclosure';
 import type { ApiClient } from '../../lib/api/client';
 import { useSubmitRepo } from './useSubmitRepo';
 
@@ -20,7 +21,7 @@ export function RepoUrlInput({ api }: { api?: ApiClient }) {
       <div className="flex items-center gap-2 rounded-hero border border-line bg-panel p-2 shadow-soft transition-shadow duration-200 ease-out focus-within:border-accent focus-within:shadow-pop">
         <input
           aria-label="GitHub 仓库地址"
-          aria-describedby="repo-url-notice"
+          aria-describedby="repo-url-notice third-party-disclosure"
           className="min-w-0 flex-1 bg-transparent px-3 py-2 font-mono text-[14px] text-fg outline-none placeholder:text-muted"
           placeholder="https://github.com/owner/repo"
           value={value}
@@ -38,7 +39,14 @@ export function RepoUrlInput({ api }: { api?: ApiClient }) {
         </button>
       </div>
       <p id="repo-url-notice" className="mt-2 px-1 text-[12px] text-muted">
-        只支持公开仓库。源码内容会发送给第三方模型服务。
+        只支持公开仓库。
+      </p>
+      <p
+        id="third-party-disclosure"
+        data-testid="third-party-disclosure"
+        className="mt-1 px-1 text-[12px] leading-5 text-muted"
+      >
+        {THIRD_PARTY_DISCLOSURE}
       </p>
       <p role="status" className="mt-1 min-h-5 text-[13px] text-muted">
         {hint}
