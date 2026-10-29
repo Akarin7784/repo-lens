@@ -249,6 +249,16 @@ CREATE TABLE llm_usage (
 | 预算 | `budget:day:{yyyyMMdd}`、`budget:repo:{repoId}` | INCRBY(微美元) |
 | 熔断状态 | `cb:llm:{provider}` | Hash {state, failCount, openedAt} |
 
+### 2.2b 外部 embedding 提供方(T-214c,`EMBEDDING_PROVIDER`)
+- 默认 `local`,现有 fake/onnx 路径、e5 前缀与 digest 不变;`dashscope` 用 `packages/rag/src/dashscope.ts` 的 `DashscopeEmbedder`:不加 e5 前缀,不传 `text_type`/`instruct`(兼容模式下实测 `text_type` 无效果、`instruct` 会改变 v3 向量)。
+- 批量:官方 v3 单次 ≤10 条(实测 11 条 400),`batchSize = min(EMBEDDING_BATCH_SIZE, 10)`,超出直接拒绝。
+- 单条字符上限 `DASHSCOPE_MAX_INPUT_CHARS = 6000`:官方单条 ≤8192 token,代码/中文最坏约 1 字符 1 token,留余量;切块上限 4000 字符不受影响;超出截断并计数(`truncated`),避免一条超长文本使整批 400。8192 token 边界未实测。
+- 超时与重试:索引单次 15 秒、最多重试 3 次;查询(问答 `embedQuery`)单次 5 秒、最多重试 1 次,失败由检索降级 `keyword-only`。429/5xx/超时/网络错误按指数退避(1s、2s、4s + 抖动)重试;400/401/403 不重试。
+- 限流:进程内 TPM 令牌桶(`DASHSCOPE_EMBEDDING_TPM`),只对单 worker 有效;多 worker 靠 429 退避兜底,演示只开一个 worker。
+- 错误:`EmbeddingError{kind, status}`,message 只含分类与 HTTP 状态码,**不含第三方原始响应体**(防止回显密钥片段),不挂 `cause`;stats 与日志同样只记分类/状态码/token 数。
+- 预算:`EMBEDDING_TASK_BUDGET_CENTS`(默认 50 美分)独立于摘要的 `LLM_TASK_BUDGET_CENTS=30`。依据:2991 块 × ≤4000 字符上限约 4M token ≈ 2 元 ≈ 30 美分(0.0005 元/千 token,汇率 6.67),`MAX_FILES=5000` 按比例约 50 美分。超限时 `embeddingStatus=skipped`,stats 写原因,不静默(worker 接线在后续 PR)。
+- 隐私:查询改写与查询向量化发送的是用户自己输入的问题,不经 `exclusionRule` 过滤;前端需提示「你输入的问题也会发送给阿里云百炼和大模型服务」。
+
 ### 2.3 向量库（结论：**Qdrant**）
 
 | 方案 | 优点 | 缺点 | 结论 |

@@ -1,6 +1,7 @@
 // T-214:embedding(本地 e5,D4)、切块、向量库(Qdrant)、混合检索(RRF)。查询改写在 @repolens/agent。
 export * from './config.js';
 export * from './embedder.js';
+export * from './dashscope.js';
 export * from './cache.js';
 export * from './chunks.js';
 export * from './vector-store.js';
