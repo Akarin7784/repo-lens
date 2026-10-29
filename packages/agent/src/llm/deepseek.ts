@@ -1,4 +1,5 @@
 import { estimateUsage } from './estimate.js';
+import { redactSecrets } from './redact.js';
 import type { LlmCall, LlmCallResult, LlmClient, LlmStreamEvent, LlmUsage } from './types.js';
 
 export const DEEPSEEK_DEFAULT_BASE_URL = 'https://api.deepseek.com';
@@ -26,9 +27,6 @@ export class LlmStreamError extends Error {
 }
 
 /** 首包 / 相邻 chunk 空闲超时默认值 */
-/** 通用 OpenAI 风格 key 形态,含部分打码回显(`sk-ab****xyz`) */
-export const SK_PATTERN = /(?<![A-Za-z0-9])sk-[A-Za-z0-9*._-]{4,}/gi;
-
 export const DEEPSEEK_STREAM_IDLE_DEFAULT_MS = 20_000;
 const TOTAL_DEFAULT_MS = 60_000;
 
@@ -122,7 +120,7 @@ export class DeepSeekClient implements LlmClient {
    * 除本 key 原文外,通用 `sk-…` 形态(含部分打码的回显如 `sk-ab****xyz`)也一律替换成 `***`。
    */
   private redact(msg: string) {
-    return msg.split(this.#apiKey).join('***').replace(SK_PATTERN, '***').slice(0, 200);
+    return redactSecrets(msg.split(this.#apiKey).join('***')).slice(0, 200);
   }
 
   private httpError(status: number, raw: string) {
