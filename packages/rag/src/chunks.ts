@@ -27,6 +27,12 @@ export interface CodeChunkRecord {
 /** 单块文本上限(字符),防止超长声明撑大内存;e5 本身也只看前 512 token */
 export const MAX_CHUNK_CHARS = 4000;
 
+/**
+ * 送 embedding 的文本模板版本:`${path} ${symbol}\n${code}` 截断到 MAX_CHUNK_CHARS,再由 Embedder
+ * 加 E5 前缀(passage: / query: )。模板、截断长度或前缀任一改动都必须递增;它进 embedding digest。
+ */
+export const EMBED_TEXT_VERSION = 1;
+
 export interface ChunkResult {
   chunks: CodeChunkRecord[];
   /** 被排除的文件及规则 id(sensitive / too-large / binary 等),只记规则不记内容 */

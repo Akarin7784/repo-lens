@@ -39,12 +39,12 @@ const gateway = new LlmGateway({
 const emb = config.embedding;
 const baseEmbedder: Embedder =
   emb.provider === 'onnx'
-    ? new OnnxEmbedder(emb.model, emb.modelDir, undefined, emb.threads)
+    ? new OnnxEmbedder(emb.model, emb.modelDir, undefined, emb.threads, emb.revision)
     : new FakeEmbedder();
 const embedder = new CachedEmbedder(baseEmbedder, redis);
 const vectorStore = emb.qdrant ? new QdrantVectorStore(emb.qdrant) : undefined;
 console.log(
-  `[worker] embedder=${emb.provider} model=${emb.model} batch=${emb.batchSize} qdrant=${emb.qdrant ? 'on' : 'off'}`,
+  `[worker] embedder=${emb.provider} model=${emb.model}@${emb.revision.slice(0, 7)} batch=${emb.batchSize} qdrant=${emb.qdrant ? 'on' : 'off'}`,
 );
 
 async function invalidateGraphCache(repoId: number, commitSha: string) {

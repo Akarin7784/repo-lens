@@ -4,11 +4,17 @@ import { DEFAULT_EMBED_LOCK_MAX_WAIT_SEC, DEFAULT_EMBED_LOCK_TTL_SEC } from './l
 /** D4:本地 multilingual-e5-small(fp32),384 维 */
 export const DEFAULT_EMBEDDING_MODEL = 'Xenova/multilingual-e5-small';
 export const EMBEDDING_DIM = 384;
+/** 与 apps/worker/Dockerfile 的 EMBEDDING_MODEL_REVISION 一致(镜像构建下载的权重版本) */
+export const DEFAULT_EMBEDDING_MODEL_REVISION = '761b726dd34fb83930e26aab4e9ac3899aa1fa78';
 
 const empty = (v: unknown) => (v === '' ? undefined : v);
 const Schema = z.object({
   EMBEDDER: z.preprocess(empty, z.enum(['fake', 'onnx']).default('fake')),
   EMBEDDING_MODEL: z.preprocess(empty, z.string().default(DEFAULT_EMBEDDING_MODEL)),
+  EMBEDDING_MODEL_REVISION: z.preprocess(
+    empty,
+    z.string().default(DEFAULT_EMBEDDING_MODEL_REVISION),
+  ),
   EMBEDDING_MODEL_DIR: z.preprocess(empty, z.string().default('/app/models')),
   EMBEDDING_BATCH_SIZE: z.preprocess(empty, z.coerce.number().int().min(1).max(256).default(16)),
   EMBEDDING_THREADS: z.preprocess(empty, z.coerce.number().int().min(1).max(64).optional()),
@@ -35,6 +41,8 @@ const Schema = z.object({
 export interface EmbeddingConfig {
   provider: 'fake' | 'onnx';
   model: string;
+  /** 模型权重 revision;进 embedding digest,换 revision 即重建向量 */
+  revision: string;
   modelDir: string;
   batchSize: number;
   /** 同 commit 向量化锁 TTL(秒),见 lock.ts 默认值理由 */
@@ -59,6 +67,7 @@ export function readEmbeddingConfig(env: NodeJS.ProcessEnv = process.env): Embed
     provider: e.EMBEDDER,
     // fake 下模型名只用于缓存 key,与真实模型区分
     model: e.EMBEDDER === 'fake' ? 'fake-384' : e.EMBEDDING_MODEL,
+    revision: e.EMBEDDER === 'fake' ? 'fake' : e.EMBEDDING_MODEL_REVISION,
     modelDir: e.EMBEDDING_MODEL_DIR,
     batchSize: e.EMBEDDING_BATCH_SIZE,
     lockTtlSec: e.EMBEDDING_LOCK_TTL_SEC,

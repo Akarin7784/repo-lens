@@ -20,7 +20,7 @@ export class MemoryEmbeddingKv implements EmbeddingKv {
 export const EMB_TTL_SEC = 30 * 24 * 3600;
 const sha = (s: string) => createHash('sha256').update(s).digest('hex');
 
-/** 缓存键带角色:同一文本作为查询和作为文档的向量不同 */
+/** 缓存键带角色:同一文本作为查询和作为文档的向量不同;model 段含 revision(有时为 model@revision) */
 export const embKey = (model: string, role: EmbedRole, text: string) =>
   `emb:${model}:${role}:${sha(text)}`;
 
@@ -39,11 +39,17 @@ export class CachedEmbedder implements Embedder {
   get model() {
     return this.inner.model;
   }
+  get revision() {
+    return this.inner.revision;
+  }
+  private get keyModel() {
+    return this.revision ? `${this.model}@${this.revision}` : this.model;
+  }
   get dim() {
     return this.inner.dim;
   }
   async embedQuery(text: string) {
-    const k = embKey(this.model, 'query', text);
+    const k = embKey(this.keyModel, 'query', text);
     const [hit] = await this.kv.mget([k]);
     if (hit) return dec(hit);
     const v = await this.inner.embedQuery(text);
@@ -52,7 +58,7 @@ export class CachedEmbedder implements Embedder {
   }
   async embedDocuments(texts: string[]) {
     if (!texts.length) return [];
-    const keys = texts.map((t) => embKey(this.model, 'passage', t));
+    const keys = texts.map((t) => embKey(this.keyModel, 'passage', t));
     const hits = await this.kv.mget(keys);
     const miss = texts.flatMap((t, i) => (hits[i] ? [] : [i]));
     const fresh = miss.length ? await this.inner.embedDocuments(miss.map((i) => texts[i]!)) : [];

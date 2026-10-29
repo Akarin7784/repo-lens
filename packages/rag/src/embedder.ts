@@ -8,6 +8,8 @@ export const E5_PREFIX: Record<EmbedRole, string> = { query: 'query: ', passage:
 
 export interface Embedder {
   readonly model: string;
+  /** 模型权重版本(如 HF revision);进 embedding digest 与缓存键,换版本即重建 */
+  readonly revision?: string;
   readonly dim: number;
   /** 单条查询,内部加 `query: ` 前缀 */
   embedQuery(text: string): Promise<number[]>;
@@ -28,7 +30,10 @@ export class FakeEmbedder implements Embedder {
   readonly dim = EMBEDDING_DIM;
   /** 实际被编码的文本条数(测试用来确认缓存命中) */
   encoded = 0;
-  constructor(readonly model = 'fake-384') {}
+  constructor(
+    readonly model = 'fake-384',
+    readonly revision = 'fake',
+  ) {}
   private vec(text: string): number[] {
     this.encoded++;
     const v = new Array<number>(this.dim).fill(0);
@@ -72,6 +77,7 @@ export class OnnxEmbedder implements Embedder {
     /** @internal 仅测试:替换模型加载,用来断言实际送进模型的文本;业务代码不要传 */
     loader?: () => Promise<Extractor>,
     private readonly threads?: number,
+    readonly revision?: string,
   ) {
     if (loader) this.ext = loader();
   }

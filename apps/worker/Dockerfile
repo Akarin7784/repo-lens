@@ -43,5 +43,8 @@ WORKDIR /app
 COPY --from=build /app /app
 COPY --from=model /models /app/models
 ENV EMBEDDING_MODEL_DIR=/app/models
+# 运行时带上模型 revision:进 embedding digest,换 revision 后旧向量不复用
+ARG EMBEDDING_MODEL_REVISION=761b726dd34fb83930e26aab4e9ac3899aa1fa78
+ENV EMBEDDING_MODEL_REVISION=$EMBEDDING_MODEL_REVISION
 WORKDIR /app/apps/worker
 CMD ["node", "dist/index.js"]

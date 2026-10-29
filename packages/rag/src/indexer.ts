@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { Embedder } from './embedder.js';
-import type { CodeChunkRecord } from './chunks.js';
+import { CHUNKER_VERSION } from '@repolens/shared';
+import { EMBED_TEXT_VERSION, type CodeChunkRecord } from './chunks.js';
 import { pointId, type VectorStore } from './vector-store.js';
 
 export interface IndexResult {
@@ -11,12 +12,35 @@ export interface IndexResult {
   digest: string;
 }
 
-/** 切块内容 hash 汇总:模型 + 每块(路径、行区间、符号、内容 hash),排序后整体 sha256 */
-export function chunksDigest(model: string, chunks: CodeChunkRecord[]): string {
+export interface EmbeddingVersions {
+  chunker: number;
+  embedText: number;
+}
+export const CURRENT_EMBEDDING_VERSIONS: EmbeddingVersions = {
+  chunker: CHUNKER_VERSION,
+  embedText: EMBED_TEXT_VERSION,
+};
+
+/**
+ * 向量化内容的 digest:模型名 + 模型 revision + 切块版本 + embedding 文本模板版本 + 每块
+ * (路径、行号、符号、文本 hash)。完成标记与跨任务复用都按它比较,四个版本因素任一变化都重建。
+ */
+export function chunksDigest(
+  embedder: string | Pick<Embedder, 'model' | 'revision'>,
+  chunks: CodeChunkRecord[],
+  versions: EmbeddingVersions = CURRENT_EMBEDDING_VERSIONS,
+): string {
+  const e = typeof embedder === 'string' ? { model: embedder, revision: undefined } : embedder;
+  const head = [
+    `model=${e.model}`,
+    `revision=${e.revision ?? ''}`,
+    `chunker=${versions.chunker}`,
+    `embedText=${versions.embedText}`,
+  ].join('\n');
   const lines = chunks
     .map((c) => `${c.path}\n${c.startLine}-${c.endLine}\n${c.symbol ?? ''}\n${c.contentHash}`)
     .sort();
-  return createHash('sha256').update(model).update('\n').update(lines.join('\n')).digest('hex');
+  return createHash('sha256').update(head).update('\n\n').update(lines.join('\n')).digest('hex');
 }
 
 /**
@@ -39,7 +63,7 @@ export async function indexChunks(
   beforeWrite?: () => Promise<void>,
 ): Promise<IndexResult> {
   const { repoId, commitSha, chunks, batchSize } = o;
-  const digest = chunksDigest(embedder.model, chunks);
+  const digest = chunksDigest(embedder, chunks);
   await store.ensureCollection();
   const have = await store.count(repoId, commitSha);
   if (have === chunks.length && have > 0 && o.prevDigest === digest)

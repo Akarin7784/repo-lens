@@ -3,7 +3,9 @@ import { Redis } from 'ioredis';
 import {
   EmbedLockLostError,
   EmbedLockWaitTimeoutError,
+  CURRENT_EMBEDDING_VERSIONS,
   FakeEmbedder,
+  chunksDigest,
   MemoryVectorStore,
   embedLockKey,
   indexChunks,
@@ -221,5 +223,35 @@ describe.skipIf(!hasRedis)('向量化锁 lock:embed:{repo}:{commit}(真实 Redis
     expect(await holder).toEqual({ ran: true, result: 'A' });
     expect(await waiter).toEqual({ ran: true, result: 'B' });
     expect(await redis.get(`${prefix}${key}:done`)).toBe('digest-B');
+  });
+
+  it('旧版本留下的 :done 标记不被误复用:切块/文本模板/模型 revision 不同的持有者完成后,等待者仍执行', async () => {
+    const emb = new FakeEmbedder();
+    const cur = CURRENT_EMBEDDING_VERSIONS;
+    const olds = [
+      chunksDigest(emb, chunks, { ...cur, chunker: cur.chunker - 1 }),
+      chunksDigest(emb, chunks, { ...cur, embedText: cur.embedText - 1 }),
+      chunksDigest(new FakeEmbedder('fake-384', 'old-rev'), chunks),
+    ];
+    const now = chunksDigest(emb, chunks);
+    for (const [i, old] of olds.entries()) {
+      const key = embedLockKey(3, `ver${i}`);
+      const holder = withEmbedLock(
+        redis,
+        key,
+        async () => {
+          await sleep(120);
+          return 'old';
+        },
+        { prefix, pollMs: 30, digest: old },
+      );
+      await sleep(20);
+      const run = vi.fn(async () => 'new');
+      const waiter = withEmbedLock(redis, key, run, { prefix, pollMs: 30, digest: now });
+      expect(await holder).toEqual({ ran: true, result: 'old' });
+      expect(await waiter).toEqual({ ran: true, result: 'new' });
+      expect(run).toHaveBeenCalledTimes(1);
+      expect(await redis.get(`${prefix}${key}:done`)).toBe(now);
+    }
   });
 });
