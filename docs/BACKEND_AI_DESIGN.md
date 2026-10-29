@@ -380,6 +380,7 @@ data: {"jobId":"12:a1b2c3d","status":"done","stats":{"files":412,"chunks":2900,"
 
 **切分**
 - 以 symbol 为单位（函数/方法/类）。超过 150 行的类按方法切开；不足 5 行的相邻小符号合并。
+- 已实现(T-214b,`CHUNKER_VERSION=2`):超过 `CLASS_SPLIT_MIN_LINES`=40 行的类按方法拆块(类头记为 `类名`,方法记为 `类名.方法名`);tree-sitter 对部分合法 TS(如换行分隔、以 `<` 开头的泛型调用签名)产生 ERROR 并吞掉后续顶层声明时,按第 0 列顶层声明起始行兜底补块。「不足 5 行合并」「60 行窗口」「summary chunk」尚未实现。切块规则任何改动都要递增 `CHUNKER_VERSION`,它进入 embeddingDigest。
 - 不在任何符号里的顶层代码（import、配置）按 60 行窗口切，相邻窗口重叠 10 行。
 - 每个 chunk 前面加一段头：`// path: src/db/index.ts  symbol: createPool  lines 10-48`，向量化时把这段头也带上。
 - 另外为每个 file 和 dir 摘要建 `chunk_type=summary` 的 chunk，用来回答「X 模块是干什么的」这类宏观问题。

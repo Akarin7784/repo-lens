@@ -112,3 +112,77 @@ S1 已作为待修 bug 并入调参集记录(见 RAG_TUNING_QUESTIONS.md 末节)
 结论倾向:**主要是排序/融合问题(C)**,不是 embedding 召回能力问题,暂不需要换外部 embedding。建议方向(另开 PR、用新题验证):本地调 RRF 各路权重与精确匹配路、改写提示词不带文件名、大类按方法切块。唯一的 B(H8)根因是 **analyzer 切块漏了文件后半部分的导出**(疑似遇到某个语法结构后停止产出切块,**未确认**具体原因),属于切块 bug,换 embedding 也解决不了,应单独修。
 
 本节所有数字只用于选方向;按约束不据此调参,不把留出题措辞写入任何提示词或示例。
+
+## T-214b 回归基线(2026-10-29,调参集 12 题 + S1)
+
+命令:`EMBEDDING_MODEL_DIR=… node scripts/rag-eval.mjs tuning` 与 `… s1`,对象 hono ed1d5f7,判定沿用原有规则(调参集按文件 `fileLevel`,英文判定未放宽)。只跑调参集与 S1,未跑任何留出集。
+
+| | 修复前 | 修复后 |
+|---|---|---|
+| CHUNKER_VERSION | 1 | 2 |
+| EMBED_TEXT_VERSION | (未引入,等价 1) | 1 |
+| 模型 | Xenova/multilingual-e5-small(revision 未入 digest) | Xenova/multilingual-e5-small@761b726dd34fb83930e26aab4e9ac3899aa1fa78 |
+| 改写提示词 | rw-1 | rw-2(temperature 0) |
+| 切块数 | 1434 | 1604 |
+| digest | — | 5aae128c2087 |
+| 中文 top5 / top1 | 6/6 / 4/6 | **5/6** / 4/6 |
+| 英文 top5 / top1 | 5/6 / 4/6 | 5/6 / 5/6 |
+| S1 top5 / top1 | 0/1 / 0/1 | 0/1 / 0/1 |
+| 费用(DeepSeek 改写) | 321 + 52 µUSD | 352 + 58 µUSD |
+
+**结论:未达标。** 英文没有退化(top1 4/6→5/6,英2 改为 top1 命中),英文 top1 6/6 未达到(英3 仍未命中,前 5 被各 adapter 的 `serveStatic` 占满)。中文 top5 6/6→5/6 **退化**:中3 掉出前 5;中5 top1 退为未命中(仍在前 5)。两题修复前命中都依赖改写里的文件名/`router` 一词(rw-1 输出 `router`、`jwt.ts`,精确匹配路随之命中),rw-2 不再输出文件名后失去这条信号——这是本 PR 有意去掉的行为,但结果是退化,如实记录,**未在本 PR 里为这两题另行调参**。S1 仍未命中(前 5 里有 `src/router/pattern-router/router.ts`,但不是判定要求的 smart/reg-exp router 文件)。改写文本为真实 LLM 单次输出,未做多次采样,稳定性只由缓存保证。
+
+逐题(改写文本与完整 top-5 路径):
+
+- **中1 前** hit5=1 top1=1 rw=`CORS middleware setup configure corsMiddleware cross-origin headers`
+  - top5: `src/middleware/cors/index.ts`, `src/middleware/cors/index.ts`, `src/middleware/secure-headers/secure-headers.ts`, `src/middleware/secure-headers/secure-headers.ts`, `src/middleware/timing/timing.ts`
+- **中1 后** hit5=1 top1=1 rw=`CORS middleware setup configure corsOptions allowOrigin`
+  - top5: `src/middleware/cors/index.ts`, `src/middleware/cors/index.ts`, `src/middleware/csrf/index.ts`, `src/middleware/csrf/index.ts`, `src/middleware/timing/timing.ts`
+- **中2 前** hit5=1 top1=0 rw=`read JSON request body req.json parseBody request.ts`
+  - top5: `src/utils/body.ts`, `src/request.ts`, `src/request.ts`, `src/request.ts`, `src/request.ts`
+- **中2 后** hit5=1 top1=1 rw=`read JSON request body parseBody req body json`
+  - top5: `src/request.ts`, `src/utils/body.ts`, `src/request.ts`, `src/utils/body.ts`, `src/request.ts`
+- **中3 前** hit5=1 top1=0 rw=`route params parse parseParams routeParams router`
+  - top5: `src/router.ts`, `src/router/pattern-router/router.ts`, `src/router/linear-router/router.ts`, `src/router.ts`, `src/router.ts`
+- **中3 后** hit5=0 top1=0 rw=`route params parse parseParams routeParams extract`
+  - top5: `src/types.ts`, `src/types.ts`, `src/types.ts`, `src/router.ts`, `src/router.ts`
+- **中4 前** hit5=1 top1=1 rw=`streaming response return streamResponse stream.ts`
+  - top5: `src/helper/streaming/stream.ts`, `src/helper/streaming/stream.ts`, `src/helper/streaming/text.ts`, `src/utils/stream.ts`, `src/helper/streaming/sse.ts`
+- **中4 后** hit5=1 top1=1 rw=`streaming response return streamResponse createStream sendStream`
+  - top5: `src/helper/streaming/sse.ts`, `src/helper/streaming/stream.ts`, `adapters/aws-lambda/src/handler.ts`, `src/adapter/aws-lambda/handler.ts`, `src/utils/stream.ts`
+- **中5 前** hit5=1 top1=1 rw=`JWT authentication middleware verify token verifyToken auth middleware jwt.ts`
+  - top5: `src/middleware/jwt/jwt.ts`, `src/middleware/jwt/jwt.ts`, `src/middleware/jwt/jwt.ts`, `src/utils/jwt/jwt.ts`, `src/utils/jwt/jwt.ts`
+- **中5 后** hit5=1 top1=0 rw=`JWT authentication middleware verify token verifyToken authenticate`
+  - top5: `src/utils/jwt/jwt.ts`, `src/middleware/jwt/jwt.ts`, `src/middleware/bearer-auth/index.ts`, `src/middleware/jwt/jwt.ts`, `src/utils/jwt/jwt.ts`
+- **中6 前** hit5=1 top1=1 rw=`set get cookie document.cookie cookies.ts`
+  - top5: `src/helper/cookie/index.ts`, `src/helper/cookie/index.ts`, `src/helper/cookie/index.ts`, `src/helper/cookie/index.ts`, `src/helper/cookie/index.ts`
+- **中6 后** hit5=1 top1=1 rw=`set get cookie document.cookie setCookie getCookie`
+  - top5: `src/helper/cookie/index.ts`, `src/helper/cookie/index.ts`, `src/helper/cookie/index.ts`, `src/adapter/aws-lambda/handler.ts`, `adapters/aws-lambda/src/handler.ts`
+- **英1 前** hit5=1 top1=1 rw=`how to set up basic auth middleware`
+  - top5: `src/middleware/basic-auth/index.ts`, `src/middleware/basic-auth/index.ts`, `src/middleware/jwt/jwt.ts`, `src/middleware/jwk/jwk.ts`, `src/utils/basic-auth.ts`
+- **英1 后** hit5=1 top1=1 rw=`how to set up basic auth middleware`
+  - top5: `src/middleware/basic-auth/index.ts`, `src/middleware/basic-auth/index.ts`, `src/middleware/jwt/jwt.ts`, `src/middleware/jwk/jwk.ts`, `src/utils/basic-auth.ts`
+- **英2 前** hit5=1 top1=0 rw=`where are route parameters matched in the router`
+  - top5: `src/router.ts`, `src/helper/route/index.ts`, `src/helper/route/index.ts`, `src/helper/route/index.ts`, `src/router/reg-exp-router/prepared-router.ts`
+- **英2 后** hit5=1 top1=1 rw=`where are route parameters matched in the router`
+  - top5: `src/router/pattern-router/router.ts`, `src/router.ts`, `src/helper/route/index.ts`, `src/router/linear-router/router.ts`, `src/helper/route/index.ts`
+- **英3 前** hit5=0 top1=0 rw=`how to serve static files`
+  - top5: `adapters/bun/src/serve-static.ts`, `src/adapter/bun/serve-static.ts`, `adapters/cloudflare-workers/src/serve-static.ts`, `adapters/cloudflare-workers/src/serve-static.ts`, `src/adapter/cloudflare-workers/serve-static.ts`
+- **英3 后** hit5=0 top1=0 rw=`how to serve static files`
+  - top5: `adapters/bun/src/serve-static.ts`, `src/adapter/bun/serve-static.ts`, `adapters/cloudflare-workers/src/serve-static.ts`, `adapters/cloudflare-workers/src/serve-static.ts`, `src/adapter/cloudflare-workers/serve-static.ts`
+- **英4 前** hit5=1 top1=1 rw=`how does the app handle errors and not found`
+  - top5: `src/hono-base.ts`, `src/compose.ts`, `src/compose.ts`, `src/middleware/combine/index.ts`, `src/types.ts`
+- **英4 后** hit5=1 top1=1 rw=`how does the app handle errors and not found`
+  - top5: `src/hono-base.ts`, `src/context.ts`, `src/hono-base.ts`, `src/compose.ts`, `src/compose.ts`
+- **英5 前** hit5=1 top1=1 rw=`compress response with gzip`
+  - top5: `src/middleware/compress/index.ts`, `src/middleware/compress/index.ts`, `src/middleware/compress/index.ts`, `src/middleware/compress/index.ts`, `src/middleware/serve-static/index.ts`
+- **英5 后** hit5=1 top1=1 rw=`compress response with gzip`
+  - top5: `src/middleware/compress/index.ts`, `src/middleware/compress/index.ts`, `src/middleware/compress/index.ts`, `src/middleware/compress/index.ts`, `src/middleware/serve-static/index.ts`
+- **英6 前** hit5=1 top1=1 rw=`validate request body with a validator`
+  - top5: `src/validator/validator.ts`, `src/validator/validator.ts`, `adapters/lambda-edge/src/handler.ts`, `src/adapter/lambda-edge/handler.ts`, `src/helper/proxy/index.ts`
+- **英6 后** hit5=1 top1=1 rw=`validate request body with a validator`
+  - top5: `src/validator/validator.ts`, `src/validator/validator.ts`, `src/request.ts`, `src/request.ts`, `src/request.ts`
+- **S1 前** hit5=0 top1=0 rw=`route matching router match routes file router.ts`
+  - top5: `src/router.ts`, `src/router.ts`, `src/router/linear-router/router.ts`, `src/router/pattern-router/router.ts`, `src/router/pattern-router/router.ts`
+- **S1 后** hit5=0 top1=0 rw=`route matching router matchRoutes findRoute resolvePath`
+  - top5: `src/router/pattern-router/router.ts`, `src/helper/route/index.ts`, `src/helper/route/index.ts`, `src/router.ts`, `src/request.ts`
