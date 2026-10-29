@@ -1,6 +1,10 @@
 import { exclusionRule } from '@repolens/shared';
 
-/** 送进提示词的检索片段(来自 code_chunk / hybridSearch 结果);行号为文件绝对行号,1 起 */
+/**
+ * 送进提示词的检索片段;必须是 `prepareSnippet` 的输出:content 只含代码(已剥掉 `path[ symbol]`
+ * 标题行),[startLine,endLine] 为有效区间(截断时已去掉最后一行)。行号为文件绝对行号,1 起。
+ * 不要把 code_chunk.content 原文直接传进来,否则标题行会占掉 startLine,行号整体偏 1。
+ */
 export interface ChunkInput {
   path: string;
   startLine: number;
@@ -32,11 +36,19 @@ export const CHAT_SYSTEM_PROMPT = [
   '片段不足以回答时直接说明不知道。',
 ].join('\n');
 
-/** 每行加绝对行号前缀;片段内容无法伪造片段边界或编号,因为边界行不带行号前缀 */
+/** 给剥掉标题后的代码逐行加绝对行号前缀(第一行 = startLine);片段内容无法伪造片段边界或编号,因为边界行不带行号前缀 */
 function numberLines(c: ChunkInput): string {
   return c.content
     .split('\n')
     .map((line, i) => `${c.startLine + i}| ${line}`)
+    .join('\n');
+}
+
+/** 用户问题里像片段分隔符的行前加可见 `\\`,避免伪造 `=== Sn ... ===` 边界;只处理问题文本 */
+export function escapeQuestionSeparators(question: string): string {
+  return question
+    .split('\n')
+    .map((line) => (/^\s*={3,}/.test(line) ? `\\${line}` : line))
     .join('\n');
 }
 
@@ -63,7 +75,7 @@ export function assemblePrompt(question: string, chunks: readonly ChunkInput[]):
     snippets.length > 0 ? body : '(无可用片段)',
     '</snippets>',
     '',
-    `问题:${question}`,
+    `问题:${escapeQuestionSeparators(question)}`,
   ].join('\n');
   return { system: CHAT_SYSTEM_PROMPT, user, snippets, excluded };
 }

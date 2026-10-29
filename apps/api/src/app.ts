@@ -29,6 +29,7 @@ import { readRepoFile } from './files.js';
 import type { GitHost } from './githost.js';
 import { GraphIndex, nodeDetail, projectGraphWithInfo } from './projection.js';
 import { streamJobEvents } from './sse.js';
+import { ipKey } from './ip-key.js';
 
 export interface AnalyzeJobData {
   jobId: string;
@@ -113,7 +114,7 @@ export function buildApp(deps?: AppDeps): FastifyInstance {
   }
 
   app.post('/api/repos', async (req, reply) => {
-    await submitLimitCheck(req.ip);
+    await submitLimitCheck(ipKey(req.ip));
     const body = CreateRepoRequestSchema.safeParse(req.body);
     if (!body.success) {
       // 只有 repoUrl 本身存在但不合法才是 INVALID_REPO_URL;缺字段、ref 非法、请求体不是对象等都是 BAD_REQUEST
@@ -152,13 +153,13 @@ export function buildApp(deps?: AppDeps): FastifyInstance {
     // 新任务或 failed 重试会入队,先计数,超限 429 且不建任务。
     const existing = await store.getTask(jobId);
     const counted = !existing || existing.stage === 'failed';
-    if (counted) await rateLimit(req.ip);
+    if (counted) await rateLimit(ipKey(req.ip));
     // 已计数但最终没有入队(并发下别人先建了未失败的任务,或建任务/入队出错)时退还 1 次
     let refunded = !counted;
     const refund = async () => {
       if (refunded) return;
       refunded = true;
-      await redis.decr(redisKeys.rateLimitIp(req.ip));
+      await redis.decr(redisKeys.rateLimitIp(ipKey(req.ip)));
     };
     let task: Awaited<ReturnType<typeof store.createTask>>['task'];
     let created: boolean;

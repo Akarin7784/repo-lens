@@ -1,3 +1,4 @@
+import { ipKey } from './ip-key.js';
 import { execFileSync } from 'node:child_process';
 import { randomInt } from 'node:crypto';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
@@ -1049,6 +1050,53 @@ describe.skipIf(!hasRedis)('路由(真实 Redis + 内存 Store)', () => {
     expect((await get('f:src/a/x/deep.ts')).inCycle).toBe(true);
     expect((await get('x:react')).inCycle).toBe(false);
     expect((await app.inject(`/api/repos/${repoId}/nodes/f:nope.ts`)).statusCode).toBe(404);
+    await app.close();
+  });
+
+  it('提交限流:IPv6 同一 /64 共用计数,不同 /64 分开;IPv4-mapped 与 IPv4 共用(P4-d)', async () => {
+    const app = buildApp({
+      store: new MemoryStore(),
+      redis,
+      queue: { enqueue: async () => {}, removeFailed: async () => {} },
+      git: {
+        lsRemote: async () => SHA,
+        repoInfo: async () => ({ sizeKb: 1, language: 'TypeScript', private: null }),
+      },
+      logger: false,
+      submitLimitPerHour: 2,
+      rateLimitPerHour: 100,
+    });
+    const postAt = (ip: string, name: string) =>
+      app.inject({
+        method: 'POST',
+        url: '/api/repos',
+        payload: { repoUrl: `https://github.com/o/${name}` },
+        headers: { 'x-forwarded-for': ip },
+      });
+    const a = '2001:db8:9:9:aaaa::1';
+    const b = '2001:db8:9:9:bbbb::2';
+    const other = '2001:db8:9:a::1';
+    const key = redisKeys.submitLimitIp(ipKey(a));
+    await redis.del(
+      key,
+      redisKeys.submitLimitIp(ipKey(other)),
+      redisKeys.submitLimitIp(ipKey('1.2.3.4')),
+    );
+    expect((await postAt(a, 'a1')).statusCode).toBe(202);
+    expect((await postAt(b, 'a2')).statusCode).toBe(202);
+    // 同一 /64 第 3 次 → 429
+    const over = await postAt(a, 'a3');
+    expect([over.statusCode, over.json().error.code]).toEqual([429, 'RATE_LIMITED']);
+    expect(await redis.get(key)).toBe('3');
+    // 不同 /64 不受影响
+    expect((await postAt(other, 'b1')).statusCode).toBe(202);
+    // IPv4-mapped 与 IPv4 共用
+    const v4 = '5.6.7.8';
+    await redis.del(redisKeys.submitLimitIp(v4));
+    expect((await postAt(v4, 'c1')).statusCode).toBe(202);
+    expect((await postAt(`::ffff:${v4}`, 'c2')).statusCode).toBe(202);
+    const mappedOver = await postAt(v4, 'c3');
+    expect([mappedOver.statusCode, mappedOver.json().error.code]).toEqual([429, 'RATE_LIMITED']);
     await app.close();
   });
 

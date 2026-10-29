@@ -348,6 +348,9 @@ describe('redis keys', () => {
     expect(redisKeys.submitLimitIp('1.2.3.4', new Date('2026-10-29T03:05:00Z'))).toBe(
       'rl:sub:1.2.3.4:2026102903',
     );
+    expect(
+      redisKeys.chatLimitIp('2001:0db8:0000:0000::/64', new Date('2026-10-29T03:05:00Z')),
+    ).toBe('rl:chat:2001:0db8:0000:0000::/64:2026102903');
     expect(queueJobId(publicJobId(12, C))).toBe(`12-${C}`);
     expect(parseJobId(`12:${C}`)).toEqual({ repoId: 12, commitSha: C });
     expect(parseJobId('12:zz')).toBeNull();
