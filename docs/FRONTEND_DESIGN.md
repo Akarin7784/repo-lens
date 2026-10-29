@@ -226,7 +226,7 @@ function aggregateEdges(raw: GraphEdge[], visibleAncestor: (id: string) => strin
 详情面板内容（`<NodeDetail>`）：
 - 头部：图标 + 路径面包屑（可点，用于跳转父节点）+ 类型标签。
 - 摘要：LLM 生成的 `summary`。为 `null`（摘要还没生成，后台仍在 summarizing）时显示 3 行骨架屏，收到 `done` 进度事件后重新请求。
-- 指标：LOC、导出符号、入度/出度、`topDependents`（被依赖最多的节点，可点击跳转）、是否处于循环依赖中（加分项，来自 `meta.cycles`）。
+- 指标：LOC、导出符号、入度/出度、`topDependents`（被依赖最多的节点，可点击跳转）、是否处于循环依赖中（加分项，来自节点详情接口的 `inCycle`；图状态不再收集 `meta.cycles`，T-203）。
 - 邻居列表：「依赖于」和「被依赖」两个 tab，各自可点击跳转。
 - 代码预览：Shiki（浅色用 `github-light` 叠加纸色底，深色用 `vitesse-dark`，见第 8 章），懒加载，`GET /api/repos/:id/files?path=&start=&end=`；支持行区间高亮（与引用共用）；超过 2,000 行时用虚拟滚动。
 - 操作：「问问这个模块」，点击后把节点加入对话上下文并切换到对话 tab。
@@ -609,3 +609,8 @@ zustand（秒出图）和 zod（默认 module 层、按需下钻）不在 3 分�
 - 解析进度 SSE 断开：自动重连并拉取最新快照；多次失败后改为轮询 `GET /api/repos/:id`（读取 stage 和 progress）。
 - 图谱接口失败：展示纯文件树（目录列表）作为降级视图，问答仍可用。
 - 整体离线：前端检测 `navigator.onLine`，禁用提交按钮并提示，已加载的图和答案仍可浏览。
+
+### 连线降噪(T-220)
+- 聚合边默认透明度 0.3(`AGG_EDGE_OPACITY`,投影仪验收不清楚时调到 0.35–0.4),线宽上限从 8 降到 5(`AGG_WIDTH_MAX`);环边、选中相关边不调淡,其它节点被选中时的 dim 仍为 0.15。
+- ×N 标签:zoom < 0.9(`WEIGHT_LABEL_MIN_ZOOM`)时隐藏,选中相关边和环边例外;用布尔 selector 读 zoom,跨阈值才重渲染。不隐藏任何边。
+- 系数依据:hono@ed1d5f7 `d:src`/`d:src/middleware`/`d:src/jsx` 三层共 196 条聚合边,weight=1 占 63%,中位数 1,p90 6,最大 29;截图见 `docs/assets/T-220/`。

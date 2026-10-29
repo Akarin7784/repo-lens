@@ -18,15 +18,50 @@ export type RepoEdgeData = {
   kind: GraphEdge['kind'];
   /** 有选中节点时:与之相连为 on,否则 dim;无选中为 undefined */
   highlight?: 'on' | 'dim';
-  /** 在 meta.cycles 的某个环上 */
+  /** 环边:只来自 edge.inCycle === true(T-203 起不再读 meta.cycles) */
   cycle?: boolean;
 };
 export type RepoFlowEdge = Edge<RepoEdgeData, 'weighted'>;
 
 /** 聚合边线宽:1 + 1.5·log2(weight),上限 8px(FRONTEND_DESIGN.md §8);原始边固定 1.25px */
+/**
+ * T-220:聚合边线宽上限从 8 降到 5。hono 实测(d:src / middleware / jsx 三层 196 条聚合边)
+ * 中位数 weight=1、p90=6、最大 29:上限 5 时 weight≥6 才封顶,1/2/4 仍有 1/2.5/4 的粗细差。
+ */
+export const AGG_WIDTH_MAX = 5;
 export function edgeWidth(weight: number, aggregated: boolean): number {
   if (!aggregated) return 1.25;
-  return Math.min(8, 1 + 1.5 * Math.log2(Math.max(1, weight)));
+  return Math.min(AGG_WIDTH_MAX, 1 + 1.5 * Math.log2(Math.max(1, weight)));
+}
+
+/** T-220:聚合边默认透明度(WEEK2_PLAN 默认约 0.3;投影仪验收不清楚时可调到 0.35–0.4) */
+export const AGG_EDGE_OPACITY = 0.3;
+/** T-220:zoom 低于此值时隐藏 ×N 标签(选中相关边、环边例外) */
+export const WEIGHT_LABEL_MIN_ZOOM = 0.9;
+
+/**
+ * 边的透明度。优先级:dim(选中其它节点时)> 选中相关 / 环边(不调淡)> type-only > 聚合边调淡 > 普通边。
+ */
+export function edgeOpacity(d: {
+  highlight?: 'on' | 'dim';
+  cycle?: boolean;
+  aggregated?: boolean;
+  kind?: string;
+}): number {
+  if (d.highlight === 'dim') return 0.15;
+  if (d.highlight === 'on' || d.cycle) return 0.9;
+  if (d.kind === 'type-only') return 0.55;
+  if (d.aggregated) return AGG_EDGE_OPACITY;
+  return 0.9;
+}
+
+/** ×N 标签是否显示:只对 weight>1 的聚合边;dim 不显示;选中相关或环边始终显示;其余看 zoom 阈值 */
+export function showWeightLabel(
+  d: { highlight?: 'on' | 'dim'; cycle?: boolean; aggregated?: boolean; weight?: number },
+  zoomedIn: boolean,
+): boolean {
+  if (!d.aggregated || (d.weight ?? 1) <= 1 || d.highlight === 'dim') return false;
+  return d.highlight === 'on' || d.cycle === true || zoomedIn;
 }
 
 /**

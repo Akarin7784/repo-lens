@@ -19,7 +19,7 @@ import {
 import { graphReducer, initialGraphState } from './state';
 import { DIM_OPACITY, highlightSelection } from './selection';
 import type { RepoFlowEdge, RepoFlowNode } from './toFlow';
-import { edgeWidth, toFlow } from './toFlow';
+import { edgeOpacity, edgeWidth, showWeightLabel, toFlow } from './toFlow';
 import { readLayout, toElkGraph, createInlineEngine } from '../layout/elk';
 import { parseLayoutFile } from '../layout/layoutFile';
 
@@ -146,7 +146,7 @@ describe('聚合', () => {
     expect(edgeWidth(1, false)).toBe(1.25);
     expect(edgeWidth(1, true)).toBe(1);
     expect(edgeWidth(4, true)).toBe(4);
-    expect(edgeWidth(10_000, true)).toBe(8);
+    expect(edgeWidth(10_000, true)).toBe(5);
   });
 });
 
@@ -320,7 +320,7 @@ describe('真实接口模式(T-007)', () => {
       ...extra,
     }) as GraphEdge;
 
-  it('childrenLoaded 累积切片边(按 id 去重)和 meta.cycles', () => {
+  it('childrenLoaded 累积切片边(按 id 去重),不再收集 meta.cycles', () => {
     let s = graphReducer(initialGraphState, {
       type: 'init',
       nodes: [mod('m:a'), mod('m:b')],
@@ -331,17 +331,15 @@ describe('真实接口模式(T-007)', () => {
       parentId: 'm:a',
       nodes: [file('a/x.ts', 'm:a'), file('a/y.ts', 'm:a')],
       edges: [e('f:a/x.ts', 'f:a/y.ts'), e('f:a/y.ts', 'f:a/x.ts')],
-      cycles: [['f:a/x.ts', 'f:a/y.ts']],
     });
     s = graphReducer(s, {
       type: 'childrenLoaded',
       parentId: 'm:a',
       nodes: [],
       edges: [e('f:a/x.ts', 'f:a/y.ts')],
-      cycles: [['f:a/y.ts', 'f:a/x.ts']],
     });
     expect(s.edges).toHaveLength(3);
-    expect(s.cycles).toEqual([['f:a/x.ts', 'f:a/y.ts']]);
+    expect('cycles' in s).toBe(false);
     void SHA;
   });
 
@@ -420,5 +418,26 @@ describe('state:边所属层与截断标记', () => {
       ['e1', 'm:a'],
     ]);
     expect([...s.truncated]).toEqual(['m:a']);
+  });
+});
+
+describe('T-220 聚合边调淡与 ×N 阈值', () => {
+  it('聚合边默认调淡,环边、选中相关边不调淡,dim 最淡', () => {
+    expect(edgeOpacity({ aggregated: true })).toBe(0.3);
+    expect(edgeOpacity({ aggregated: true, cycle: true })).toBe(0.9);
+    expect(edgeOpacity({ aggregated: true, highlight: 'on' })).toBe(0.9);
+    expect(edgeOpacity({ aggregated: true, highlight: 'dim' })).toBe(0.15);
+    expect(edgeOpacity({ aggregated: false })).toBe(0.9);
+    expect(edgeOpacity({ kind: 'type-only' })).toBe(0.55);
+  });
+  it('×N 只在 zoom≥阈值时显示;选中相关/环边始终显示;dim 和 weight=1 不显示', () => {
+    const agg = { aggregated: true, weight: 4 };
+    expect(showWeightLabel(agg, false)).toBe(false);
+    expect(showWeightLabel(agg, true)).toBe(true);
+    expect(showWeightLabel({ ...agg, highlight: 'on' }, false)).toBe(true);
+    expect(showWeightLabel({ ...agg, cycle: true }, false)).toBe(true);
+    expect(showWeightLabel({ ...agg, highlight: 'dim' }, true)).toBe(false);
+    expect(showWeightLabel({ aggregated: true, weight: 1 }, true)).toBe(false);
+    expect(showWeightLabel({ aggregated: false, weight: 4 }, true)).toBe(false);
   });
 });

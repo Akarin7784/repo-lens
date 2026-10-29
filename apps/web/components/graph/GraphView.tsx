@@ -87,7 +87,6 @@ function Inner({ source, owner, repo, engine, onRootLoaded }: GraphViewProps) {
           nodes: slice.nodes,
           // fixture 给全量原始边;真实接口用本层返回的边
           edges: source.rawEdges ? source.rawEdges() : slice.edges,
-          cycles: slice.meta.cycles,
           layered: !source.rawEdges,
           truncated: slice.truncated,
         });
@@ -116,7 +115,6 @@ function Inner({ source, owner, repo, engine, onRootLoaded }: GraphViewProps) {
             parentId: id,
             nodes: slice.nodes,
             ...(source.rawEdges ? {} : { edges: slice.edges }),
-            cycles: slice.meta.cycles,
             truncated: slice.truncated,
           });
         } catch (e) {
