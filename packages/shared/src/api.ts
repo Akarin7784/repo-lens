@@ -47,17 +47,48 @@ export const REPO_NOT_READY_REASONS = [
   'REPOS_DIR_NOT_CONFIGURED',
 ] as const;
 export type RepoNotReadyReason = (typeof REPO_NOT_READY_REASONS)[number];
+/**
+ * 429 RATE_LIMITED 的子原因(`error.details.reason`,可选,旧前端可忽略):
+ * rate_limit=按 IP 的每小时提问次数用完(按 UTC 整点分桶),带 `retryAfterSec`=距下一个整点的秒数(向上取整,1–3600);
+ * concurrency=全局问答并发已满,不带 `retryAfterSec`(何时有空位不可预测)。只增不改。
+ */
+export const RATE_LIMITED_REASONS = ['rate_limit', 'concurrency'] as const;
+export type RateLimitedReason = (typeof RATE_LIMITED_REASONS)[number];
 /** FILE_NOT_FOUND(HTTP 404):仓库存在但快照里没有该文件;REPO_NOT_FOUND 只表示仓库/任务/节点不存在 */
 export const ApiErrorSchema = z.object({
-  error: z.object({
-    code: z.enum(API_ERROR_CODES),
-    message: z.string(),
-    /** 可选细节;目前仅 REPO_NOT_READY 带 reason。允许附加其他字段(只增不改),reason 若出现必须是枚举值 */
-    details: z
-      .object({ reason: z.enum(REPO_NOT_READY_REASONS).optional() })
-      .passthrough()
-      .optional(),
-  }),
+  error: z
+    .object({
+      code: z.enum(API_ERROR_CODES),
+      message: z.string(),
+      /**
+       * 可选细节;REPO_NOT_READY 与 RATE_LIMITED 可带 reason(各自枚举),RATE_LIMITED 的 rate_limit 另可带 retryAfterSec。
+       * 允许附加其他字段(只增不改);reason 若出现必须是该 code 对应的枚举值。
+       */
+      details: z
+        .object({
+          reason: z.enum([...REPO_NOT_READY_REASONS, ...RATE_LIMITED_REASONS]).optional(),
+          retryAfterSec: z.number().int().positive().optional(),
+        })
+        .passthrough()
+        .optional(),
+    })
+    .superRefine((e, ctx) => {
+      const reason = e.details?.reason;
+      if (reason === undefined) return;
+      const rl = (RATE_LIMITED_REASONS as readonly string[]).includes(reason);
+      if (rl !== (e.code === 'RATE_LIMITED'))
+        ctx.addIssue({
+          code: 'custom',
+          path: ['details', 'reason'],
+          message: `reason ${reason} 与 code ${e.code} 不匹配`,
+        });
+      if (reason === 'concurrency' && e.details?.retryAfterSec !== undefined)
+        ctx.addIssue({
+          code: 'custom',
+          path: ['details', 'retryAfterSec'],
+          message: 'concurrency 不带 retryAfterSec',
+        });
+    }),
 });
 
 /** GET /api/repos/:id;`repo`/`commitSha` 与 CreateRepoResponse 同名同义;commitSha 优先取最近一次 done 任务的 commit,没有 done 任务时取最新任务的;jobId/status/stage 始终是最新任务的 */
