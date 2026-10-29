@@ -111,7 +111,7 @@
 - 本次运行实际使用的 base_url 未记录,**未验证**。
 
 ## 七、预分析 / 演示检查清单(冻结后)
-1. **#104 合并后**在演示机重跑 demo-prep:hono / zustand / zod / trpc 与 h3,都用冻结后的默认模型重新索引。
+1. **#104 合并后**在演示机重跑 demo-prep:hono / zustand / zod / trpc(仅 demo 仓库),都用冻结后的默认模型重新索引。
 2. 逐个确认每个任务的 **task.stats** 含:
    - `embeddingStatus` 为 `ready` 或 `reused`(任务 stats **没有**单独的 `status` 字段;进度字段 `status` 是 queued/running/done/failed,与向量无关)
    - `embeddingProvider=dashscope`
@@ -119,3 +119,46 @@
    - `embeddingDim=1024`
    说明:`GET /api/repos/:id` 目前只透出 `embeddingStatus` 与 `embeddingProvider`;`embeddingModel` / `embeddingDim` 仍在任务 stats 里,预分析检查应读任务 stats,或 GET 后再查库。缺任一项就对该仓重索引。否则聊天会静默变成 keyword-only(见 #101:缺 model/dim 的旧 dashscope 任务会被当成不同源)。
 3. 演示时看问答 SSE 的 `done.retrieval`(**不是** `embeddingStatus`),确认不是 `keyword-only`;一旦中了就换题或切录屏,不现场解释。**不写「检索已验收」**,须等 v3 通过。
+4. 预分析记录(2026-10-29,**后端机器上的预分析,不是演示机证据**,部署后须在演示机重跑):main `1c163dd`,`scripts/demo-prep.sh` 跑 4 个 demo 仓库,启动 api/worker 时未设 `DASHSCOPE_EMBEDDING_MODEL` / `_DIM`(用代码默认);只读 SQL 核对任务 stats 四项,4 个仓库均为 `embeddingStatus=ready`、`embeddingProvider=dashscope`、`embeddingModel=qwen3.7-text-embedding`、`embeddingDim=1024`,未重索引。
+
+   | 仓库 | chunk | tokens |
+   |---|---|---|
+   | hono | 1604 | 218123 |
+   | zustand | 132 | 14932 |
+   | zod | 2991 | 438205 |
+   | trpc | 1544 | 252180 |
+   | 合计 | 6271 | 923440(≈0.46 元,估算) |
+
+   worker 日志里没有 usage 行,tokens 取自任务 stats(`embeddingTokenSource=usage`,即接口返回的 usage)。
+
+## 八、v3 记录(盲测,只跑一次)
+- **结论口径:v3 盲测通过**(检索在 v3 十题上过线)。范围:仅 h3 一个仓库、只有 10 道题、检索不含 `test/`(扫描器丢弃 `test/`,`docs/` `examples/` 也不在索引内)、`qwen3.7-text-embedding` 1024 维、在后端机器上跑;演示机上还要重跑演示题。不写「检索已验收」「问答可用」。
+- 通过线(运行前写定,未改):top-5 ≥ 7/10 且 top-1 ≥ 4/10。
+- 基线:main `559bf08`(含 #96、#100、#101–#104),干净 detached worktree;h3 `f0e17808`(v2.0.8),工作区干净。时间 2026-10-29 22:55:00–22:56:55(UTC+8)。
+- 命令(逐字;key 只在环境变量,不写进命令;`DASHSCOPE_EMBEDDING_MODEL` / `_DIM` 用 `env -u` 去掉,用代码默认;不带 `--commit/--prefix/--rows/--id-letter/--holdout-file`,不带 `--force`):
+  `env -u DASHSCOPE_EMBEDDING_MODEL -u DASHSCOPE_EMBEDDING_DIM H3_DIR=<h3 克隆目录> EMBEDDING_PROVIDER=dashscope node scripts/rag-eval.mjs v3`
+- 开始行:`EVAL v3 start main=559bf0802ad0ca0ef92547b45c70cf01b2a189b7 h3=f0e17808ac2439b6434bb10609a961067f4d555b prefix=src/ idLetter=W rows=10 chunks=746 chunker=2 embedText=1 model=dashscope:qwen3.7-text-embedding@1024 prompt=rw-3 digest=5bbc57a14962c4331b40b2bdee4593332d36899a623cab80e161f7dc1df6f033 llm=deepseek/deepseek-flash embProvider=dashscope embModel=qwen3.7-text-embedding dim=1024 collection=eval_dashscope_qwen3_7-text-embedding_1024`
+- usage 行:`EVAL embedding usage reused=0 totalTokens=117026 batches=75`
+- total 行:`EVAL v3 total top5=10/10 top1=8/10 chunks=746 llm=deepseek rewriteCalls=10 costMicroUsd=834 prompt=rw-3 chunker=2 embedText=1 revision=1024`
+- 逐题(只记编号与名次,不记题目文字;应命中文件均在 `src/` 下):
+
+  | 题 | top-1 | top-5 | 首个命中名次 |
+  |---|---|---|---|
+  | W1 | 1 | 1 | 1 |
+  | W2 | 1 | 1 | 1 |
+  | W3 | 1 | 1 | 1 |
+  | W4 | 0 | 1 | 2 |
+  | W5 | 1 | 1 | 1 |
+  | W6 | 0 | 1 | 2 |
+  | W7 | 1 | 1 | 1 |
+  | W8 | 1 | 1 | 1 |
+  | W9 | 1 | 1 | 1 |
+  | W10 | 1 | 1 | 1 |
+
+- 总分:top-5 10/10,top-1 8/10,过线。W4、W6 首个命中排第 2:本文不做分析,也不据此调参。
+- 降级检查:`FAILED` 0 处,`retrieval=keyword-only` 0 处(10 题均 `retrieval=hybrid`)。
+- 用量与费用:DashScope totalTokens=117026,≈0.059 元(估算,117026÷1000×0.0005 元;totalTokens 为下限);DeepSeek 改写 `costMicroUsd=834`(10 次调用)。
+- 改写:按脚本默认走真实 DeepSeek(与调优轮相同);v3 题在改写缓存里都没有,10 题均 `rewrite=used`。`rl-eval-rewrites.json` 现在多了 v3 的 10 条改写;调优记录里引用的 hash `c7695f99…` 对应调优当时的快照。
+- run-once 保护:脚本把结果写入 `/tmp/rl-eval-v3-result.txt`,该文件已存在时拒绝再跑(除非 `--force`,输出会留 FORCE 标记)。本次运行前该文件不存在;运行后保留,不删除。
+- **v3 已用掉,不能再当盲测集;以后任何检索改动要换新题集(v4)。**
+- 日志:完整输出在盒子上,不入库;已检查无 `sk-`、`Bearer`、`Authorization` 及 key 值。rag-eval 用内存向量库,不连 MariaDB/Redis/Qdrant。
