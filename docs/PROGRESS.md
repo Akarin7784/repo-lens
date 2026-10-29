@@ -127,6 +127,8 @@
 
 - 2026-10-29 16:0x:#58 合并(T-224 后续,提交 90caac8)。我在最新提交 adcd889 上独立重跑 install、lint、typecheck、build、test(web 123 等,全过),在含 #56、#57 的 main 上试合并复测 web 通过,`ci` 与 `smoke` 绿。内容:搜索框选中序号钳位(无结果为 -1,回车不做事);无匹配时 `aria-expanded=false`、不设 `aria-activedescendant`,并加常驻 `aria-live="polite"` 播报;文档写明 Safari、Firefox、深色模式、真机未测;窄屏进度横幅改为 `top-14 z-10`(搜索框下方,单行截断、不拦截点击),截图 `docs/assets/T-224b/`(分析进行中状态用路由拦截模拟)。变异检查:去掉钳位,2 个新测试失败;`aria-expanded` 改恒真,2 个测试失败。后续项(非阻塞):进度横幅与左侧的截断提示同在 `top-14`,大仓库有层被截断且分析进行中时可能重叠(窄屏几乎必然),hono 演示大概率碰不到;补一张桌面宽度下搜索下拉加横幅同时出现的截图;补「结果 2 条再变回 5 条」的测试以固定恢复位置的行为。
 
+- 2026-10-29 16:2x:#61 合并(T-224c,提交 2bb3cea)。我在 head 7656f6f 上独立重跑 install、lint、typecheck、build、test(web 128 等,全过),在最新 main 上试合并无冲突,`ci` 与 `smoke` 绿。内容:进度横幅与“已截断”提示放入同一纵向容器(`top-14 z-10`,`GraphView` 新增可选 `topNotice`),搜索框 z-20、下拉 z-30 仍在其上;`GraphSearch` 把钳位后的下标写回状态,修复 5→2→5 条结果后高亮错位;新增 2 个搜索测试和 3 个布局结构测试,截图 `docs/assets/T-224c/`(进行中与截断状态用路由拦截模拟)。变异检查:去掉写回钳位,2 个测试失败;容器改回两个独立定位元素,2 个测试失败。后续项(非阻塞):结果 5→0→5 时内部下标仍停在旧值(无结果不写回),应在无结果时置 0 或补测试;布局测试只断言结构和 class,桌面宽度实际位置只有截图为证。
+
 ## 演示检查清单(第 4 周前逐项勾选)
 - [ ] 演示前抽查 hono 的 `embeddingStatus` 为 `ready`(或 `reused`)。
 - [ ] 「镜像构建下载模型」:CI 已验证(GitHub 环境直连 huggingface.co,手动 workflow `worker-model-build.yml` run 40838998679,5 个文件 `sha256sum -c` 全 OK,镜像内 ONNX embedding 维度 384,构建约 58 秒);**演示机(国内网络)上的构建仍待验证**:演示前先在演示机构建好镜像,下载慢时设 `EMBEDDING_MODEL_BASE_URL` 为镜像站(哈希校验不变)。
