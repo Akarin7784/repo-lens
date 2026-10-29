@@ -837,23 +837,48 @@ describe.skipIf(!hasRedis)('路由(真实 Redis + 内存 Store)', () => {
     expect(x).toMatchObject({ kind: 'external', inDegree: 2, summary: null });
     expect(m.summary).toBeNull();
     // T-211:module 摘要存在 level 'dir' 下,文件摘要在 level 'file'
-    const sum = { inputHash: 'h', model: 'fake', tokensIn: 1, tokensOut: 1 };
-    await store.upsertSummary(repoId, {
+    const sum = {
+      inputHash: 'h',
+      model: 'fake',
+      source: 'llm' as const,
+      tokensIn: 1,
+      tokensOut: 1,
+    };
+    const get = async (id: string) =>
+      NodeDetailSchema.parse((await app.inject(`/api/repos/${repoId}/nodes/${id}`)).json());
+    // 没摘要:summarySource 为 null
+    expect((await get('f:src/b/util.ts')).summarySource).toBeNull();
+    await store.upsertSummary(repoId, SHA, {
       ...sum,
       level: 'dir',
       targetId: 'm:src/a',
       content: 'mod A',
     });
-    await store.upsertSummary(repoId, {
+    await store.upsertSummary(repoId, SHA, {
       ...sum,
       level: 'file',
       targetId: 'f:src/b/util.ts',
+      model: 'rule',
+      source: 'rule',
       content: 'util',
     });
-    expect((await app.inject(`/api/repos/${repoId}/nodes/m:src/a`)).json().summary).toBe('mod A');
-    expect((await app.inject(`/api/repos/${repoId}/nodes/f:src/b/util.ts`)).json().summary).toBe(
-      'util',
-    );
+    // T-211c:别的 commit 的摘要不串到本图
+    await store.upsertSummary(repoId, 'c'.repeat(40), {
+      ...sum,
+      level: 'file',
+      targetId: 'f:main.ts',
+      content: '其他 commit',
+    });
+    expect(await get('m:src/a')).toMatchObject({ summary: 'mod A', summarySource: 'llm' });
+    expect(await get('f:src/b/util.ts')).toMatchObject({ summary: 'util', summarySource: 'rule' });
+    expect(await get('f:main.ts')).toMatchObject({ summary: null, summarySource: null });
+    // inCycle:SCC 成员集合 [src/a/index.ts, src/b/util.ts]
+    expect((await get('f:src/a/index.ts')).inCycle).toBe(true);
+    expect((await get('f:src/b/util.ts')).inCycle).toBe(true);
+    expect((await get('m:src/a')).inCycle).toBe(true);
+    expect((await get('f:main.ts')).inCycle).toBe(false);
+    expect((await get('f:src/a/x/deep.ts')).inCycle).toBe(false);
+    expect((await get('x:react')).inCycle).toBe(false);
     expect((await app.inject(`/api/repos/${repoId}/nodes/f:nope.ts`)).statusCode).toBe(404);
     await app.close();
   });

@@ -95,41 +95,45 @@ export class MysqlStore implements Store {
     return rows.map((r) => ({
       level: r.level,
       targetId: r.targetId,
+      commitSha: r.commitSha,
       inputHash: r.inputHash,
       model: r.model ?? '',
+      source: r.source,
       content: r.content ?? '',
       tokensIn: r.tokensIn ?? 0,
       tokensOut: r.tokensOut ?? 0,
     }));
   }
 
-  async upsertSummary(repoId: number, row: SummaryRow) {
+  async upsertSummary(repoId: number, commitSha: string, row: SummaryRow) {
     const v = {
       inputHash: row.inputHash,
       model: row.model,
+      source: row.source,
       content: row.content,
       tokensIn: row.tokensIn,
       tokensOut: row.tokensOut,
     };
     await this.db
       .insert(schema.summary)
-      .values({ repoId, level: row.level, targetId: row.targetId, ...v })
+      .values({ repoId, commitSha, level: row.level, targetId: row.targetId, ...v })
       .onDuplicateKeyUpdate({ set: v });
   }
 
-  async getSummary(repoId: number, level: SummaryLevel, targetId: string) {
+  async getSummary(repoId: number, commitSha: string, level: SummaryLevel, targetId: string) {
     const [r] = await this.db
-      .select({ content: schema.summary.content })
+      .select({ content: schema.summary.content, source: schema.summary.source })
       .from(schema.summary)
       .where(
         and(
           eq(schema.summary.repoId, repoId),
+          eq(schema.summary.commitSha, commitSha),
           eq(schema.summary.level, level),
           eq(schema.summary.targetId, targetId),
         ),
       )
       .limit(1);
-    return r?.content ?? null;
+    return r ? { content: r.content ?? '', source: r.source } : null;
   }
 
   async insertLlmUsage(row: LlmUsageInput) {

@@ -28,12 +28,15 @@ export class MemoryStore implements Store {
   async listSummaries(repoId: number) {
     return [...(this.summaries.get(repoId)?.values() ?? [])].map((r) => ({ ...r }));
   }
-  async upsertSummary(repoId: number, row: SummaryRow) {
+  async upsertSummary(repoId: number, commitSha: string, row: SummaryRow) {
     if (!this.summaries.has(repoId)) this.summaries.set(repoId, new Map());
-    this.summaries.get(repoId)!.set(`${row.level}|${row.targetId}`, { ...row });
+    this.summaries
+      .get(repoId)!
+      .set(`${commitSha}|${row.level}|${row.targetId}`, { ...row, commitSha });
   }
-  async getSummary(repoId: number, level: SummaryLevel, targetId: string) {
-    return this.summaries.get(repoId)?.get(`${level}|${targetId}`)?.content ?? null;
+  async getSummary(repoId: number, commitSha: string, level: SummaryLevel, targetId: string) {
+    const r = this.summaries.get(repoId)?.get(`${commitSha}|${level}|${targetId}`);
+    return r ? { content: r.content, source: r.source } : null;
   }
 
   async insertLlmUsage(row: LlmUsageInput) {

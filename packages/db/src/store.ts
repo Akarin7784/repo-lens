@@ -127,11 +127,20 @@ export interface Store {
   }): Promise<{ task: TaskRow; created: boolean }>;
   getTask(jobId: string): Promise<TaskRow | null>;
   latestTask(repoId: number): Promise<TaskRow | null>;
-  /** 某仓库全部摘要(T-211;uk = repoId + level + targetId,新 commit 覆盖旧行) */
+  /**
+   * 某仓库全部 commit 的摘要(T-211c:uk = repoId + level + targetId + commitSha,各 commit 各存一份),
+   * 每行带 commitSha;worker 用它按输入哈希跨 commit 复用
+   */
   listSummaries(repoId: number): Promise<SummaryRow[]>;
-  /** 按 (repoId, level, targetId) 插入或覆盖 */
-  upsertSummary(repoId: number, row: SummaryRow): Promise<void>;
-  getSummary(repoId: number, level: SummaryLevel, targetId: string): Promise<string | null>;
+  /** 按 (repoId, level, targetId, commitSha) 插入或覆盖 */
+  upsertSummary(repoId: number, commitSha: string, row: SummaryRow): Promise<void>;
+  /** 读某 commit 的摘要;没有返回 null */
+  getSummary(
+    repoId: number,
+    commitSha: string,
+    level: SummaryLevel,
+    targetId: string,
+  ): Promise<{ content: string; source: SummarySource } | null>;
   /** 写一条 llm_usage(每次 LLM 调用一条,含缓存命中与失败;T-210) */
   insertLlmUsage(row: LlmUsageInput): Promise<void>;
   /** 某任务的 llm_usage,按 id 升序 */
@@ -171,6 +180,8 @@ export interface LlmUsageRow extends LlmUsageInput {
 
 /** schema 的 level 枚举;module 层摘要与 dir 共用 'dir',targetId 用 m:… 区分 */
 export type SummaryLevel = 'function' | 'file' | 'dir' | 'repo';
+/** 摘要来源:模型生成 / 规则生成(熔断、预算降级、敏感文件等) */
+export type SummarySource = 'llm' | 'rule';
 export interface SummaryRow {
   level: SummaryLevel;
   /** 节点 id(f:/d:/m:)或 'repo' */
@@ -178,6 +189,10 @@ export interface SummaryRow {
   inputHash: string;
   /** 模型名;规则摘要为 'rule' */
   model: string;
+  /** T-211c:来源;复用旧行时保持原来源 */
+  source: SummarySource;
+  /** 所属 commit(listSummaries 读回时带上;写入时由 upsertSummary 的参数决定) */
+  commitSha?: string;
   content: string;
   tokensIn: number;
   tokensOut: number;

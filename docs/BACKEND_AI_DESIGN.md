@@ -191,10 +191,16 @@ CREATE TABLE edge (
 CREATE TABLE summary (
   id BIGINT PRIMARY KEY AUTO_INCREMENT, repo_id BIGINT NOT NULL,
   level ENUM('function','file','dir','repo') NOT NULL, target_id VARCHAR(255) NOT NULL,
-  input_hash CHAR(64) NOT NULL, model VARCHAR(64), content TEXT, tokens_in INT, tokens_out INT,
+  commit_sha CHAR(40) NOT NULL DEFAULT '',          -- T-211c:每个 commit 各存一份
+  input_hash CHAR(64) NOT NULL, model VARCHAR(64),
+  source ENUM('llm','rule') NOT NULL DEFAULT 'llm', -- T-211c:规则摘要(熔断/降级/敏感文件)为 rule
+  content TEXT, tokens_in INT, tokens_out INT,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE KEY uk_target (repo_id, level, target_id), KEY idx_input (input_hash)
+  UNIQUE KEY uk_target_commit (repo_id, level, target_id, commit_sha), KEY idx_input (input_hash)
 );
+-- T-211c 迁移 0001_summary_commit 可重复执行(MariaDB / MySQL 8.4):旧行 commit_sha 回填为 repo.last_commit,
+-- model='rule' 的行回填 source='rule'。唯一键保留 level:同一 target_id 理论上可在不同 level 各有一行。
+-- 复用:worker 读该仓库所有 commit 的摘要,输入哈希相同即复用,为当前 commit 写一份副本,content 与 source 保持原样。
 CREATE TABLE chat_session (
   id BIGINT PRIMARY KEY AUTO_INCREMENT, repo_id BIGINT NOT NULL, user_key VARCHAR(64),
   title VARCHAR(255), created_at DATETIME DEFAULT CURRENT_TIMESTAMP, KEY idx_user (user_key, id)
@@ -413,7 +419,7 @@ data: {"messageId":881,"citations":3,"droppedCitations":1,"usage":{"in":5210,"ou
 - `error`：`{code, message, retryable}`，`code` ∈ `LLM_UNAVAILABLE` / `BUDGET_EXCEEDED` / `REPO_NOT_READY` / `RATE_LIMITED`；发出后流立即结束，**不再发 `done`**。
 - `done` 里可带 `fallback:"retrieval"`（见下表）。
 
-**节点详情接口**：`GET /api/repos/:id/nodes/:nodeId` → `{id, kind, path, summary, exports[], loc, inDegree, outDegree, topDependents[]}`；摘要还没生成时 `summary` 为 `null`（来自 `summary` / `symbol` / `edge` 表，一次聚合查询，结果放 Redis 缓存）。
+**节点详情接口**：`GET /api/repos/:id/nodes/:nodeId` → `{id, kind, path, summary, summarySource, exports[], loc, inDegree, outDegree, topDependents[], inCycle}`；摘要按图所属 commit(任务的 `commitSha`)读取，还没生成时 `summary` 为 `null`；`summarySource` 为 `"llm"|"rule"`，`summary` 为 null 时为 null(T-211c)；`inCycle` 口径：取分析器的 SCC 成员集合(与图投影 `meta.cycles` 同源，`task.stats.cycles`)，file 节点在某个集合里为 true，module/dir 节点其下任一文件在某个集合里为 true，`x:` 外部包恒为 false（来自 `summary` / `symbol` / `edge` 表，一次聚合查询，结果放 Redis 缓存）。
 
 ---
 

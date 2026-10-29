@@ -242,9 +242,11 @@ data: {"code":"BUDGET_EXCEEDED","message":"今日 LLM 预算已用完","retryabl
 ```jsonc
 // GET /api/repos/:id/nodes/:nodeId   (例:nodeId = f:src/compose.ts)
 { "id": "f:src/compose.ts", "kind": "file", "path": "src/compose.ts",
-  "summary": "按洋葱模型串联中间件…",       // 摘要未生成时为 null
+  "summary": "按洋葱模型串联中间件…",       // 按图所属 commit 读取;未生成时为 null
+  "summarySource": "llm",                   // "llm" | "rule";summary 为 null 时为 null(T-211c)
   "exports": ["compose"], "loc": 72, "inDegree": 5, "outDegree": 2,
-  "topDependents": ["f:src/hono-base.ts", "f:src/context.ts"] }
+  "topDependents": ["f:src/hono-base.ts", "f:src/context.ts"],
+  "inCycle": false }                        // 在某个 SCC 成员集合中;module/dir 看其下文件;外部包恒 false
 ```
 
 ### 5.2 图数据 schema
@@ -323,8 +325,9 @@ CREATE TABLE edge (
 CREATE TABLE summary (
   id BIGINT PRIMARY KEY AUTO_INCREMENT, repo_id BIGINT NOT NULL,
   level ENUM('function','file','dir','repo') NOT NULL, target_id VARCHAR(255) NOT NULL,
-  input_hash CHAR(64) NOT NULL, model VARCHAR(64), content TEXT,
-  UNIQUE KEY uk_target (repo_id, level, target_id)
+  commit_sha CHAR(40) NOT NULL DEFAULT '',
+  input_hash CHAR(64) NOT NULL, model VARCHAR(64), source ENUM('llm','rule') NOT NULL DEFAULT 'llm', content TEXT,
+  UNIQUE KEY uk_target_commit (repo_id, level, target_id, commit_sha)   -- T-211c
 );
 CREATE TABLE code_chunk (                         -- 分块元数据 + BM25 回退;向量在 Qdrant
   id BIGINT PRIMARY KEY AUTO_INCREMENT, repo_id BIGINT NOT NULL, commit_sha CHAR(40) NOT NULL,

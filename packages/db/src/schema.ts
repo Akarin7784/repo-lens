@@ -157,15 +157,18 @@ export const summary = mysqlTable(
     repoId: ref('repo_id').notNull(),
     level: mysqlEnum('level', ['function', 'file', 'dir', 'repo']).notNull(),
     targetId: varchar('target_id', { length: 255 }).notNull(),
+    // T-211c:摘要按 commit 存;迁移 0001 对旧行回填为仓库 last_commit
+    commitSha: char('commit_sha', { length: 40 }).notNull().default(''),
     inputHash: char('input_hash', { length: 64 }).notNull(),
     model: varchar('model', { length: 64 }),
+    source: mysqlEnum('source', ['llm', 'rule']).notNull().default('llm'),
     content: text('content'),
     tokensIn: int('tokens_in'),
     tokensOut: int('tokens_out'),
     createdAt: createdAt(),
   },
   (t) => [
-    uniqueIndex('uk_target').on(t.repoId, t.level, t.targetId),
+    uniqueIndex('uk_target_commit').on(t.repoId, t.level, t.targetId, t.commitSha),
     index('idx_input').on(t.inputHash),
   ],
 );

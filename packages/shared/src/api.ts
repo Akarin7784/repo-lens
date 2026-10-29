@@ -76,6 +76,10 @@ export const NodeDetailSchema = z.object({
   inDegree: z.number().int().nonnegative(),
   outDegree: z.number().int().nonnegative(),
   topDependents: z.array(NodeIdSchema),
+  /** T-211c:摘要来源;summary 为 null 时为 null */
+  summarySource: z.enum(['llm', 'rule']).nullable(),
+  /** T-211c:节点是否处于某个环(SCC 成员集合)中;module/dir 为其下任一文件在环中 */
+  inCycle: z.boolean(),
 });
 
 /** POST /api/repos/:id/chat */

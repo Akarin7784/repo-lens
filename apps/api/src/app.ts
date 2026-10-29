@@ -292,7 +292,7 @@ export function buildApp(deps?: AppDeps): FastifyInstance {
     if (!NodeIdSchema.safeParse(nodeId).success)
       throw new HttpError('BAD_REQUEST', '节点 id 格式无效');
     const { ix, task } = await loadIndex(repoId);
-    const d = nodeDetail(ix, nodeId);
+    const d = nodeDetail(ix, nodeId, task.stats.cycles);
     if (!d) throw new HttpError('REPO_NOT_FOUND', '节点不存在');
     let exports: string[] = [];
     if (d.kind === 'file') {
@@ -302,10 +302,15 @@ export function buildApp(deps?: AppDeps): FastifyInstance {
       // 双保险:路径命中敏感规则的文件一律不返回导出名(内容规则在 worker 持久化时已过滤)
       if (row && !sensitivePathRule(d.path)) exports = await store.exportsOf(row.id);
     }
-    // summary 表不带 commit:返回该仓库最近一次分析写入的摘要;module 存在 level 'dir' 下
+    // T-211c:按图所属 commit 读摘要(module 存在 level 'dir' 下);没有摘要时来源为 null
     const level = d.kind === 'file' ? 'file' : d.kind === 'external' ? null : 'dir';
-    const summary = level ? await store.getSummary(repoId, level, nodeId) : null;
-    const res: NodeDetail = { ...d, exports, summary };
+    const s = level ? await store.getSummary(repoId, task.commitSha, level, nodeId) : null;
+    const res: NodeDetail = {
+      ...d,
+      exports,
+      summary: s?.content ?? null,
+      summarySource: s ? s.source : null,
+    };
     return res;
   });
 

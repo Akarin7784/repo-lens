@@ -23,6 +23,7 @@ import {
   type FileInput,
   type GraphInput,
   type Store,
+  type SummaryRow,
   type SymbolInput,
   type TaskStats,
 } from '@repolens/db';
@@ -414,9 +415,15 @@ export async function runSummaries(
       return null;
     }
   };
-  const existing = new Map(
-    (await store.listSummaries(repoId)).map((r) => [summaryKey(r.level, r.targetId), r]),
-  );
+  // 跨 commit 复用:同一节点每个 commit 各一行,按 `key#inputHash` 精确登记;
+  // 普通 key 优先登记当前 commit 的行(重跑同一 commit 时直接命中)
+  const existing = new Map<string, SummaryRow>();
+  for (const r of await store.listSummaries(repoId)) {
+    const k = summaryKey(r.level, r.targetId);
+    if (!existing.has(`${k}#${r.inputHash}`) || r.commitSha === commitSha)
+      existing.set(`${k}#${r.inputHash}`, r);
+    if (!existing.has(k) || r.commitSha === commitSha) existing.set(k, r);
+  }
   const task = await store.getTask(jobId);
   let last = 50;
   const r = await summarizeRepo(
@@ -438,7 +445,7 @@ export async function runSummaries(
       repoModel: config.llm.chatModel,
       repoId,
       taskId: task?.id,
-      save: (row) => store.upsertSummary(repoId, row),
+      save: (row) => store.upsertSummary(repoId, commitSha, row),
       onProgress: async (done, total) => {
         const pct = 50 + Math.floor((done / total) * 34);
         if (pct <= last) return;

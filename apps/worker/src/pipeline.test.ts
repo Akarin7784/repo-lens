@@ -190,6 +190,8 @@ describe('summarizing(T-211)', () => {
     expect(mod?.level).toBe('dir');
     expect(mod?.content).toMatch(/fake summary/);
     expect(rows.find((r) => r.level === 'repo')?.content.length).toBeGreaterThan(0);
+    // T-211c:按当前 commit 存,正常路径 source=llm
+    for (const r of rows) expect(r).toMatchObject({ commitSha: data.commitSha, source: 'llm' });
     const task = (await store.getTask(data.jobId))!;
     const usage1 = (await store.llmUsageByTask(task.id)).length;
     expect(usage1).toBe(rows.length);
@@ -224,6 +226,8 @@ describe('summarizing(T-211)', () => {
     const rows = await store.listSummaries(data.repoId);
     expect(rows.some((r) => r.model === 'rule')).toBe(true);
     for (const r of rows) expect(r.content.length).toBeGreaterThan(0);
+    // T-211c:熔断降级行 source=rule
+    for (const r of rows) expect(r.source).toBe(r.model === 'rule' ? 'rule' : 'llm');
   });
 });
 
