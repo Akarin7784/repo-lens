@@ -11,6 +11,15 @@
 // 只打印题目、命中与 usage;绝不打印 key(输出前抹掉)。向量缓存在 /tmp/rl-eval-vectors.json(只含公开仓库切块向量),
 // 按 embedding digest(模型 + revision + 切块版本 + 文本模板版本 + 每块内容 hash)判断复用,不按块数;
 // 改写缓存在 /tmp/rl-eval-rewrites.json,key = 问题 + 提示词版本 + 模型(同一问题重跑不再调模型)。
+// embedding 提供方(T-214c):EMBEDDING_PROVIDER=local(缺省,行为不变)| dashscope;dashscope 时模型/维度取
+//   DASHSCOPE_EMBEDDING_MODEL(缺省 text-embedding-v3)/ DASHSCOPE_EMBEDDING_DIM(缺省模型默认),
+//   key 只读 DASHSCOPE_API_KEY(不打印,输出前抹掉);开始行打印 provider、model、dim、collection。
+//   集合名 eval_<provider>_<model>_<请求维度>;dashscope 的向量缓存按集合名分文件,不与 local 混用。
+//   只用环境变量选择,不新增命令行覆盖参数。示例(key 事先 export 在环境里,不写进命令):
+//     调优集:EMBEDDING_PROVIDER=dashscope DASHSCOPE_EMBEDDING_MODEL=qwen3.7-text-embedding node scripts/rag-eval.mjs tuning
+//     v3(正式,只跑一次,不带 --commit/--prefix/--rows/--id-letter/--holdout-file):
+//       H3_DIR=/tmp/h3 EMBEDDING_PROVIDER=dashscope DASHSCOPE_EMBEDDING_MODEL=qwen3.7-text-embedding node scripts/rag-eval.mjs v3
+//     local 时仍需 EMBEDDING_MODEL_DIR;dashscope 时不需要。
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
@@ -38,6 +47,11 @@ import {
   chunksDigest,
   CURRENT_EMBEDDING_VERSIONS,
   DEFAULT_EMBEDDING_MODEL_REVISION,
+  DashscopeEmbedder,
+  selectEvalEmbedding,
+  evalEmbeddingLine,
+  evalVectorCacheFile,
+  makeEvalEmbedder,
 } from '../packages/rag/dist/index.js';
 import {
   DEFAULT_PRICES,
@@ -59,7 +73,10 @@ const HO = Object.hasOwn(HOLDOUTS, process.argv[2])
 const V2 = HO !== null;
 const SHA = V2 ? HO.commit : HONO_SHA;
 const key = process.env.DEEPSEEK_API_KEY?.trim() ?? '';
-const scrub = (s) => (key ? String(s).split(key).join('***') : String(s));
+const dsKey = process.env.DASHSCOPE_API_KEY?.trim() ?? '';
+const scrub = (s) => [key, dsKey].reduce((t, k) => (k ? t.split(k).join('***') : t), String(s));
+// embedding 选择只读环境变量(EMBEDDING_PROVIDER / DASHSCOPE_*);非法或缺 key 时这里就报错(只报变量名)
+const EMB = selectEvalEmbedding(process.env);
 const V2_RESULT = V2
   ? process.env[`${HO.name.toUpperCase()}_RESULT_FILE`] || `/tmp/rl-eval-${HO.name}-result.txt`
   : null;
@@ -171,7 +188,8 @@ const mainSha = execFileSync('git', [
   .toString()
   .trim();
 const modelDir = process.env.EMBEDDING_MODEL_DIR;
-if (!modelDir) throw new Error('需要 EMBEDDING_MODEL_DIR');
+if (EMB.provider === 'local' && !modelDir) throw new Error('需要 EMBEDDING_MODEL_DIR');
+out(evalEmbeddingLine(EMB));
 
 const ana = await analyzeRepo({ root, files: scanSourceFiles(root) });
 const files = ana.parsed.map((p) => ({ path: p.path, chunks: p.chunks, sensitive: p.sensitive }));
@@ -205,14 +223,19 @@ for (const c of chunks) {
   });
 }
 // 本地模型目录须是 Dockerfile 固定的 revision(EMBEDDING_MODEL_REVISION 可覆盖)
-const revision = process.env.EMBEDDING_MODEL_REVISION || DEFAULT_EMBEDDING_MODEL_REVISION;
-const emb = new OnnxEmbedder(
-  'Xenova/multilingual-e5-small',
-  modelDir,
-  undefined,
-  undefined,
-  revision,
-);
+const emb = makeEvalEmbedder(EMB, {
+  local: () =>
+    new OnnxEmbedder(
+      'Xenova/multilingual-e5-small',
+      modelDir,
+      undefined,
+      undefined,
+      process.env.EMBEDDING_MODEL_REVISION || DEFAULT_EMBEDDING_MODEL_REVISION,
+    ),
+  dashscope: (cfg) => new DashscopeEmbedder(cfg),
+});
+// local:模型 revision;dashscope:revision 即请求维度
+const revision = emb.revision;
 const digest = chunksDigest(emb, chunks);
 const V = CURRENT_EMBEDDING_VERSIONS;
 out(
@@ -220,20 +243,24 @@ out(
 );
 const vs = new MemoryVectorStore();
 // v2 用独立缓存文件,键除 digest(已含各版本)外再显式核对 commit、切块/拼接版本、模型修订与块数
-const cache = V2 ? `/tmp/rl-eval-vectors-${HO.name}.json` : '/tmp/rl-eval-vectors.json';
+// local 路径不变;dashscope 按集合名(provider+model+请求维度)分文件
+const cache = evalVectorCacheFile(EMB, V2 ? HO.name : null);
 const cached = existsSync(cache) ? JSON.parse(readFileSync(cache, 'utf8')) : null;
 const cacheKeyOk =
   !V2 ||
   (cached?.sha === SHA &&
     cached?.chunker === V.chunker &&
     cached?.embedText === V.embedText &&
-    cached?.revision === revision);
+    cached?.revision === revision &&
+    (EMB.provider === 'local' || cached?.collection === EMB.collection));
 if (cacheKeyOk && cached?.digest === digest && cached.points?.length === chunks.length) {
   for (const p of cached.points) vs.points.set(p.id, p);
   out(`EVAL vectors reused (digest match)`);
 } else {
   const t0 = Date.now();
-  await indexChunks({ repoId: 1, commitSha: SHA, chunks, batchSize: 16 }, emb, vs);
+  // local 沿用 16;dashscope 用配置批量(≤10 且 ≤ 模型文档上限)
+  const batchSize = EMB.dashscope ? EMB.dashscope.batchSize : 16;
+  await indexChunks({ repoId: 1, commitSha: SHA, chunks, batchSize }, emb, vs);
   writeFileSync(
     cache,
     JSON.stringify({
@@ -243,6 +270,7 @@ if (cacheKeyOk && cached?.digest === digest && cached.points?.length === chunks.
       chunker: V.chunker,
       embedText: V.embedText,
       revision,
+      ...(EMB.provider === 'local' ? {} : { provider: EMB.provider, collection: EMB.collection }),
       points: [...vs.points.values()],
     }),
   );
@@ -436,7 +464,7 @@ if (V2) {
   resultReady = true;
   if (FORCE) out(`EVAL ${HO.name} FORCE-RERUN(--force:结果文件此前已存在或被显式覆盖)`);
   out(
-    `EVAL ${HO.name} start main=${mainSha} ${HO.repo}=${SHA} prefix=${HO.prefix} idLetter=${HO.idLetter} rows=${HO.expectedRows} chunks=${chunks.length} chunker=${V.chunker} embedText=${V.embedText} model=${emb.model}@${revision} prompt=${REWRITE_PROMPT_VERSION} digest=${digest} llm=${cfg.provider}/${cfg.chatModel}`,
+    `EVAL ${HO.name} start main=${mainSha} ${HO.repo}=${SHA} prefix=${HO.prefix} idLetter=${HO.idLetter} rows=${HO.expectedRows} chunks=${chunks.length} chunker=${V.chunker} embedText=${V.embedText} model=${emb.model}@${revision} prompt=${REWRITE_PROMPT_VERSION} digest=${digest} llm=${cfg.provider}/${cfg.chatModel} embProvider=${EMB.provider} embModel=${EMB.model} dim=${EMB.dim} collection=${EMB.collection}`,
   );
 }
 for (const [id, q, want, syms] of SETS[setName]) {
