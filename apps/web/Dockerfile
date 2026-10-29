@@ -2,6 +2,9 @@
 FROM node:20-alpine AS build
 RUN corepack enable
 WORKDIR /app
+# rewrites 在构建时固定(next.config.mjs);compose 里 api 服务名为 api
+ARG API_PROXY_TARGET=http://api:4000
+ENV API_PROXY_TARGET=$API_PROXY_TARGET
 COPY . .
 RUN pnpm install --frozen-lockfile && pnpm turbo run build --filter=@repolens/web...
 FROM node:20-alpine

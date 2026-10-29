@@ -1,9 +1,12 @@
 # 对应 docs/ARCHITECTURE.md §6.1。只起基础设施:docker compose up -d mysql redis qdrant
 services:
   web:
-    build: { context: ., dockerfile: apps/web/Dockerfile }
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      # 构建时固定 /api/* 的转发目标(rewrites 不读运行时变量)
+      args: { API_PROXY_TARGET: 'http://api:4000' }
     ports: ['3000:3000']
-    environment: [API_BASE_URL=http://api:4000]
     restart: unless-stopped
     depends_on: [api]
   api:
