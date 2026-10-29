@@ -47,4 +47,7 @@ docker compose run --rm --no-deps -T worker node scripts/smoke-analyzer.mjs
 
 # 真实业务链路:提交 zustand 固定 commit → SSE 等 graph_ready/done → 校验图接口
 node scripts/ci-smoke-analyze.mjs
+
+# 经 web 代理访问 api(rewrites 必须指向 api,见 PR #18 评审)
+node scripts/ci-smoke-web-proxy.mjs
 echo "SMOKE PASS"
