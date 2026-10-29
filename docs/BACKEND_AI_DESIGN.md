@@ -423,7 +423,7 @@ event: done
 data: {"messageId":881,"sessionId":7,"droppedCitations":1,"retrieval":"hybrid","usage":{"in":5210,"out":402}}
 ```
 示例与 shared `chat.ts` 一致：`citation` = `{id, path, startLine, endLine, nodeId, moduleId?}`(`id` 是显示编号，不带片段编号);`done` = `{messageId, sessionId?, droppedCitations, fallback?, retrieval?, usage}`,`retrieval` 服务端始终填写;`sessionId` 在 P4(落库)之前不填,P4 起始终填写。
-引用流式处理(P3,`apps/api/src/chat/citations.ts`):`[[Sn:a-b]]` 从 token 文本中去掉,在标记原位置之后立即发 `citation`;`id` 按首次出现从 1 编号,同文件同(收缩后)范围沿用 id,每次出现都发事件;被剔除的标记只去文本、不发事件,计入 `droppedCitations`。
+引用流式处理(P3,`apps/api/src/chat/citations.ts`):`[[Sn:a-b]]` 从 token 文本中去掉,在标记原位置之后立即发 `citation`;`id` 按首次出现从 1 编号,同文件同(收缩后)范围沿用 id,每次出现都发事件;被剔除的标记只去文本、不发事件,计入 `droppedCitations`。单行标记 `[[Sn:a]]` 按 `a-a` 处理,合法;以 `[[S` 开头、`]]` 结尾但格式不合法的标记同样从文本剔除、不发 `citation`,计入 `droppedCitations`。
 错误分两层：开流前(参数非法 400、仓库不存在 404、未就绪 409、限流 429,其余 500 `INTERNAL` 通用码)用 HTTP 状态码 + `ApiError` JSON;开流后才用 SSE `error` 事件。不支持断流续传，SSE 不带事件 `id`,重试就是重新发同一个问题。
 `done.retrieval`（可选，`hybrid` | `keyword-only`，架构师定案）：向量路可用时 `hybrid`；`embeddingStatus` 不是 ready/reused 或查询时 Qdrant 不可用，只用关键词/精确匹配路做 RRF 时为 `keyword-only`，前端在回答下方显示「已降级为关键词检索」。约定见 ARCHITECTURE SSE `done` 一节。
 前端收到 `citation` 就高亮 `nodeId`，再沿 `parentId` 链把祖先节点展开或高亮。

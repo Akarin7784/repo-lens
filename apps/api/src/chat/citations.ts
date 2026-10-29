@@ -4,16 +4,20 @@ import type { Snippet } from './prompt.js';
 export type CitationOutput =
   { type: 'token'; text: string } | { type: 'citation'; citation: Citation };
 
-const MARKER = /^\[\[S(\d+):(\d+)-(\d+)\]\]/;
+/** 合法标记:[[Sn:a-b]],或单行 [[Sn:a]](按 a-a 处理) */
+const MARKER = /^\[\[S(\d+):(\d+)(?:-(\d+))?\]\]/;
+/** 以 [[S 开头、以 ]] 结束但格式不合法的标记:从文本剔除,不发 citation */
+const MALFORMED = /^\[\[S[^[\]\n]*\]\]/;
 /** 可能是标记前缀(还没收完)的尾巴;不匹配就当普通文本 */
-const PARTIAL = /^\[(?:\[(?:S(?:\d+(?::(?:\d+(?:-(?:\d+(?:\]?)?)?)?)?)?)?)?)?$/;
+const PARTIAL = /^\[(?:\[(?:S[^[\]\n]*\]?)?)?$/;
 /** 防止异常长的数字串一直卡在缓冲里 */
 const MAX_PENDING = 64;
 
 /**
  * 流式引用解析 + 校验(纯逻辑,无 IO)。
- * - 从 token 文本中去掉 [[Sn:a-b]],在标记原位置之后产出 citation;
+ * - 从 token 文本中去掉 [[Sn:a-b]]([[Sn:a]] 视为 a-a),在标记原位置之后产出 citation;
  * - 范围收缩到与片段 Sn 的交集,无交集 / 未知 Sn / a>b / 行号 0 则剔除(只去文本,不产出事件);
+ * - 以 [[S 开头、]] 结尾但格式不合法的标记同样从文本剔除、计入 dropped,不产出事件;
  * - citation.id 是显示编号,按 (path, 收缩后范围) 首次出现从 1 分配,重复出现沿用 id 但每次都产出事件;
  * - 模型输出的路径从不使用,path/nodeId 只取自片段。
  */
@@ -54,10 +58,18 @@ export class CitationStream {
       if (m) {
         if (text) out.push({ type: 'token', text });
         text = '';
-        const c = this.validate(Number(m[1]), Number(m[2]), Number(m[3]));
+        const c = this.validate(Number(m[1]), Number(m[2]), Number(m[3] ?? m[2]));
         if (c) out.push({ type: 'citation', citation: c });
         else this.dropped++;
         s = s.slice(m[0].length);
+        continue;
+      }
+      const bad = MALFORMED.exec(s);
+      if (bad && bad[0].length <= MAX_PENDING) {
+        if (text) out.push({ type: 'token', text });
+        text = '';
+        this.dropped++;
+        s = s.slice(bad[0].length);
         continue;
       }
       if (!final && s.length <= MAX_PENDING && PARTIAL.test(s)) break;

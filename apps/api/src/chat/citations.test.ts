@@ -82,7 +82,7 @@ describe('CitationStream', () => {
   });
 
   it('不像标记的方括号原样保留;流结束时半截标记当文本', () => {
-    expect(run(['arr[0] 和 [[x]] 以及 [[S1:1]]']).text).toBe('arr[0] 和 [[x]] 以及 [[S1:1]]');
+    expect(run(['arr[0] 和 [[x]] 以及 [S1:1]']).text).toBe('arr[0] 和 [[x]] 以及 [S1:1]');
     const r = run(['结尾[[S1:1']);
     expect(r.text).toBe('结尾[[S1:1');
     expect(r.cites).toEqual([]);
@@ -98,5 +98,18 @@ describe('CitationStream', () => {
     const { text, cites } = run(['[[S1:12-13]](/etc/passwd)']);
     expect(cites[0]?.path).toBe('src/db/index.ts');
     expect(text).toBe('(/etc/passwd)');
+  });
+  it('单行标记 [[Sn:a]] 按 a-a 处理,合法', () => {
+    const { text, cites } = run(['见[[S1:1', '2]]处']);
+    expect(text).toBe('见处');
+    expect(cites.map((c) => [c.startLine, c.endLine])).toEqual([[12, 12]]);
+  });
+
+  it('格式不合法的 [[S…]] 标记从文本剔除,不发 citation,计入 dropped', () => {
+    const s = new CitationStream(snippets);
+    const out = [...s.push('a[[S1]]b[[S1:x-2]]c[[S1:'), ...s.push('3-]]d[[Sabc]]e'), ...s.end()];
+    expect(out.filter((o) => o.type === 'citation')).toEqual([]);
+    expect(out.map((o) => (o.type === 'token' ? o.text : '')).join('')).toBe('abcde');
+    expect(s.dropped).toBe(4);
   });
 });
