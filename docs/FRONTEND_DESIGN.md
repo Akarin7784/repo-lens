@@ -223,6 +223,8 @@ function aggregateEdges(raw: GraphEdge[], visibleAncestor: (id: string) => strin
 
 > T-004 已实现：单击选中（选中节点 `--accent-strong` 2px 描边 + 引用高亮底色，一跳邻居保持不透明，相连边加粗并改用 `--accent-strong`，其余节点/边淡出到 15%，展开后的容器不淡出）、▸ 与双击展开、Esc/点击空白取消。右栏详情尚未实现，暂由左下状态条显示所选节点路径与依赖/被依赖条数；`?node=`、文件树联动、Shift 多选未实现。
 
+> T-222 已实现右栏 `<NodeDetail>`（`apps/web/components/detail/NodeDetail.tsx`）：调用 `GET /api/repos/:id/nodes/:nodeId`，显示面包屑、类型、摘要、LOC/入度/出度、导出符号、`topDependents`，以及当前图中可见层级的一跳依赖/被依赖（接口本身只返回 `topDependents`）。列表项可点击跳转：目标未加载时按 suggestedFocus 同一套逐层展开后再选中。摘要为 `null` 时显示骨架并在 `done` 后重新请求，空字符串显示「暂无摘要」；接口没有摘要来源字段，所以不区分规则摘要和模型摘要。切换节点时取消旧请求并丢弃过期响应；`?node=` 已写入 URL，进入页面时会读取。`inCycle`、文件树联动、「问问这个模块」仍未实现。
+
 详情面板内容（`<NodeDetail>`）：
 - 头部：图标 + 路径面包屑（可点，用于跳转父节点）+ 类型标签。
 - 摘要：LLM 生成的 `summary`。为 `null`（摘要还没生成，后台仍在 summarizing）时显示 3 行骨架屏，收到 `done` 进度事件后重新请求。
