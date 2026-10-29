@@ -1,7 +1,7 @@
 # qwen3.7 embedding 选型:调优集结果
 
 > 本节(规则)在开跑前写定,经面试助手确认后才跑;跑完不改本节。
-> 状态:**规则已确认;A、B 各跑一次,已完成;结论选 A(差距在噪声范围内);冻结待做。不得写成「检索已验收」,须等 v3 通过。**
+> 状态:**规则已确认;A、B 各跑一次,已完成;结论选 A(差距在噪声范围内);默认模型冻结见 #104。不得写成「检索已验收」,须等 v3 通过。**
 
 ## 一、规则(架构师 + 面试助手,2026-10-29)
 1. **变量只有模型,维度固定 1024。** 两个模型的设置:
@@ -109,3 +109,13 @@
 - 本文件由 box 上的 notes 复制入库;日志原文不入库(日志留在本地 `notes/tuning-logs/`),只保留规则要求逐字记录的命令、start 行、usage 行、total 行。
 - 运行基线仍为 main `786024a`;入库 PR 开时的 main 也是 `786024a`。
 - 本次运行实际使用的 base_url 未记录,**未验证**。
+
+## 七、预分析 / 演示检查清单(冻结后)
+1. **#104 合并后**在演示机重跑 demo-prep:hono / zustand / zod / trpc 与 h3,都用冻结后的默认模型重新索引。
+2. 逐个确认每个任务的 **task.stats** 含:
+   - `embeddingStatus` 为 `ready` 或 `reused`(任务 stats **没有**单独的 `status` 字段;进度字段 `status` 是 queued/running/done/failed,与向量无关)
+   - `embeddingProvider=dashscope`
+   - `embeddingModel=qwen3.7-text-embedding`
+   - `embeddingDim=1024`
+   说明:`GET /api/repos/:id` 目前只透出 `embeddingStatus` 与 `embeddingProvider`;`embeddingModel` / `embeddingDim` 仍在任务 stats 里,预分析检查应读任务 stats,或 GET 后再查库。缺任一项就对该仓重索引。否则聊天会静默变成 keyword-only(见 #101:缺 model/dim 的旧 dashscope 任务会被当成不同源)。
+3. 演示时看问答 SSE 的 `done.retrieval`(**不是** `embeddingStatus`),确认不是 `keyword-only`;一旦中了就换题或切录屏,不现场解释。**不写「检索已验收」**,须等 v3 通过。
