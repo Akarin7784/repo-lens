@@ -43,9 +43,9 @@ describe('mysqlServerRootUrl / mysqlUrlWithDb', () => {
   });
 
   it('换库名', () => {
-    expect(mysqlUrlWithDb('mysql://root:dev@127.0.0.1:3306/repolens_test', 'repolens_mig_test')).toBe(
-      'mysql://root:dev@127.0.0.1:3306/repolens_mig_test',
-    );
+    expect(
+      mysqlUrlWithDb('mysql://root:dev@127.0.0.1:3306/repolens_test', 'repolens_mig_test'),
+    ).toBe('mysql://root:dev@127.0.0.1:3306/repolens_mig_test');
   });
 });
 
