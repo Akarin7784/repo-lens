@@ -19,6 +19,7 @@
 - 迁移:`packages/db/migrations/0000–0003`,由 **api 启动时执行**(GET_LOCK 互斥),worker 用 waitForSchema 等待。CI `smoke` 作业用仓库 compose 起 `mysql:8.4` 并跑通 api 启动与分析链路(`scripts/ci-smoke.sh`),所以 0000–0003 在 CI 的 MySQL 8.4 **空库**上执行过;已有数据的库上升级未验证。演示机仍要跑一遍(见清单)。
 - Dockerfile:api/web 为 node:20-alpine;worker 为 node:20-bookworm-slim,构建时默认下载 e5 本地模型(约 490 MB)。dashscope 下能否跳过本地模型的代码核对(`apps/worker/src/index.ts` 42–51 行):`EMBEDDER=onnx` 时启动即构造 `OnnxEmbedder`(是否在构造时就读 `/models` 未核对);有 `DASHSCOPE_API_KEY` 时实际用 DashscopeEmbedder;**无 key 时退回 baseEmbedder**(onnx 或 fake),与「缺 key 记 skipped」的约定是否一致需在 PR 里复核。结论:现状不能保证 dashscope 下完全不读 `/models`,所以演示镜像先按默认下载 e5。
 - **更新(fix/worker-skip-models-dashscope)**:worker 的 embedder 选择移到 `apps/worker/src/embedder-select.ts` 的 `selectEmbedder`。`EMBEDDING_PROVIDER=dashscope` 时不论 `EMBEDDER` 取值都不构造 `OnnxEmbedder`、不读 `EMBEDDING_MODEL_DIR`(`/models`);model/dim 只取 `DASHSCOPE_EMBEDDING_MODEL`/`_DIM`(与 api 同一 `readEmbeddingConfig`);缺 key 时用只报错的占位(维度按配置),向量化记 skipped,不再退回本地/假向量。单测见 `embedder-select.test.ts`。`EMBEDDING_MODEL_DOWNLOAD=0` 镜像的 CI smoke 尚未做,演示镜像仍按默认下载 e5,直到 smoke 通过。
+- **跟进项(#121 之后)**:dashscope 演示路径代码上已不需要 e5 模型,worker 镜像用 `EMBEDDING_MODEL_DOWNLOAD=0` 构建可省约 490 MB 和对应构建时间;前提是先用 dashscope+假 key 跑通 smoke。「DOWNLOAD=0 镜像 + smoke」作为跟进项,部署前不强行改。
 
 - web:`compress: false`(为 SSE 关压缩),`/api/*` 由 Next rewrites 在构建期固定到 `http://api:4000`;字体随仓库打包(#68)。
 - api:`trustProxy: true`,限流按 `req.ip`;SSE 心跳 `pingIntervalMs` 默认 15 s。

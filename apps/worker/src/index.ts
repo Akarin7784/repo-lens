@@ -2,13 +2,8 @@ import { Worker } from 'bullmq';
 import { Redis } from 'ioredis';
 import { DEFAULT_PRICES, LlmGateway, createLlmClient } from '@repolens/agent';
 import { MysqlStore, redisKeys, waitForSchema } from '@repolens/db';
-import {
-  CachedEmbedder,
-  MeteredEmbedder,
-  qdrantCollectionFor,
-  QdrantVectorStore,
-} from '@repolens/rag';
-import { selectEmbedder } from './embedder-select.js';
+import { CachedEmbedder, qdrantCollectionFor, QdrantVectorStore } from '@repolens/rag';
+import { buildEmbeddingDeps, selectEmbedder } from './embedder-select.js';
 import { loadConfig } from './config.js';
 import { RedisEventSink } from './events.js';
 import { ANALYZE_QUEUE, processAnalyzeJob, type AnalyzeJobData } from './queue.js';
@@ -41,8 +36,10 @@ const ds = emb.dashscope;
 // EMBEDDING_PROVIDER=dashscope 时不构造 OnnxEmbedder、不读 /models;无 key → 向量化记 skipped 并告警(不打印 key)
 const { base: baseEmbedder, dashscope } = selectEmbedder(emb);
 const embedder = new CachedEmbedder(baseEmbedder, redis);
+const embeddingDeps = buildEmbeddingDeps(emb, dashscope, redis);
 // 每个提供方 / 维度一个集合,local 仍是 QDRANT_COLLECTION(默认 code_chunks)
 const collection = emb.qdrant ? qdrantCollectionFor(emb.qdrant.collection, ds) : null;
+// 缺 key 时向量库不会被使用:embeddingSkipReason='no-key' 使向量化整段跳过,不建集合、不写入
 const vectorStore = emb.qdrant
   ? new QdrantVectorStore({ ...emb.qdrant, collection: collection!, dim: embedder.dim })
   : undefined;
@@ -73,10 +70,7 @@ const worker = new Worker<AnalyzeJobData>(
       gateway,
       embedder,
       vectorStore,
-      embeddingSkipReason: ds && !ds.apiKey ? 'no-key' : undefined,
-      taskEmbedder: dashscope
-        ? (meter) => new CachedEmbedder(new MeteredEmbedder(dashscope, meter), redis)
-        : undefined,
+      ...embeddingDeps,
       onGraphPersisted: invalidateGraphCache,
     }),
   { connection: redis.duplicate(), concurrency: config.concurrency },

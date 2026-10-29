@@ -1,6 +1,20 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DashscopeEmbedder, FakeEmbedder, readEmbeddingConfig, type Embedder } from '@repolens/rag';
-import { selectEmbedder, UnavailableEmbedder, type EmbedderCtors } from './embedder-select.js';
+import {
+  DashscopeEmbedder,
+  FakeEmbedder,
+  MemoryEmbeddingKv,
+  readEmbeddingConfig,
+  TaskBudgetMeter,
+  type Embedder,
+} from '@repolens/rag';
+import {
+  buildEmbeddingDeps,
+  selectEmbedder,
+  UnavailableEmbedder,
+  type EmbedderCtors,
+} from './embedder-select.js';
 
 const FAKE_KEY = 'test-key-not-real';
 const MISSING_DIR = '/nonexistent-models-dir-for-test';
@@ -102,5 +116,54 @@ describe('selectEmbedder', () => {
     const api = new DashscopeEmbedder({ ...a, apiKey: FAKE_KEY });
     expect([base.model, base.dim, base.provider]).toEqual([api.model, api.dim, api.provider]);
     expect(base.dim).toBe(a.dim);
+  });
+});
+
+describe('buildEmbeddingDeps', () => {
+  it('dashscope 缺 key:embeddingSkipReason=no-key,taskEmbedder 为 undefined', () => {
+    const emb = readEmbeddingConfig({ EMBEDDING_PROVIDER: 'dashscope' });
+    const { dashscope } = selectEmbedder(emb, spies().ctors);
+    const d = buildEmbeddingDeps(emb, dashscope, new MemoryEmbeddingKv());
+    expect(d.embeddingSkipReason).toBe('no-key');
+    expect(d.taskEmbedder).toBeUndefined();
+  });
+
+  it('dashscope 有 key:有 taskEmbedder(计量 + 百炼),无 skip reason', async () => {
+    const emb = readEmbeddingConfig({
+      EMBEDDING_PROVIDER: 'dashscope',
+      DASHSCOPE_API_KEY: FAKE_KEY,
+    });
+    const s = spies();
+    const { dashscope } = selectEmbedder(emb, s.ctors);
+    const d = buildEmbeddingDeps(emb, dashscope, new MemoryEmbeddingKv());
+    expect(d.embeddingSkipReason).toBeUndefined();
+    expect(d.taskEmbedder).toBeTypeOf('function');
+    const meter = new TaskBudgetMeter(50);
+    const e = d.taskEmbedder!(meter);
+    expect([e.provider, e.model, e.dim]).toEqual([
+      dashscope!.provider,
+      dashscope!.model,
+      dashscope!.dim,
+    ]);
+    await e.embedDocuments(['a']);
+    expect(meter.requests).toBeGreaterThan(0);
+    expect(s.urls.every((u) => u.endsWith('/embeddings'))).toBe(true);
+  });
+
+  it('local:两项都 undefined', () => {
+    const emb = readEmbeddingConfig({ EMBEDDER: 'fake' });
+    const d = buildEmbeddingDeps(emb, null, new MemoryEmbeddingKv());
+    expect(d).toEqual({ embeddingSkipReason: undefined, taskEmbedder: undefined });
+  });
+});
+
+describe('index.ts 装配', () => {
+  // index.ts 是有副作用的入口(连 Redis/MySQL),不能直接 import;这里核对源码确实改调纯函数,防止改回内联推导
+  it('使用 buildEmbeddingDeps,且不再内联 no-key / MeteredEmbedder 推导', () => {
+    const src = readFileSync(fileURLToPath(new URL('./index.ts', import.meta.url)), 'utf8');
+    expect(src).toMatch(/buildEmbeddingDeps\(emb, dashscope, redis\)/);
+    expect(src).toMatch(/\.\.\.embeddingDeps/);
+    expect(src).not.toMatch(/embeddingSkipReason:/);
+    expect(src).not.toMatch(/new MeteredEmbedder/);
   });
 });

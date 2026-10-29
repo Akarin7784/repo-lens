@@ -1,5 +1,9 @@
 import {
+  CachedEmbedder,
   DashscopeEmbedder,
+  MeteredEmbedder,
+  type EmbeddingKv,
+  type TaskBudgetMeter,
   FakeEmbedder,
   OnnxEmbedder,
   type EmbeddingConfig,
@@ -56,4 +60,27 @@ export function selectEmbedder(
     };
   }
   return { base: emb.provider === 'onnx' ? ctors.onnx(emb) : new FakeEmbedder(), dashscope: null };
+}
+
+/**
+ * processAnalyzeJob 里与 embedding 提供方相关的两项依赖。
+ * dashscope 缺 key → embeddingSkipReason='no-key'、无 taskEmbedder(向量化整段跳过,向量库不会被使用);
+ * 有 key → 每任务一个计量 embedder;local → 两项都 undefined(用共享 embedder)。
+ */
+export function buildEmbeddingDeps(
+  emb: EmbeddingConfig,
+  dashscope: DashscopeEmbedder | null,
+  kv: EmbeddingKv,
+): {
+  embeddingSkipReason: 'no-key' | undefined;
+  taskEmbedder: ((meter: TaskBudgetMeter) => Embedder) | undefined;
+} {
+  const ds = emb.dashscope;
+  return {
+    embeddingSkipReason: ds && !ds.apiKey ? 'no-key' : undefined,
+    taskEmbedder:
+      ds && dashscope
+        ? (meter) => new CachedEmbedder(new MeteredEmbedder(dashscope, meter), kv)
+        : undefined,
+  };
 }
