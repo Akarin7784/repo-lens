@@ -542,6 +542,25 @@ describe('网关 → DeepSeekClient.stream → llm_usage', () => {
     expect(warns[0]!.obj).toMatchObject({ costMicroUsd: cost });
   });
 
+  it('addSpend 部分成功(日预算 INCRBY 后 expire 抛错):LlmError,补行带真实 cost(日预算已扣)', async () => {
+    handler = script([delta('ok'), usageChunk(), DONE]);
+    const { g, rows, warns } = gw();
+    const kv = (g as unknown as { o: { kv: MemoryLlmKv } }).o.kv;
+    const boom = new Error('redis expire down');
+    kv.expire = async () => {
+      throw boom;
+    };
+    const err = (await failure(drain(g.stream(greq)))) as LlmError;
+    expect(err.code).toBe('LLM_UNAVAILABLE');
+    expect(err.cause).toBe(boom);
+    const cost = costMicroUsd(DEFAULT_PRICES['deepseek-flash']!, 1000, 200, 600);
+    expect(await g.spentToday()).toBe(cost);
+    expect(rows()).toEqual([
+      expect.objectContaining({ ok: false, tokensIn: 1000, tokensOut: 200, costMicroUsd: cost }),
+    ]);
+    expect(warns.map((w) => w.msg)).toEqual(['llm usage insert failed after spend counted']);
+  });
+
   it('catch 里 failRow 抛错:只打 warn,原错误(cause 为流错误)不被掩盖', async () => {
     handler = script([delta('ok'), finish('stop')]);
     const { g, rows, usage, warns } = gw();

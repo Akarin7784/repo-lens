@@ -507,6 +507,8 @@ T-210 已实现的部分（不依赖 D1）：
   - `addSpend` 已成功、insert 失败:补行带真实 token 与 `cost_micro_usd`,另打一条 warn `llm usage insert failed after spend counted`(带 costMicroUsd,便于对账);`addSpend` 自己失败(预算未计):补行 cost 为 0。
   - 为什么补行带真实 cost 不会重复计预算:预算只读 Redis `llm:spend:day:*` / `llm:spend:task:*`(`gateway.ts` `spentToday`/`spentByTask`/`addSpend`,唯一的 INCRBY 写入点在 `addSpend`);`llm_usage` 只做审计。全仓库 `git grep` 查 `llm_usage|llmUsage|cost_micro_usd|incrby|llmSpend`(不含 docs/*.md 与测试):读 `llm_usage` 的只有 `packages/db/src/mysql-store.ts:192` 与 `memory-store.ts:132` 的 `llmUsageByTask`,调用方全部是测试;没有对账、重建预算、统计接口或脚本把它的 cost 累加回预算。以后如果加了这类汇总,这里要改回补行 cost=0、只在 warn 里带 cost。
   - 补行自己也失败(`failRowSafe` 内部 catch):只打 warn `llm usage failure row write failed`(带 costMicroUsd),不盖原错误、不让流式 `return()` 抛错;这次调用在 `llm_usage` 里**没有行**,花费只留在 Redis 预算计数与这条 warn 日志里。
+  - 「已计入」以 `addSpend` 的 `mark.counted` 为准:日预算第一次 INCRBY 成功即置位(cost≤0 视为已计入);之后 expire 或任务预算 INCRBY 抛错时日预算已扣,补行照样带真实 cost(`complete()` 与 `stream()` 同口径)。
+  - 记账成功后写缓存(`kv.set`)失败、缓存命中时写命中行失败:都只打结构化 warn(`llm cache write failed` / `llm usage cache-hit row write failed`,只带归属、token、err.message,不含正文/key/IP),照常返回结果、不抛错,避免 summarize 重试导致再调模型再计费;命中行写失败时这次命中在 `llm_usage` 里没有行。
 - 记账：每次调用写 `llm_usage`；费用按价格表（每百万 token 美元）换算成 micro-USD 并向上取整；不在价格表里的模型拒绝调用。模型失败写 `ok=0` 并抛 `LLM_UNAVAILABLE`，重试与规则降级由调用方（T-211，D6）负责。
 - `FakeLlm`：确定性输出、不联网、不需要 key；`LLM_PROVIDER` 默认 `fake`。
 
