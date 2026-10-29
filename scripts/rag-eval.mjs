@@ -12,6 +12,11 @@ import {
   MemoryVectorStore,
   buildChunks,
   hybridSearch,
+  buildKeywordIndex,
+  bm25,
+  exactMatches,
+  tokenize,
+  stem,
   indexChunks,
   pointId,
 } from '../packages/rag/dist/index.js';
@@ -99,7 +104,10 @@ const SETS = {
 
 const setName = process.argv[2];
 const fake = process.argv.includes('--fake-llm') || !key;
-if (!SETS[setName]) throw new Error('用法: rag-eval.mjs <tuning|holdout|s1> [--fake-llm]');
+const DIAG = setName === 'diag-s1';
+const ATTRIB = setName === 'attrib';
+if (!SETS[setName] && !DIAG && !ATTRIB)
+  throw new Error('用法: rag-eval.mjs <tuning|holdout|s1> [--fake-llm]');
 const root = process.env.HONO_DIR ?? '/tmp/hono';
 const head = execFileSync('git', ['-C', root, 'rev-parse', 'HEAD']).toString().trim();
 if (head !== SHA) throw new Error(`hono HEAD ${head} != ${SHA}`);
@@ -149,6 +157,7 @@ if (existsSync(cache) && JSON.parse(readFileSync(cache, 'utf8')).n === chunks.le
   out(`EVAL embedded ${chunks.length} chunks in ${((Date.now() - t0) / 1000).toFixed(0)}s`);
 }
 
+const byId = new Map(rows.map((c) => [c.qdrantPointId, c]));
 const env = { ...process.env, LLM_PROVIDER: fake ? 'fake' : 'deepseek' };
 const cfg = readLlmConfig(env);
 const client = fake ? new FakeLlm() : createLlmClient(cfg, { env });
@@ -165,11 +174,141 @@ const okFile = (path, want) =>
 const fileLevel = setName === 'tuning'; // 调参题只给「参考」位置,按文件判定
 const okHit = (h, want, syms) =>
   okFile(h.path, want) && (fileLevel || !syms || h.symbol === null || syms.includes(h.symbol));
+// 归因(只读,不调参):未命中题各路在完整列表中的名次;候选数与 hybridSearch 默认一致(50)
+if (ATTRIB) {
+  const ids = new Set(['H2', 'H4', 'H7', 'H8', 'S1', '英3']);
+  const qs = [...SETS.tuning, ...SETS.holdout, ...SETS.s1].filter((x) => ids.has(x[0]));
+  const idx = buildKeywordIndex(rows);
+  const N = rows.length;
+  for (const [id, q, want, syms] of qs) {
+    const judge = id[0] === '英' ? (c) => okFile(c.path, want) : (c) => okHit(c, want, syms);
+    const fileOnly = (c) => okFile(c.path, want);
+    let log;
+    const rewritten = await rewriteQuery(q, {
+      gateway,
+      model: cfg.chatModel,
+      log: (l) => (log = l),
+    });
+    const kwQuery = rewritten === q ? q : `${rewritten} ${q}`;
+    const vR = (await vs.search(1, SHA, await emb.embedQuery(rewritten), N)).map((h) =>
+      byId.get(h.id),
+    );
+    const vO = (await vs.search(1, SHA, await emb.embedQuery(q), N)).map((h) => byId.get(h.id));
+    const kw = bm25(idx, kwQuery, N).map(([i]) => rows[i]);
+    const ex = exactMatches(rows, kwQuery, N).map((i) => rows[i]);
+    const fu = (
+      await hybridSearch({
+        repoId: 1,
+        commitSha: SHA,
+        question: q,
+        rewritten,
+        chunks: rows,
+        embeddingStatus: 'ready',
+        embedder: emb,
+        vectorStore: vs,
+        limit: N,
+      })
+    ).hits;
+    const r = (l, f) => {
+      const i = l.findIndex(f);
+      return i < 0 ? '无' : i + 1;
+    };
+    out(`ATTRIB ${id} rw="${rewritten}" used=${log?.used ?? false}`);
+    out(
+      `   判定命中 名次: 向量(改写)=${r(vR, judge)} 向量(原问题)=${r(vO, judge)} BM25=${r(kw, judge)} 精确=${r(ex, judge)} RRF=${r(fu, judge)}`,
+    );
+    out(
+      `   仅文件   名次: 向量(改写)=${r(vR, fileOnly)} 向量(原问题)=${r(vO, fileOnly)} BM25=${r(kw, fileOnly)} 精确=${r(ex, fileOnly)} RRF=${r(fu, fileOnly)}`,
+    );
+  }
+  process.exit(0);
+}
+// S1 诊断(只读,不改检索逻辑):各路 top10 与正确文件名次
+if (DIAG) {
+  const [, q, want] = SETS.s1[0];
+  const isRouterImpl = (path) => path.startsWith('src/router/') && !path.includes('.test.');
+  const rank = (list) => {
+    const i = list.findIndex((c) => isRouterImpl(c.path));
+    return i < 0 ? '>10' : String(i + 1);
+  };
+  const exactWant = (list) => {
+    const i = list.findIndex((c) => want.includes(c.path) && c.symbol === 'match');
+    return i < 0 ? '>10' : String(i + 1);
+  };
+  const show = (name, list, extra = () => '') => {
+    out(
+      `DIAG ${name}: 首个 src/router/ 实现名次=${rank(list)} 首个应命中 match 名次=${exactWant(list)}`,
+    );
+    for (const [i, c] of list.entries())
+      out(`   ${i + 1}. ${c.path}:${c.startLine}-${c.endLine} ${c.symbol ?? '-'}${extra(c, i)}`);
+  };
+  let log;
+  const rewritten = await rewriteQuery(q, { gateway, model: cfg.chatModel, log: (l) => (log = l) });
+  out(
+    `DIAG q="${q}" rewritten="${rewritten}" used=${log?.used} costMicroUsd=${log?.costMicroUsd ?? 0}`,
+  );
+  const kwQuery = rewritten === q ? q : `${rewritten} ${q}`;
+  const idx = buildKeywordIndex(rows);
+  out(`DIAG tokens(kwQuery)=${JSON.stringify(tokenize(kwQuery).map(stem))}`);
+  const vec = async (text) =>
+    (await vs.search(1, SHA, await emb.embedQuery(text), 10)).map((h) => byId.get(h.id));
+  show('向量(改写后)', await vec(rewritten));
+  show('向量(原问题,不改写)', await vec(q));
+  const kw = bm25(idx, kwQuery, 10);
+  show(
+    'BM25(改写+原问题)',
+    kw.map(([i]) => rows[i]),
+    (c, i) => ` bm25=${kw[i][1].toFixed(2)}`,
+  );
+  const kwO = bm25(idx, q, 10);
+  show(
+    'BM25(仅原问题)',
+    kwO.map(([i]) => rows[i]),
+  );
+  show(
+    '精确匹配',
+    exactMatches(rows, kwQuery, 10).map((i) => rows[i]),
+  );
+  for (const [label, rw] of [
+    ['RRF(改写)', rewritten],
+    ['RRF(不改写)', q],
+  ]) {
+    const r = await hybridSearch({
+      repoId: 1,
+      commitSha: SHA,
+      question: q,
+      rewritten: rw,
+      chunks: rows,
+      embeddingStatus: 'ready',
+      embedder: emb,
+      vectorStore: vs,
+      limit: 10,
+    });
+    show(label, r.hits, (c) => ` rrf=${c.score.toFixed(4)} [${c.sources.join(',')}]`);
+  }
+  // 正确文件在完整列表中的名次(不截断)
+  const full = (await vs.search(1, SHA, await emb.embedQuery(rewritten), rows.length)).map((h) =>
+    byId.get(h.id),
+  );
+  const fullO = (await vs.search(1, SHA, await emb.embedQuery(q), rows.length)).map((h) =>
+    byId.get(h.id),
+  );
+  const fullK = bm25(idx, kwQuery, rows.length).map(([i]) => rows[i]);
+  for (const w of want) {
+    const r1 = (l) => {
+      const i = l.findIndex((c) => c.path === w && c.symbol === 'match');
+      return i < 0 ? '无' : i + 1;
+    };
+    out(
+      `DIAG 全量名次 ${w} match: 向量(改写)=${r1(full)} 向量(原问题)=${r1(fullO)} BM25=${r1(fullK)}`,
+    );
+  }
+  process.exit(0);
+}
 let top5 = 0;
 let top1 = 0;
 let calls = 0;
 let cost = 0;
-const byId = new Map(rows.map((c) => [c.qdrantPointId, c]));
 const per = { 中: [0, 0, 0, 0, 0], 英: [0, 0, 0, 0, 0], H: [0, 0, 0, 0, 0], S: [0, 0, 0, 0, 0] };
 for (const [id, q, want, syms] of SETS[setName]) {
   let log;
