@@ -167,6 +167,54 @@ describe.skipIf(!hasRedis)('路由(真实 Redis + 内存 Store)', () => {
     await app.close();
   });
 
+  it.each([
+    ['缺 repoUrl', { ref: 'main' }],
+    ['空对象', {}],
+    ['ref 为空串', { repoUrl: 'https://github.com/a/b', ref: '' }],
+    ['ref 非字符串', { repoUrl: 'https://github.com/a/b', ref: 1 }],
+    ['未知结构', [1, 2]],
+  ])('400 BAD_REQUEST(非仓库地址的校验错误): %s', async (_n, payload) => {
+    const app = make();
+    const r = await app.inject({ method: 'POST', url: '/api/repos', payload });
+    expect(r.statusCode).toBe(400);
+    expect(r.json().error.code).toBe('BAD_REQUEST');
+    await app.close();
+  });
+
+  it('repoUrl 非字符串仍是 INVALID_REPO_URL;非法 JSON 是 BAD_REQUEST', async () => {
+    const app = make();
+    const r1 = await app.inject({ method: 'POST', url: '/api/repos', payload: { repoUrl: 42 } });
+    expect([r1.statusCode, r1.json().error.code]).toEqual([400, 'INVALID_REPO_URL']);
+    const r2 = await app.inject({
+      method: 'POST',
+      url: '/api/repos',
+      headers: { 'content-type': 'application/json' },
+      payload: '{bad json',
+    });
+    expect([r2.statusCode, r2.json().error.code]).toEqual([400, 'BAD_REQUEST']);
+    await app.close();
+  });
+
+  it('框架自带的 4xx 保留原状态码,code 统一 BAD_REQUEST', async () => {
+    const app = make();
+    const r415 = await app.inject({
+      method: 'POST',
+      url: '/api/repos',
+      headers: { 'content-type': 'application/xml' },
+      payload: '<repoUrl>https://github.com/a/b</repoUrl>',
+    });
+    expect([r415.statusCode, r415.json().error.code]).toEqual([415, 'BAD_REQUEST']);
+    const r413 = await app.inject({
+      method: 'POST',
+      url: '/api/repos',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({ repoUrl: 'https://github.com/a/b', pad: 'x'.repeat(1_100_000) }),
+    });
+    expect([r413.statusCode, r413.json().error.code]).toEqual([413, 'BAD_REQUEST']);
+    expect(jobs).toHaveLength(0);
+    await app.close();
+  });
+
   it('404 / 413 / 422', async () => {
     const app = make();
     git.sha = null;

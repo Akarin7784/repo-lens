@@ -66,10 +66,11 @@ export function buildApp(deps?: AppDeps): FastifyInstance {
     if (err instanceof HttpError) return reply.status(err.status).send(err.body());
     app.log.error(err);
     const status = (err as { statusCode?: number }).statusCode;
-    if (status && status < 500)
+    // 框架自带的 4xx(非法 JSON 400、请求体过大 413、不支持的 Content-Type 415 等)保留原状态码,code 统一 BAD_REQUEST
+    if (status && status >= 400 && status < 500)
       return reply
-        .status(400)
-        .send({ error: { code: 'INVALID_REPO_URL', message: (err as Error).message } });
+        .status(status)
+        .send({ error: { code: 'BAD_REQUEST', message: (err as Error).message } });
     return reply.status(500).send({ error: { code: 'INTERNAL', message: '服务内部错误' } });
   });
 
@@ -93,8 +94,14 @@ export function buildApp(deps?: AppDeps): FastifyInstance {
 
   app.post('/api/repos', async (req, reply) => {
     const body = CreateRepoRequestSchema.safeParse(req.body);
-    if (!body.success)
-      throw new HttpError('INVALID_REPO_URL', body.error.issues[0]?.message ?? '请求体无效');
+    if (!body.success) {
+      // 只有 repoUrl 本身存在但不合法才是 INVALID_REPO_URL;缺字段、ref 非法、请求体不是对象等都是 BAD_REQUEST
+      const raw = (req.body ?? null) as Record<string, unknown> | null;
+      const urlIssue = body.error.issues.find((i) => i.path[0] === 'repoUrl');
+      const hasUrl = typeof raw === 'object' && raw !== null && 'repoUrl' in raw;
+      if (urlIssue && hasUrl) throw new HttpError('INVALID_REPO_URL', urlIssue.message);
+      throw new HttpError('BAD_REQUEST', body.error.issues[0]?.message ?? '请求体无效');
+    }
     const [, owner, name] = GH.exec(body.data.repoUrl)!;
     if ([owner, name].some((s) => s === '.' || s === '..'))
       throw new HttpError('INVALID_REPO_URL', '仓库路径无效');
