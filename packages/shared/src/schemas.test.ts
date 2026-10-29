@@ -96,6 +96,19 @@ describe('ids', () => {
 
 describe('GraphDataSchema', () => {
   it('接受合法三层图', () => expect(GraphDataSchema.safeParse(graph).success).toBe(true));
+  it('meta.suggestedFocus:可选;仅根层,且只能是 module/dir', () => {
+    const at = (meta: object) =>
+      GraphDataSchema.safeParse({ ...graph, meta: { ...graph.meta, ...meta } });
+    expect(at({}).success).toBe(true); // 不返回该字段合法
+    expect(at({ parentId: null, suggestedFocus: 'd:src' }).success).toBe(true);
+    expect(at({ parentId: null, suggestedFocus: 'm:packages/core' }).success).toBe(true);
+    // 焦点节点不要求出现在 nodes 中(根层可能只返回 m:.)
+    expect(at({ parentId: null, suggestedFocus: 'd:not/in/nodes' }).success).toBe(true);
+    expect(at({ parentId: null, suggestedFocus: 'f:src/a.ts' }).success).toBe(false);
+    expect(at({ parentId: null, suggestedFocus: 'x:react' }).success).toBe(false);
+    expect(at({ parentId: null, suggestedFocus: 'bad' }).success).toBe(false);
+    expect(at({ parentId: 'm:.', suggestedFocus: 'd:src' }).success).toBe(false);
+  });
   it('meta.layout 不属于 schema,解析后被剥离', () => {
     const g = { ...graph, meta: { ...graph.meta, layout: {} } };
     expect(GraphDataSchema.parse(g).meta).not.toHaveProperty('layout');
