@@ -368,6 +368,24 @@ function Inner({
     }
   }, [flow, state.nodes]);
 
+  // T-222d:图区尺寸变化(窄屏底部抽屉打开/关闭、窗口缩放)后重新适配视图,避免节点落在可视区外
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    let t: ReturnType<typeof setTimeout> | undefined;
+    let first = true;
+    const ro = new ResizeObserver(() => {
+      if (first) return void (first = false); // 首次回调是挂载本身,布局 effect 已负责 fitView
+      clearTimeout(t);
+      t = setTimeout(() => void fitView({ padding: 0.12, duration: 200 }), 150);
+    });
+    ro.observe(el);
+    return () => {
+      clearTimeout(t);
+      ro.disconnect();
+    };
+  }, [fitView]);
+
   useEffect(() => {
     if (clearRequest > 0) setSelectedId(null);
   }, [clearRequest]);
@@ -457,13 +475,13 @@ function Inner({
   );
 }
 
-/** 图例:投屏时靠颜色 + 线型 + 标记三重区分 */
+/** 图例:投屏时靠颜色 + 线型 + 标记三重区分。窄屏(<768px)隐藏,否则会盖住一半图区(T-222d) */
 function Legend() {
   const row = 'flex items-center gap-2';
   return (
     <div
       aria-label="图例"
-      className="absolute bottom-12 left-3 z-10 flex flex-col gap-1 rounded-control border border-line bg-panel px-3 py-2 text-[12px] text-fg shadow-soft"
+      className="absolute bottom-12 left-3 z-10 hidden flex-col gap-1 md:flex rounded-control border border-line bg-panel px-3 py-2 text-[12px] text-fg shadow-soft"
     >
       <div className={row}>
         <svg width="36" height="8" aria-hidden>

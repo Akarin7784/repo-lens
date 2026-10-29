@@ -248,6 +248,12 @@ interface NodeDetail {
 }
 ```
 
+> **T-222d 详情面板收尾**（#43 评审的非阻塞后续）：
+> - **窄屏抽屉**：视口 ≥768px（Tailwind `md`）时详情仍是 360px 右栏；<768px 时未选中节点不显示详情区（图占满），选中后详情变为占下方 55vh 的底部抽屉。抽屉在文档流内（工作区改为 `flex-col md:flex-row`），图区随之缩到上方而不是被盖住；图区尺寸变化时 `ResizeObserver` 防抖 150ms 后 `fitView`。抽屉顶部「关闭」按钮通过 `GraphView` 的 `clearRequest` 取消选中，与 Esc、点空白一致（`?node=` 随之从 URL 去掉）。窄屏隐藏图例（否则盖住约一半图区）。
+> - **折叠后不保留旧详情**：选中节点因所在目录被折叠或「全部收起」而不在画布上时，清除选中并关闭详情（回调 `onSelectionChange(null)`）。没有选「标注该节点当前未显示」：状态栏和高亮都以画布为准，面板单独显示一个看不到的节点会让「依赖于（图中可见层级）」列表与画面对不上；需要时可从面包屑或 `?node=` 再跳回去，跳转会自动展开。唯一例外是外部跳转进行中（`pendingJump` 非空，含 `?node=` 首次打开），这时节点暂不可见是正常的，保持原状态，因此 #43 的深链接逻辑不变。
+> - 同时修正一个潜在问题：选中回调曾写成 `return onSelectionChange(null)`，若回调有返回值会被 React 当作 effect 清理函数调用而报错。
+> - 真实浏览器验证（Chromium/Playwright，hono 本地数据，`LLM_PROVIDER=fake`）截图：`docs/assets/T-222d/desktop-detail.png`、`desktop-after-collapse.png`、`narrow-drawer.png`（390×844）、`narrow-closed.png`。Safari、Firefox、深色模式未验证。
+
 ## 6. 对话与图高亮联动
 
 ### 6.1 SSE 事件处理

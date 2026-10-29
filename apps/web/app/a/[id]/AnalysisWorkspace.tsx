@@ -144,8 +144,8 @@ export function AnalysisWorkspace({ repoId, jobId, repoLabel, api: apiProp, even
           </p>
         </div>
       ) : showGraph ? (
-        <div className="flex min-h-0 flex-1">
-          <div className="relative min-w-0 flex-1">
+        <div className="flex min-h-0 flex-1 flex-col md:flex-row">
+          <div className="relative min-h-0 min-w-0 flex-1">
             {progress.status === 'running' && (
               <div className="absolute left-1/2 top-3 z-20 -translate-x-1/2 rounded-full border border-line bg-panel px-3 py-1 text-[12px] text-muted shadow-soft">
                 依赖图已生成,后续阶段进行中({Math.round(progress.progress)}%)
@@ -161,16 +161,16 @@ export function AnalysisWorkspace({ repoId, jobId, repoLabel, api: apiProp, even
               clearRequest={closeTick}
             />
           </div>
-          {/* T-222d:≥768px 为右栏;<768px 未选中时隐藏,选中后为底部抽屉(高 55vh,图仍可见),可关闭 */}
+          {/* T-222d:≥768px 为右栏;<768px 未选中时隐藏,选中后为占下方 55vh 的底部抽屉(在文档流里,图区随之缩到上方,不被遮挡),可关闭 */}
           <aside
             aria-label="详情"
             data-testid="detail-aside"
             data-drawer={sel ? 'open' : 'closed'}
             className={
-              'overflow-y-auto border-line bg-bg ' +
-              'md:static md:block md:h-auto md:max-h-none md:w-[360px] md:shrink-0 md:rounded-none md:border-l md:border-t-0 md:shadow-none ' +
+              'shrink-0 overflow-y-auto border-line bg-bg ' +
+              'md:block md:max-h-none md:w-[360px] md:rounded-none md:border-l md:border-t-0 md:shadow-none ' +
               (sel
-                ? 'fixed inset-x-0 bottom-0 z-30 max-h-[55vh] rounded-t-[12px] border-t shadow-soft'
+                ? 'h-[55vh] max-h-[55vh] shrink-0 rounded-t-[12px] border-t shadow-soft md:h-auto'
                 : 'hidden')
             }
           >
