@@ -16,6 +16,9 @@ services:
     build: { context: ., dockerfile: apps/api/Dockerfile }
     ports: ['4000:4000']
     env_file: .env
+    # T-213:/files 只读 worker 保留的源码快照
+    environment: { REPOS_DIR: /data/repos }
+    volumes: ['repos:/data/repos:ro']
     restart: unless-stopped
     # 只有 api 跑迁移(GET_LOCK 互斥);DB/Redis 健康后再启动,连接仍有有限次重试兜底
     depends_on:
@@ -29,6 +32,7 @@ services:
   worker:
     build: { context: ., dockerfile: apps/worker/Dockerfile }
     env_file: .env
+    environment: { REPOS_DIR: /data/repos }
     volumes: [repos:/data/repos]
     read_only: true
     tmpfs: [/tmp]

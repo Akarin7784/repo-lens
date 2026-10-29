@@ -161,4 +161,19 @@ if (!nd.ok) fail(`GET nodes/${P} → ${nd.status}`);
 const detail = await nd.json();
 if (typeof detail.summary !== 'string' || !detail.summary.trim()) fail(`${P} summary 为空`, detail);
 console.log(`SMOKE summary[${P}] chars=${detail.summary.length}`);
+// T-213:从 worker 保留的快照读 zustand src/vanilla.ts 前 20 行(api 只读挂载 repos 卷)
+const fr = await fetch(
+  `${BASE}/api/repos/${graphReady.repoId}/files?path=src/vanilla.ts&start=1&end=20`,
+);
+if (!fr.ok) fail(`GET files src/vanilla.ts → ${fr.status}`, await fr.text());
+const file = await fr.json();
+if (file.excluded !== null || typeof file.content !== 'string') fail('vanilla.ts 不应被排除', file);
+const nLines = file.content.split('\n').length;
+if (file.start !== 1 || file.end !== 20 || nLines !== 20) fail('vanilla.ts 前 20 行区间不对', file);
+if (!/create/i.test(file.content)) fail('vanilla.ts 前 20 行不含 create', file);
+const trav = await fetch(`${BASE}/api/repos/${graphReady.repoId}/files?path=../x`);
+if (trav.status !== 400) fail(`files ?path=../x 应为 400,实际 ${trav.status}`);
+console.log(
+  `SMOKE files[src/vanilla.ts] lines=${nLines} total=${file.totalLines} commit=${file.commitSha.slice(0, 7)} traversal=${trav.status}`,
+);
 console.log('SMOKE ANALYZE PASS');

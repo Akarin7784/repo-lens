@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { randomInt } from 'node:crypto';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
@@ -13,6 +13,7 @@ import {
   RepoStatusSchema,
   CreateRepoResponseSchema,
   ApiErrorSchema,
+  FileContentSchema,
 } from '@repolens/shared';
 import {
   GRAPH_PROJECTION_VERSION,
@@ -106,8 +107,16 @@ describe.skipIf(!hasRedis)('路由(真实 Redis + 内存 Store)', () => {
     enqueue: async (d) => void jobs.push(d),
     removeFailed: async () => {},
   };
-  const make = () => {
-    const app = buildApp({ store, redis, queue, git, logger: false, pingIntervalMs: 50 });
+  const make = (reposDir?: string) => {
+    const app = buildApp({
+      store,
+      redis,
+      queue,
+      git,
+      logger: false,
+      pingIntervalMs: 50,
+      reposDir,
+    });
     // 未显式带 x-forwarded-for 的请求补一个独立 IP,不落到共享的 127.0.0.1 计数上
     const inject = app.inject.bind(app) as (o: unknown) => ReturnType<typeof app.inject>;
     const withIp = (o: string | { headers?: Record<string, string> }) =>
@@ -644,6 +653,34 @@ describe.skipIf(!hasRedis)('路由(真实 Redis + 内存 Store)', () => {
     });
     expect((await app.inject('/api/repos/999')).statusCode).toBe(404);
     await app.close();
+  });
+
+  it('GET /api/repos/:id/files(T-213):读快照、.. 400、未知参数 400、无快照 409', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'rl-api-files-'));
+    const app = make(dir);
+    const { repoId } = await seedGraph();
+    const url = (q: string) => `/api/repos/${repoId}/files?${q}`;
+    // 还没有快照目录
+    expect((await app.inject(url('path=src/a.ts'))).json().error.code).toBe('REPO_NOT_READY');
+    mkdirSync(join(dir, String(repoId), SHA, 'src'), { recursive: true });
+    writeFileSync(join(dir, String(repoId), SHA, 'src/a.ts'), 'a\nb\nc\n');
+    const ok = await app.inject(url('path=src/a.ts&start=2&end=3'));
+    expect(ok.statusCode).toBe(200);
+    expect(FileContentSchema.parse(ok.json())).toMatchObject({ commitSha: SHA, content: 'b\nc' });
+    for (const q of [
+      'path=../x',
+      'path=src%2F..%2F..%2Fx',
+      'path=src/a.ts&start=0',
+      'path=src/a.ts&depth=1',
+      '',
+    ])
+      expect((await app.inject(url(q))).statusCode, q).toBe(400);
+    expect((await app.inject(url('path=src/none.ts'))).statusCode).toBe(404);
+    expect((await app.inject('/api/repos/999/files?path=a.ts')).statusCode).toBe(404);
+    // 未配置 reposDir
+    const bare = make();
+    expect((await bare.inject(url('path=src/a.ts'))).statusCode).toBe(409);
+    await Promise.all([app.close(), bare.close()]);
   });
 
   it('图:根层只有 module,边聚合;子层;includeExternal;缓存', async () => {

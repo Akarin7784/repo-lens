@@ -163,10 +163,17 @@ sequenceDiagram
 | GET | `/api/repos/:id` | 仓库/最近任务状态 |
 | GET | `/api/jobs/:id/events` | SSE 进度 |
 | GET | `/api/repos/:id/graph?parentId=&includeExternal=` | 图数据:不传 `parentId` 返回顶层,传则返回该父节点直接子节点 + 相关边;`includeExternal=true` 额外返回派生的 `x:` 外部包节点(默认否) |
-| GET | `/api/repos/:id/files?path=&start=&end=` | 读文件片段 |
+| GET | `/api/repos/:id/files?path=&start=&end=` | 读文件片段(T-213,响应见下) |
 | GET | `/api/repos/:id/nodes/:nodeId` | 节点详情(摘要、导出符号) |
 | POST | `/api/repos/:id/chat` | 问答(SSE 响应) |
 | GET | `/api/repos?repo=owner/name` | 查询已有分析(命中缓存) |
+
+**`GET /api/repos/:id/files`(T-213)**:schema 为 `packages/shared` 的 `FileQuerySchema` / `FileContentSchema`(字段只增不改)。
+- 参数:`path` 必填,仓库内规范化 POSIX 相对路径;`start`/`end` 可选,正整数、1 起、闭区间。不给 `start` 从第 1 行起;不给 `end` 最多返回 `FILE_MAX_LINES`=2000 行并以 `hasMore` 标记;显式区间超过 2000 行、`end<start`、`start` 超出总行数、未知参数一律 400。`end` 超出总行数按总行数截断。
+- 响应:`{path, commitSha, totalLines, start, end, hasMore, content, excluded}`。`commitSha` 与 graph 同源(最近一次已出图任务)。`content` 为区间原文(`\n` 连接,CRLF 归一)。
+- 排除:命中共享 `exclusionRule`(敏感 / 过大 >500KB / 二进制)时 `content=null`,`excluded={reason, notice}`,敏感文件的 `notice` 为 `SENSITIVE_PLACEHOLDER`;只按路径命中(如 `.env`)时不读内容。
+- 安全:`..`、`.`、空段、绝对路径、反斜杠、盘符、`.git` 一律 400;路径上任一段是符号链接 400(逐段 `lstat`,再 `realpath` 确认仍在快照内,`O_NOFOLLOW` 打开);目录 400;不存在 404 `REPO_NOT_FOUND`。
+- 来源:worker 快照 `${REPOS_DIR}/{repoId}/{commitSha}`(compose 里 worker 与 api 共用 `repos` 卷,api 只读挂载)。快照不存在(未保留 / 已清理 / 未配置 REPOS_DIR)返回 409 `REPO_NOT_READY`;api 不自行 clone。保留策略见 D5(待定)。
 
 说明:`:id` 即 `repoId`(`repo.id`);`jobId` 为 BullMQ 任务 id(`analysis_task.job_id`)。
 
@@ -238,7 +245,7 @@ data: {"code":"BUDGET_EXCEEDED","message":"今日 LLM 预算已用完","retryabl
 进度阶段固定为 `queued → cloning → scanning → parsing → graph_ready → summarizing → embedding → done`(`progress.stage` 取其一)。
 进度事件:`progress` / `graph_ready`(图就绪即可渲染,摘要与向量化后台继续)/ `stage_error {stage, message}`(阶段失败)/ `done`。问答事件:`token` / `citation` / `done`,另有可选 `tool`;出错时发 `error {code, message, retryable}` 后**直接结束流,不再发 `done`**,`code ∈ LLM_UNAVAILABLE | BUDGET_EXCEEDED | REPO_NOT_READY | RATE_LIMITED`。
 **流式策略**:非定位类问题照常逐 token 流式;**定位类问题(问"在哪里/哪个文件/哪几行")第一遍不流式**,后端缓冲整段答案并完成引用校验,通过后一次性下发 `token`/`citation`;需重试时用户看不到第一遍内容,前端显示「正在定位…」(不设 reset 事件)。缓冲加重试的总耗时上限 15 秒,超时直接走 `fallback:"retrieval"`。`done.usage = {in, out}`。
-`citation` 字段:`id, path, startLine, endLine, nodeId, moduleId?`;`done.droppedCitations: number`(校验失败被丢弃的引用数,0 表示全部通过);`done.fallback?: "retrieval"`(重试后仍无合法引用,改用检索 top 片段作为引用时出现)。
+`citation` 字段:`id, path, startLine, endLine, nodeId, moduleId?`;`done.droppedCitations: number`(校验失败被丢弃的引用数,0 表示全部通过);`done.fallback?: "retrieval"`(重试后仍无合法引用,改用检索 top 片段作为引用时出现)。`done.retrieval?: "hybrid" | "keyword-only"`(T-214 定案):本次检索是否用上向量;`embeddingStatus` 非 ok(ready/reused 以外,定义见 #57 / ARCHITECTURE §5 向量化状态)或查询时 Qdrant 不可用时为 `keyword-only`,前端在回答下方显示「已降级为关键词检索」。字段可选、只增不改,旧响应缺省视为未知(前端不显示提示)。
 
 ```jsonc
 // GET /api/repos/:id/nodes/:nodeId   (例:nodeId = f:src/compose.ts)
@@ -393,7 +400,7 @@ Qdrant collection `code_chunks`:向量维度随 `EMBEDDING_MODEL`(text-embedding
 
 ## 6. 部署方案
 
-> **api 与 worker 必须同版本一起升级(T-211c 起)**。迁移 0001 之后 summary 表多了 `commit_sha`(默认 `''`)与 `source`(默认 `llm`);滚动发布期间如果旧 worker 还在跑,它写入的行会是 `commit_sha=''`、`source='llm'`(规则摘要也被标成 llm),新 api 按 commit 读不到这些行。顺序:先跑迁移 → 停旧 worker → 同时发布新 api 与新 worker;不要只升一个。如已产生 `commit_sha=''` 的行,按 BACKEND_AI_DESIGN「summary 孤儿行清理」手动处理。
+> **api 与 worker 必须同版本一起升级(T-211c 起)**。迁移 0001 之后 summary 表多了 `commit_sha`(默认 `''`)与 `source`(默认 `llm`);滚动发布期间如果旧 worker 还在跑,它写入的行会是 `commit_sha=''`、`source='llm'`(规则摘要也被标成 llm),新 api 按 commit 读不到这些行。顺序:先跑迁移(按编号依次 0001、0002,api 启动时自动执行;手动执行也必须按此顺序)→ 停旧 worker → 同时发布新 api 与新 worker;不要只升一个。如已产生 `commit_sha=''` 的行,按 BACKEND_AI_DESIGN「summary 孤儿行清理」手动处理。
 
 ### 6.1 docker-compose
 ```yaml
@@ -473,7 +480,7 @@ volumes: { repos: {}, mysql: {}, qdrant: {} }
 - 只允许 `https://github.com/{owner}/{repo}` 正则白名单,防 SSRF/命令注入;`execFile` 传参数组,不拼 shell。
 - 只读浅 clone,禁用 hooks、submodule、LFS;clone 前用 GitHub API 校验 size。
 - **永不执行仓库代码**:不 `npm install`、不跑构建;ts-morph 用 `skipFileDependencyResolution` 且不加载仓库插件。
-- Worker 容器:非 root、只读根文件系统、内存/CPU 限制、单任务超时 5 分钟、完成后删除工作目录。
+- Worker 容器:非 root、只读根文件系统、内存/CPU 限制、单任务超时 5 分钟。工作目录(源码快照)当前**不删除**,供 `/files` 与 W3 引用校验读原文;保留与清理策略待 D5 定(原写「完成后删除工作目录」,与 `/files` 冲突)。
 - 读文件接口做路径规范化,拒绝 `..` 与符号链接逃逸。
 - 提示注入防护:代码内容作为数据包裹在分隔符内,工具只读,无写/网络工具。
 

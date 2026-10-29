@@ -3,6 +3,8 @@ import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
 import type { Redis } from 'ioredis';
 import {
   CreateRepoRequestSchema,
+  FileContentSchema,
+  FileQuerySchema,
   GraphDataSchema,
   GraphQuerySchema,
   NodeIdSchema,
@@ -22,6 +24,7 @@ import {
   type TaskRow,
 } from '@repolens/db';
 import { HttpError } from './errors.js';
+import { readRepoFile } from './files.js';
 import type { GitHost } from './githost.js';
 import { GraphIndex, nodeDetail, projectGraphWithInfo } from './projection.js';
 import { streamJobEvents } from './sse.js';
@@ -50,6 +53,8 @@ export interface AppDeps {
   maxRepoMb?: number;
   pingIntervalMs?: number;
   logger?: boolean;
+  /** T-213:worker 快照根目录(与 worker 的 REPOS_DIR 相同,api 只读挂载) */
+  reposDir?: string;
 }
 
 const GH = /^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/;
@@ -287,6 +292,25 @@ export function buildApp(deps?: AppDeps): FastifyInstance {
       .header('x-cache', 'miss')
       .header('x-graph-truncated', String(p.truncated))
       .send(json);
+  });
+
+  // T-213:读文件片段。commit 与 graph 同源(最近一次已出图任务),源码来自 worker 保留的快照
+  app.get<{ Params: { id: string } }>('/api/repos/:id/files', async (req) => {
+    const repoId = repoIdOf(req.params.id);
+    const q = FileQuerySchema.strict().safeParse(req.query);
+    if (!q.success) throw new HttpError('BAD_REQUEST', `参数无效:${q.error.issues[0]?.message}`);
+    const repo = await store.getRepo(repoId);
+    if (!repo) throw new HttpError('REPO_NOT_FOUND', '仓库不存在');
+    const task = await store.latestGraphTask(repoId);
+    if (!task) throw new HttpError('REPO_NOT_READY', '依赖图尚未生成');
+    if (!deps.reposDir) throw new HttpError('REPO_NOT_READY', '未配置源码快照目录(REPOS_DIR)');
+    const res = await readRepoFile({
+      reposDir: deps.reposDir,
+      repoId,
+      commitSha: task.commitSha,
+      ...q.data,
+    });
+    return FileContentSchema.parse(res);
   });
 
   // nodeId 含 '/'(如 f:src/a.ts),用通配符接收;编码与未编码两种写法都支持

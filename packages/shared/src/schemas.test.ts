@@ -247,6 +247,15 @@ describe('ChatEventSchema', () => {
       },
       { event: 'done', data: { messageId: 2, droppedCitations: 0, usage: { in: 1, out: 1 } } },
       {
+        event: 'done',
+        data: {
+          messageId: 3,
+          droppedCitations: 0,
+          retrieval: 'keyword-only',
+          usage: { in: 1, out: 1 },
+        },
+      },
+      {
         event: 'error',
         data: { code: 'BUDGET_EXCEEDED', message: '今日 LLM 预算已用完', retryable: false },
       },
@@ -278,6 +287,10 @@ describe('ChatEventSchema', () => {
       {
         event: 'done',
         data: { messageId: 1, droppedCitations: 0, fallback: 'model', usage: { in: 1, out: 1 } },
+      },
+      {
+        event: 'done',
+        data: { messageId: 1, droppedCitations: 0, retrieval: 'vector', usage: { in: 1, out: 1 } },
       },
       { event: 'error', data: { code: 'OOPS', message: 'x', retryable: true } },
     ];

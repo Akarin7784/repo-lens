@@ -1,3 +1,5 @@
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Queue } from 'bullmq';
 import { Redis } from 'ioredis';
 import { readLlmConfig } from '@repolens/agent';
@@ -43,6 +45,8 @@ const app = buildApp({
   queue,
   git: createGitHost({ githubToken: process.env.GITHUB_TOKEN }),
   maxRepoMb: Number(process.env.MAX_REPO_MB ?? 300),
+  // 与 worker 默认值一致;compose 里两者都设为 /data/repos(api 只读挂载)
+  reposDir: process.env.REPOS_DIR ?? join(tmpdir(), 'repolens-repos'),
   ...limits,
 });
 app.log.info(
