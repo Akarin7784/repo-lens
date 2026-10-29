@@ -1,6 +1,7 @@
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readLlmConfig, type LlmConfig } from '@repolens/agent';
+import { readEmbeddingConfig, type EmbeddingConfig } from '@repolens/rag';
 
 export interface WorkerConfig {
   redisUrl: string;
@@ -15,6 +16,8 @@ export interface WorkerConfig {
   concurrency: number;
   /** LLM 配置(T-210);非法时 loadConfig 直接抛错,worker 启动失败 */
   llm: LlmConfig;
+  /** embedding 与向量库(T-214,zod 校验);EMBEDDER=fake|onnx,批大小 EMBEDDING_BATCH_SIZE */
+  embedding: EmbeddingConfig;
 }
 
 const num = (v: string | undefined, d: number) => (v && Number.isFinite(Number(v)) ? Number(v) : d);
@@ -31,5 +34,6 @@ export function loadConfig(env = process.env): WorkerConfig {
     parseConcurrency: num(env.PARSE_CONCURRENCY, 8),
     concurrency: num(env.WORKER_CONCURRENCY, 2),
     llm: readLlmConfig(env),
+    embedding: readEmbeddingConfig(env),
   };
 }

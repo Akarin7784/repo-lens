@@ -27,6 +27,9 @@ export interface TaskStats {
   timedOutFiles?: number;
   resolverMode?: string;
   failedStage?: TaskStage;
+  /** T-214:向量化结果(ready/reused/skipped/failed);旧任务无此字段 */
+  embeddingStatus?: 'ready' | 'reused' | 'skipped' | 'failed';
+  embeddingChunks?: number;
   [k: string]: unknown;
 }
 

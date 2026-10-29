@@ -237,6 +237,8 @@ export function buildApp(deps?: AppDeps): FastifyInstance {
         ...(s.edges !== undefined ? { edges: s.edges } : {}),
       },
       error: task.errorMsg,
+      // 与 commitSha 同源:取最近已完成任务的向量化状态
+      embeddingStatus: (done ?? task).stats.embeddingStatus ?? null,
     };
     return res;
   });

@@ -1,0 +1,31 @@
+name: worker image (with embedding model)
+# T-214:手动触发。真实下载 embedding 模型并做 sha256 校验,再在镜像内用 ONNX 跑一次向量化。
+# 常规 CI 的 smoke 用 EMBEDDING_MODEL_DOWNLOAD=0,不覆盖这条路径。
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: 模型下载地址(与 huggingface.co 同路径结构)
+        default: https://huggingface.co
+        required: true
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: build worker (EMBEDDING_MODEL_DOWNLOAD=1)
+        run: >
+          docker build -f apps/worker/Dockerfile
+          --build-arg EMBEDDING_MODEL_DOWNLOAD=1
+          --build-arg EMBEDDING_MODEL_BASE_URL="${{ inputs.base_url }}"
+          -t repolens-worker:model .
+      - name: onnx embed in image
+        run: |
+          docker run --rm -w /app/packages/rag repolens-worker:model node --input-type=module -e "
+            import { OnnxEmbedder } from './dist/index.js';
+            const e = new OnnxEmbedder('Xenova/multilingual-e5-small', process.env.EMBEDDING_MODEL_DIR);
+            const [v] = await e.embedDocuments(['function add(a, b) { return a + b }']);
+            if (v.length !== 384) throw new Error('dim ' + v.length);
+            console.log('onnx embed ok, dim', v.length);
+          "
