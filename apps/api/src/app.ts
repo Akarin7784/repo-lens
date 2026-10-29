@@ -66,9 +66,10 @@ export function buildApp(deps?: AppDeps): FastifyInstance {
     if (err instanceof HttpError) return reply.status(err.status).send(err.body());
     app.log.error(err);
     const status = (err as { statusCode?: number }).statusCode;
-    if (status && status < 500)
+    // 框架自带的 4xx(非法 JSON 400、请求体过大 413、不支持的 Content-Type 415 等)保留原状态码,code 统一 BAD_REQUEST
+    if (status && status >= 400 && status < 500)
       return reply
-        .status(400)
+        .status(status)
         .send({ error: { code: 'BAD_REQUEST', message: (err as Error).message } });
     return reply.status(500).send({ error: { code: 'INTERNAL', message: '服务内部错误' } });
   });
