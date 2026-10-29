@@ -610,9 +610,9 @@ zustand（秒出图）和 zod（默认 module 层、按需下钻）不在 3 分�
 **资源来源**:Shiki 的引擎、语言和主题全部随构建打包,由本站 `/_next/static/chunks/` 提供,运行时不请求任何 CDN。
 - 引擎用 `shiki/engine/javascript`(JS 正则),不加载 `onig.wasm`;构建产物里没有 `.wasm`。
 - 主题(github-light/dark)和 14 种语言都是本地包的动态 import。
-- 字体用 `next/font/google`,在构建时下载并自托管于 `/_next/static/media/*.woff2`,运行时不访问 fonts.googleapis.com / fonts.gstatic.com。
+- 字体:**已解决**(T-225)。字体改为 `next/font/local`,文件随仓库提交(`apps/web/app/fonts/`),构建和运行都不需要外网。验证方式:在 `unshare -rn` 无网络命名空间里执行 `next build`,构建成功;改回 `next/font/google` 后同样条件下构建失败(`getaddrinfo EAI_AGAIN fonts.googleapis.com`)。运行时字体请求只发往本站。(T-223b 核实时仍是 `next/font/google`:运行时不访问 Google,但构建时需要联网。)
 - 首次打开页面并展开预览:57 个请求,host 全部是本站;没有外部请求,也没有失败请求。
-- 展开预览时新增 1 个 files 接口请求和 26 个 JS chunk,原始约 1.56 MB,gzip 约 250 KB(gzip 大小是本机重新压缩算出的,`next start` 实际是否压缩未核对)。
+- 展开预览时新增 1 个 files 接口请求和 26 个 JS chunk,原始约 1.56 MB,gzip 约 250 KB(gzip 大小是本机重新压缩算出的;`next start` 实际是否启用 gzip:**未测**。`next.config.mjs` 里配置的是 `compress:false`,但响应头没有核对)。
 - createHighlighterCore 会一次加载全部 14 种语言,不是按当前文件只加载一种。
 
 **断网**:用路由拦截,除 localhost:本站外的所有请求都 abort。预览仍然高亮(src/compose.ts:334 个 token,7 种颜色),截图见 `docs/assets/T-223b/offline-highlight-1440.png`。补充:`context.setOffline(true)` 会连本机请求一起断开,此时 files 请求先失败,显示「无法连接分析服务…」和重试按钮,不会白屏。
@@ -624,7 +624,7 @@ zustand（秒出图）和 zod（默认 module 层、按需下钻）不在 3 分�
 | 1440×900 | 420 | 1864 | 7371 |
 | 1920×1080 | 383 | 1885 | 7366 |
 
-点击后 Shiki 相关 chunk 全部加载完的耗时:1440×900 无节流下,compose.ts 中位数 61 ms,types.ts 152 ms(Resource Timing,7 次)。节流下的 chunk 耗时没有单独测到。
+点击后 Shiki 相关 chunk 全部加载完的耗时:1440×900 无节流下,compose.ts 中位数 61 ms,types.ts 152 ms(Resource Timing,7 次)。节流下单个 chunk 的耗时:**未测**。
 
 **大文件主线程阻塞**(1440×900,src/types.ts 前 2000 行,约 19,800 个 token span,7 次,longtask 观察):最长一次 long task 中位数 **732 ms**,点击后 long task 总计中位数 802 ms。这个时长包含 Shiki 同步 tokenize 和 React 渲染 span,没有拆开。小文件 compose.ts 的最长 long task 中位数 179 ms(含首次编译语法)。纯文本会先渲染,高亮在之后替换,所以阻塞发生在代码已经可见之后。
 
