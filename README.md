@@ -13,7 +13,7 @@
 
 ## 支持范围
 
-**第 1 周仅支持 TypeScript 仓库**(`.ts`/`.tsx`);其他语言提交时 `POST /api/repos` 返回 422 `UNSUPPORTED_LANGUAGE`。多语言通过 `packages/analyzer` 的 `LanguageAnalyzer` registry 在后续扩展。
+**目前仅支持 TypeScript/JavaScript 仓库**(`.ts`/`.tsx`/`.js`/`.jsx` 等;识别规则见 `packages/analyzer/src/typescript/detect.ts`);其他语言提交时 `POST /api/repos` 返回 422 `UNSUPPORTED_LANGUAGE`。多语言通过 `packages/analyzer` 的 `LanguageAnalyzer` registry 在后续扩展。
 
 ## 本地开发
 

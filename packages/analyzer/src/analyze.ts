@@ -1,16 +1,18 @@
 import { exclusionRule } from '@repolens/shared';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { GraphData } from '@repolens/shared';
+import type { GraphData, GraphLanguage } from '@repolens/shared';
 import { buildGraph, type FileAnalysis, type FullGraph } from './graph/build.js';
 import { detectModuleLayout, type ModuleLayout } from './graph/modules.js';
 import { AnalyzerRegistry } from './registry.js';
 import pLimit from 'p-limit';
 import { isAssetSpec, isSourceFile } from './typescript/lang.js';
 import { TypeScriptAnalyzer, type TypeScriptAnalyzerOptions } from './typescript/analyzer.js';
-import type { ParsedFile, RepoSnapshot, ResolverMode } from './types.js';
+import type { LanguageAnalyzer, ParsedFile, RepoSnapshot, ResolverMode } from './types.js';
 
 export interface AnalyzeResult {
+  /** detect() 选中的分析器 id(worker 写入 repos.lang_main) */
+  language: LanguageAnalyzer['id'];
   graph: FullGraph;
   parsed: ParsedFile[];
   layout: ModuleLayout;
@@ -39,7 +41,7 @@ export interface AnalyzeOptions extends TypeScriptAnalyzerOptions {
   onFileParsed?: (done: number, total: number) => void | Promise<void>;
 }
 
-/** 第 1 周只注册 TypeScript;非 TS 仓库 detect() 抛 UNSUPPORTED_LANGUAGE */
+/** 目前只注册 TypeScript 分析器(TS/JS 同一套);非 TS/JS 仓库 detect() 抛 UNSUPPORTED_LANGUAGE */
 export function createRegistry(
   files: ReadonlySet<string>,
   opts: AnalyzeOptions = {},
@@ -102,6 +104,7 @@ export async function analyzeRepo(
       graph.nodes.flatMap((n) => (n.type === 'file' ? (n.externalDeps ?? []) : [])),
     );
     return {
+      language: analyzer.id,
       graph,
       parsed,
       layout,
@@ -125,7 +128,10 @@ export async function analyzeRepo(
 }
 
 /** 全量图 → GraphData(仅用于 ≤300 节点的小仓库/测试;按 parentId 投影与边聚合在 T-003 API 层) */
-export function toGraphData(g: FullGraph, meta: { repoId: number; commitSha: string }): GraphData {
+export function toGraphData(
+  g: FullGraph,
+  meta: { repoId: number; commitSha: string; language: GraphLanguage },
+): GraphData {
   return {
     nodes: g.nodes,
     edges: g.edges,
@@ -133,7 +139,7 @@ export function toGraphData(g: FullGraph, meta: { repoId: number; commitSha: str
       repoId: meta.repoId,
       commitSha: meta.commitSha,
       parentId: null,
-      language: 'typescript',
+      language: meta.language,
       ...(g.cycles.length ? { cycles: g.cycles as never } : {}),
     },
   };

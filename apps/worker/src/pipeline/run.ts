@@ -273,7 +273,8 @@ export async function runPipeline(
       stage = 'parsing';
       const anaPath = `${root}.analysis.json`;
       let result = readJson<AnalyzeResult>(anaPath);
-      if (!result || result.stats.files !== files.length) {
+      // 旧版本缓存没有 language 字段:当作未命中重新分析,不猜语言
+      if (!result || !result.language || result.stats.files !== files.length) {
         let last = 0;
         // 并发解析时回调交错,用 promise 链串行写入,保证进度单调
         let chain: Promise<void> = Promise.resolve();
@@ -305,6 +306,8 @@ export async function runPipeline(
       await progress('parsing', 40, `解析完成:${stats.nodes} 个节点,${stats.edges} 条边`);
 
       stage = 'graph_ready';
+      // 先写 lang_main 再标 graph_ready:API 出图时 meta.language 读它,不能出现「图可读但语言为空」的窗口
+      await store.updateRepo(repoId, { langMain: result.language });
       await store.updateTask(jobId, { stage: 'graph_ready', progress: 40 });
       const input = await toGraphInput(root, result);
       await store.saveGraph(repoId, commitSha, input);
@@ -314,7 +317,6 @@ export async function runPipeline(
     await store.updateRepo(repoId, {
       lastCommit: commitSha,
       status: 'ready',
-      langMain: 'typescript',
     });
     await progress('graph_ready', 50, '依赖图已就绪');
     await events.emit({

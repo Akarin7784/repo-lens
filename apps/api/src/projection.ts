@@ -4,6 +4,7 @@ import {
   fileId,
   type GraphData,
   type GraphEdge,
+  type GraphLanguage,
   type GraphNode,
   type ImportKind,
   type NodeDetail,
@@ -19,6 +20,8 @@ export interface ProjectOptions {
   repoId: number;
   commitSha: string;
   parentId: string | null;
+  /** 来自 repos.lang_main(worker 按 detect() 选中的分析器写入),不在投影里写死 */
+  language: GraphLanguage;
   includeExternal: boolean;
   cycles?: string[][];
   maxNodes?: number;
@@ -270,7 +273,7 @@ export function projectGraphWithInfo(
       repoId: o.repoId,
       commitSha: o.commitSha,
       parentId: (o.parentId ?? null) as never,
-      language: 'typescript',
+      language: o.language,
       ...(cycles.length ? { cycles: cycles as never } : {}),
     },
   };

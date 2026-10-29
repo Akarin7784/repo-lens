@@ -41,6 +41,7 @@ const project = (ix: GraphIndex, parentId: string | null) => {
   const g = projectGraph(ix, {
     repoId: 1,
     commitSha: 'a'.repeat(40),
+    language: 'typescript',
     parentId,
     includeExternal: false,
   })!;
@@ -128,6 +129,7 @@ describe('跨子树聚合边', () => {
     const g = projectGraph(ix, {
       repoId: 1,
       commitSha: 'a'.repeat(40),
+      language: 'typescript',
       parentId: 'd:packages/core/src',
       includeExternal: false,
       maxNodes: 3,
@@ -140,6 +142,7 @@ describe('跨子树聚合边', () => {
     const opt = (maxNodes: number) => ({
       repoId: 1,
       commitSha: 'a'.repeat(40),
+      language: 'typescript' as const,
       parentId: 'd:packages/core/src',
       includeExternal: false,
       maxNodes,
@@ -172,6 +175,7 @@ describe('跨子树聚合边', () => {
       projectGraph(ix, {
         repoId: 1,
         commitSha: 'a'.repeat(40),
+        language: 'typescript',
         parentId,
         includeExternal: false,
         cycles: scc,
@@ -193,6 +197,7 @@ describe('跨子树聚合边', () => {
     const dup = projectGraph(ix, {
       repoId: 1,
       commitSha: 'a'.repeat(40),
+      language: 'typescript',
       parentId: null,
       includeExternal: false,
       cycles: [
@@ -224,6 +229,7 @@ describe('边的 inCycle(T-003h)', () => {
       projectGraph(ix, {
         repoId: 1,
         commitSha: 'a'.repeat(40),
+        language: 'typescript',
         parentId,
         includeExternal: false,
         cycles,
@@ -262,6 +268,7 @@ describe('边的 inCycle(T-003h)', () => {
     const g = projectGraph(ix, {
       repoId: 1,
       commitSha: 'a'.repeat(40),
+      language: 'typescript',
       parentId: null,
       includeExternal: false,
       cycles: scc,
@@ -298,7 +305,12 @@ describe('meta.suggestedFocus(根层建议焦点)', () => {
       })),
     });
   }
-  const opts = { repoId: 1, commitSha: 'a'.repeat(40), includeExternal: false };
+  const opts = {
+    repoId: 1,
+    commitSha: 'a'.repeat(40),
+    language: 'typescript' as const,
+    includeExternal: false,
+  };
   const focusOf = (ix: GraphIndex, parentId: string | null = null) =>
     GraphDataSchema.parse(projectGraph(ix, { ...opts, parentId })).meta.suggestedFocus;
 
@@ -389,5 +401,32 @@ describe('meta.suggestedFocus(根层建议焦点)', () => {
     const ix = mk([['src/a/x.ts', 1]], []);
     expect(focusOf(ix, 'm:.')).toBeUndefined();
     expect(focusOf(ix, 'd:src')).toBeUndefined();
+  });
+});
+
+describe('meta.language', () => {
+  it('来自 ProjectOptions.language(上游 repos.lang_main),不在投影里写死', () => {
+    const ix = new GraphIndex({
+      files: [
+        {
+          id: 1,
+          path: 'src/a.ts',
+          lang: 'ts',
+          loc: 1,
+          moduleId: 'm:src',
+          dirPath: 'src',
+          externalDeps: [],
+        },
+      ],
+      edges: [],
+    } as never);
+    const g = projectGraph(ix, {
+      repoId: 1,
+      commitSha: 'a'.repeat(40),
+      language: 'sentinel' as never,
+      parentId: null,
+      includeExternal: false,
+    });
+    expect(g?.meta.language).toBe('sentinel');
   });
 });

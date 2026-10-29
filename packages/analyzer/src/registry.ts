@@ -21,6 +21,6 @@ export class AnalyzerRegistry {
       if (await a.supports(repo)) return a;
       a.dispose();
     }
-    throw new AnalyzerError('UNSUPPORTED_LANGUAGE', '第 1 周仅支持 TypeScript 仓库');
+    throw new AnalyzerError('UNSUPPORTED_LANGUAGE', '目前仅支持 TypeScript/JavaScript 仓库');
   }
 }

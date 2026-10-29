@@ -149,8 +149,11 @@ describe('runPipeline', () => {
     ).rejects.toMatchObject({ code: 'CLONE_FAILED' });
   });
 
-  it('非 TS 仓库:UNSUPPORTED_LANGUAGE,包装为 UnrecoverableError', async () => {
-    const { store, data } = await setup({ 'src/a.js': 'export const a = 1;\n' } as never);
+  it('非 TS/JS 仓库(Python):UNSUPPORTED_LANGUAGE,包装为 UnrecoverableError', async () => {
+    const { store, data } = await setup({
+      'main.py': 'print(1)\n',
+      'lib/util.py': 'x = 1\n',
+    } as never);
     const job = { data, attemptsMade: 0, opts: { attempts: 3 } };
     await expect(
       processAnalyzeJob(job, {

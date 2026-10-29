@@ -89,11 +89,18 @@ export const GraphEdgeSchema = z.object({
   inCycle: z.boolean().optional(),
 });
 
+/**
+ * 图所用分析器的语言 id(= LanguageAnalyzer.id,worker 写入 repos.lang_main,API 读出放进 meta.language)。
+ * 目前只注册 TypeScript 分析器(TS/JS 共用);新增分析器时在这里加枚举值。
+ */
+export const GraphLanguageSchema = z.enum(['typescript']);
+export type GraphLanguage = z.infer<typeof GraphLanguageSchema>;
+
 export const GraphMetaSchema = z.object({
   repoId: z.number().int().positive(),
   commitSha: CommitShaSchema,
   parentId: NodeIdSchema.nullable(),
-  language: z.literal('typescript'),
+  language: GraphLanguageSchema,
   cycles: z.array(z.array(NodeIdSchema)).optional(),
   /**
    * 仅根层请求(无 parentId)可能返回:建议前端直接展示其子节点的节点(module/dir)。

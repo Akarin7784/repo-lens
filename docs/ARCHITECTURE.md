@@ -1,7 +1,7 @@
 # 可视化代码仓库分析(RepoLens)架构设计
 
 > 输入 GitHub 仓库地址 → 生成交互式架构图(模块/目录/依赖)→ 对仓库自然语言问答(带文件/行号引用)。
-> 目标:演示效果好、可开源、1 人 4 周完成。**硬约束:第 1 周仅支持 TypeScript 仓库**。
+> 目标:演示效果好、可开源、1 人 4 周完成。**硬约束:目前仅支持 TypeScript/JavaScript 仓库**。
 
 ## 1. 目标与范围
 
@@ -189,7 +189,7 @@ sequenceDiagram
 // 202 响应(同 repo+commit 已分析则 200 直接返回)
 { "repoId": 12, "jobId": "12:a1b2c3d", "status": "queued", "repo": "honojs/hono", "commitSha": "a1b2c3d" }
 // 422
-{ "error": { "code": "UNSUPPORTED_LANGUAGE", "message": "第 1 周仅支持 TypeScript 仓库" } }
+{ "error": { "code": "UNSUPPORTED_LANGUAGE", "message": "目前仅支持 TypeScript/JavaScript 仓库" } }
 ```
 
 错误码(shared `API_ERROR_CODES`,错误体 `{error:{code,message}}`):
