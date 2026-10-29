@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { MemoryStore } from '@repolens/db';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readLlmConfig } from './config.js';
 import { DeepSeekClient, LlmStreamError } from './deepseek.js';
 import { LlmGateway } from './gateway.js';
@@ -429,6 +429,41 @@ describe('网关 → DeepSeekClient.stream → llm_usage', () => {
     const err = (await failure(drain(g.stream(greq)))) as LlmError;
     expect(err.code).toBe('LLM_UNAVAILABLE');
     expect((err.cause as LlmStreamError).reason).toBe('ended-early');
+    expect(rows()).toEqual([ok0]);
+  });
+
+  it('调用方在 yield 处 it.return():补记恰好一行 ok=0,上游连接被关闭', async () => {
+    handler = script(
+      Array.from({ length: 50 }, () => delta('.')),
+      { gapMs: 20, end: false },
+    );
+    const { g, rows } = gw();
+    const s = g.stream(greq);
+    expect((await s.next()).value).toEqual({ text: '.' });
+    await s.return(undefined as never);
+    expect(rows()).toEqual([ok0]);
+    await vi.waitFor(() => expect(last.closedEarly).toBe(true));
+    // 再次 return / next 不会再写
+    await s.return(undefined as never);
+    expect((await s.next()).done).toBe(true);
+    expect(rows()).toHaveLength(1);
+  });
+
+  it('正常结束且已记账后再 it.return():不追加第二行', async () => {
+    handler = script([delta('ok'), usageChunk(), DONE]);
+    const { g, rows } = gw();
+    const s = g.stream(greq);
+    await drain(s);
+    await s.return(undefined as never);
+    expect(rows()).toEqual([expect.objectContaining({ ok: true, tokensIn: 1000 })]);
+  });
+
+  it('失败已记 ok=0 后再 it.return():不追加第二行', async () => {
+    handler = script([delta('ok'), DONE]);
+    const { g, rows } = gw();
+    const s = g.stream(greq);
+    await failure(drain(s));
+    await s.return(undefined as never);
     expect(rows()).toEqual([ok0]);
   });
 

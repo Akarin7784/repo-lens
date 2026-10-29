@@ -193,6 +193,7 @@ export class LlmGateway {
    * - 用户中止(signal.aborted):写 ok=0、不计花费,抛 LlmError('LLM_UNAVAILABLE', 'LLM 调用已取消')。
    * - usage 带 `estimated`(服务商缺 usage,但 stop + [DONE] 正常结束):记 ok=1、按估算 token 计花费,
    *   打 estimated 告警日志,返回值带 `usageEstimated: true`。
+   * - 调用方在 yield 处 it.return():外层 finally 补写一行 ok=0;每次调用恰好一行 llm_usage,不重复。
    * - 正常结束时 generator 的返回值是 LlmResult(text 为全文);输出被 max_tokens 截断时照常记账,返回值带 `truncated: true`。
    */
   async *stream(req: LlmRequest): AsyncGenerator<LlmStreamChunk, LlmResult> {
@@ -221,62 +222,74 @@ export class LlmGateway {
     let usage: LlmUsage | undefined;
     let truncated = false;
     let estimated = false;
+    // 每次调用恰好一行 llm_usage:成功路径、catch 各写一次并置位;
+    // 调用方在 yield 处 it.return()(如 route 的 finally)时两处都走不到,由外层 finally 补一行 ok=0
+    let recorded = false;
     try {
-      for await (const ev of this.o.client.stream(call)) {
-        if (ev.type === 'usage') {
-          usage = ev.usage;
-          truncated = ev.truncated === true;
-          estimated = ev.estimated === true;
-        } else if (ev.text) {
-          text += ev.text;
-          yield { text: ev.text };
+      try {
+        for await (const ev of this.o.client.stream(call)) {
+          if (ev.type === 'usage') {
+            usage = ev.usage;
+            truncated = ev.truncated === true;
+            estimated = ev.estimated === true;
+          } else if (ev.text) {
+            text += ev.text;
+            yield { text: ev.text };
+          }
         }
+        if (call.signal?.aborted) throw call.signal.reason ?? new Error('aborted');
+        if (!usage) throw new Error('上游流在 usage 之前结束');
+      } catch (err) {
+        recorded = true;
+        await failRow();
+        const aborted = call.signal?.aborted === true;
+        throw new LlmError(
+          'LLM_UNAVAILABLE',
+          aborted ? 'LLM 调用已取消' : `LLM 流式调用失败(${this.o.client.provider})`,
+          undefined,
+          { cause: aborted ? (call.signal?.reason ?? err) : err },
+        );
       }
-      if (call.signal?.aborted) throw call.signal.reason ?? new Error('aborted');
-      if (!usage) throw new Error('上游流在 usage 之前结束');
-    } catch (err) {
-      await failRow();
-      const aborted = call.signal?.aborted === true;
-      throw new LlmError(
-        'LLM_UNAVAILABLE',
-        aborted ? 'LLM 调用已取消' : `LLM 流式调用失败(${this.o.client.provider})`,
-        undefined,
-        { cause: aborted ? (call.signal?.reason ?? err) : err },
-      );
-    }
 
-    const cost = costMicroUsd(price, usage.tokensIn, usage.tokensOut, usage.cachedTokensIn ?? 0);
-    if (estimated) {
-      // llm_usage 没有「估算」列(不加列、不迁移):行照常 ok=1,估算只靠这条告警日志区分
-      const w = {
+      const cost = costMicroUsd(price, usage.tokensIn, usage.tokensOut, usage.cachedTokensIn ?? 0);
+      if (estimated) {
+        // llm_usage 没有「估算」列(不加列、不迁移):行照常 ok=1,估算只靠这条告警日志区分
+        const w = {
+          ...owner,
+          estimated: true,
+          tokensIn: usage.tokensIn,
+          tokensOut: usage.tokensOut,
+          costMicroUsd: cost,
+        };
+        const msg = 'llm usage estimated: provider sent no usage';
+        if (this.o.log) this.o.log.warn(w, msg);
+        else console.warn(msg, w);
+      }
+      recorded = true;
+      await this.addSpend(cost, taskId);
+      await this.o.usage.insertLlmUsage({
         ...owner,
-        estimated: true,
         tokensIn: usage.tokensIn,
         tokensOut: usage.tokensOut,
         costMicroUsd: cost,
+        cacheHit: false,
+        ok: true,
+      });
+      return {
+        text,
+        usage,
+        model: call.model,
+        costMicroUsd: cost,
+        cacheHit: false,
+        ...(truncated ? { truncated: true } : {}),
+        ...(estimated ? { usageEstimated: true } : {}),
       };
-      const msg = 'llm usage estimated: provider sent no usage';
-      if (this.o.log) this.o.log.warn(w, msg);
-      else console.warn(msg, w);
+    } finally {
+      if (!recorded) {
+        recorded = true;
+        await failRow();
+      }
     }
-    await this.addSpend(cost, taskId);
-    await this.o.usage.insertLlmUsage({
-      ...owner,
-      tokensIn: usage.tokensIn,
-      tokensOut: usage.tokensOut,
-      costMicroUsd: cost,
-      cacheHit: false,
-      ok: true,
-    });
-    return {
-      text,
-      usage,
-      model: call.model,
-      costMicroUsd: cost,
-      cacheHit: false,
-      ...(truncated ? { truncated: true } : {}),
-      ...(estimated ? { usageEstimated: true } : {}),
-    };
   }
 
   private async checkBudget(taskId?: number) {
