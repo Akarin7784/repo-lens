@@ -500,8 +500,8 @@ volumes: { repos: {}, mysql: {}, qdrant: {} }
 | `EMBEDDING_PROVIDER` | `local` | T-214c:`local`(现有 fake/onnx,行为与 digest 不变)\| `dashscope`(阿里云百炼 OpenAI 兼容 `/embeddings`) |
 | `DASHSCOPE_API_KEY` | (空) | 仅 dashscope 读取;缺失时向量化记 `skipped` 并告警;绝不打印 |
 | `DASHSCOPE_EMBEDDING_BASE_URL` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | 北京地域(key 为北京地域);只允许 https 且主机为 `dashscope.aliyuncs.com` / `dashscope-intl.aliyuncs.com` 或业务空间域名(整串匹配 `^[a-z0-9-]+\.[a-z0-9-]+\.maas\.aliyuncs\.com$`),不允许端口、用户名、IP;其他值读配置时报错(只报变量名) |
-| `DASHSCOPE_EMBEDDING_MODEL` / `DASHSCOPE_EMBEDDING_DIM` | `text-embedding-v3` / `1024` | 维度只允许 1024/768/512/256/128/64 |
-| `DASHSCOPE_EMBEDDING_TPM` | `1000000` | 进程内令牌桶每分钟 token;官方北京 v3 TPM 1.2M,留余量;**只对单 worker 有效**,多 worker 靠 429 退避兜底,演示只开一个 worker |
+| `DASHSCOPE_EMBEDDING_MODEL` / `DASHSCOPE_EMBEDDING_DIM` | `text-embedding-v3` / 模型默认维度(均为 `1024`) | 模型必须在能力表 `packages/rag/src/models.ts` 内(`text-embedding-v3`、`qwen3.7-text-embedding`、`qwen3.7-text-embedding-flash`),维度必须在该模型可选项内(v3:1024/768/512/256/128/64;qwen3.7:2560/2048/1536/1024/768/512/256;flash:1024/768/512/256),否则读配置时报错(只报变量名);每批校验返回长度等于请求维度 |
+| `DASHSCOPE_EMBEDDING_TPM` | 按模型:v3 `1000000`,qwen3.7 / flash `800000` | 进程内令牌桶每分钟 token;qwen3.7 官方北京 TPM 1M(文档值,429 响应头未验证),留 20% 余量;**只对单 worker 有效**,多 worker 靠 429 退避兜底,演示只开一个 worker |
 | `EMBEDDING_TASK_BUDGET_CENTS` | `50` | 单任务外部 embedding 预算,与 `LLM_TASK_BUDGET_CENTS` 独立;依据见 BACKEND_AI_DESIGN T-214c |
 
 ### 6.3 托管方案

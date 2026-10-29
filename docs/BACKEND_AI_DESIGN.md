@@ -251,7 +251,9 @@ CREATE TABLE llm_usage (
 
 ### 2.2b 外部 embedding 提供方(T-214c,`EMBEDDING_PROVIDER`)
 - 默认 `local`,现有 fake/onnx 路径、e5 前缀与 digest 不变;`dashscope` 用 `packages/rag/src/dashscope.ts` 的 `DashscopeEmbedder`:不加 e5 前缀,不传 `text_type`/`instruct`(兼容模式下实测 `text_type` 无效果、`instruct` 会改变 v3 向量)。
-- 批量:官方 v3 单次 ≤10 条(实测 11 条 400),`batchSize = min(EMBEDDING_BATCH_SIZE, 10)`,超出直接拒绝。
+- 能力表(`packages/rag/src/models.ts`,按模型名):文档批量上限(v3 10;qwen3.7 / flash 20,不依赖 flash 实测可收 21 条)、可选维度、单条 token 上限(文档值,未实测)、默认维度 1024、默认 TPM(v3 1,000,000;qwen3.7 / flash 800,000)、价格。来源为百炼文档,文档更新日期与 429 响应头未验证。表外模型读配置时报错。
+- 批量:`batchSize = min(EMBEDDING_BATCH_SIZE, 10, 模型文档上限)`,即实际默认仍 ≤10,超出直接拒绝。
+- Retry-After 为 0 或过去日期时取 max(Retry-After, 常规退避),不立即重打。
 - 单条字符上限 `DASHSCOPE_MAX_INPUT_CHARS = 6000`:官方单条 ≤8192 token,代码/中文最坏约 1 字符 1 token,留余量;切块上限 4000 字符不受影响;超出截断并计数(`truncated`),避免一条超长文本使整批 400。8192 token 边界未实测。
 - 超时与重试:索引单次 15 秒、最多重试 3 次;查询(问答 `embedQuery`)单次 5 秒、最多重试 1 次,失败由检索降级 `keyword-only`。429/5xx/超时/网络错误按指数退避(1s、2s、4s + 抖动)重试;400/401/403 不重试。429 带 `Retry-After` 时按它等待:索引最多等 10 秒;查询上限 2 秒,超过 2 秒不重试、直接降级 `keyword-only`(查询最坏约 11 秒 = 5s + 1s 退避 + 5s)。响应 `data[].index` 必须是 `[0, 输入条数)` 内的整数、不重复、不缺失,否则归 `bad-response`;读响应体超时 / 中止归 `timeout`(可重试)。6000 字符截断落在高代理项时退一位。
 - 限流:进程内 TPM 令牌桶(`DASHSCOPE_EMBEDDING_TPM`),只对单 worker 有效;多 worker 靠 429 退避兜底,演示只开一个 worker。

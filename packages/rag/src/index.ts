@@ -2,6 +2,7 @@
 export * from './config.js';
 export * from './embedder.js';
 export * from './dashscope.js';
+export * from './models.js';
 export * from './cache.js';
 export * from './chunks.js';
 export * from './vector-store.js';

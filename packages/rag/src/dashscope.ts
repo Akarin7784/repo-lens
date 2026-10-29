@@ -2,7 +2,7 @@ import type { Embedder } from './embedder.js';
 import type { DashscopeConfig } from './config.js';
 
 /**
- * 单条文本字符上限。依据:官方 v3 单条 ≤ 8192 token;代码/中文最坏约 1 字符 ≈ 1 token,
+ * 单条文本字符上限。依据:官方 v3 单条 ≤ 8192 token(qwen3.7 文档 128,000 token,未实测,仍按保守值);代码/中文最坏约 1 字符 ≈ 1 token,
  * 取 6000 字符留余量。切块上限 MAX_CHUNK_CHARS=4000,正常块不受影响;只防异常长文本让整批 400。
  * 8192 token 边界未实测。
  */
@@ -98,7 +98,8 @@ export interface DashscopeDeps {
 
 /**
  * 阿里云百炼 OpenAI 兼容 embedding。不加 e5 前缀,不传 text_type / instruct
- * (实测 instruct 会改变 v3 向量)。调用方负责分批(≤10 条)。
+ * (实测 instruct 会改变 v3 向量)。按 cfg.model / cfg.dim 参数化,
+ * 能力表见 models.ts;调用方负责分批(≤ cfg.batchSize)。每批校验返回长度等于请求维度。
  */
 export class DashscopeEmbedder implements Embedder {
   readonly model: string;
@@ -159,14 +160,16 @@ export class DashscopeEmbedder implements Embedder {
       } catch (e) {
         const err = e instanceof EmbeddingError ? e : new EmbeddingError('unavailable');
         if (!err.retryable || attempt >= opt.retries) throw err;
+        const base = this.backoffMs * 2 ** attempt;
+        const backoff = base + Math.floor(Math.random() * base * 0.25);
         if (err.retryAfterMs !== undefined) {
           // 查询路径:Retry-After 超过上限(2 秒)不重试,交给检索降级 keyword-only
           if (err.retryAfterMs > opt.maxRetryAfterMs) throw err;
-          await this.sleep(Math.min(err.retryAfterMs, INDEX_RETRY_AFTER_CAP_MS));
+          // Retry-After 为 0 或过去日期时不立即重打:取 max(Retry-After, 常规退避)
+          await this.sleep(Math.max(Math.min(err.retryAfterMs, INDEX_RETRY_AFTER_CAP_MS), backoff));
           continue;
         }
-        const base = this.backoffMs * 2 ** attempt;
-        await this.sleep(base + Math.floor(Math.random() * base * 0.25));
+        await this.sleep(backoff);
       }
     }
   }
