@@ -1,5 +1,5 @@
 'use client';
-import type { Citation } from '@repolens/shared';
+import { CHAT_MESSAGE_MAX, type Citation } from '@repolens/shared';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   answerReducer,
@@ -11,7 +11,6 @@ import {
 import { chatErrorText, RATE_LIMIT_COOLDOWN_S } from '../../lib/chat/errors';
 import {
   buildChatRequest,
-  CHAT_MESSAGE_MAX,
   ChatTransportError,
   stripCitationMarkers,
   type ChatTransport,

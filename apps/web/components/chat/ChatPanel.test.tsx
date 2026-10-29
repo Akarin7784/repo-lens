@@ -270,6 +270,25 @@ describe('<ChatPanel>(假流,未接真实后端)', () => {
     expect(screen.getByRole('button', { name: '重试' })).toBeTruthy();
   });
 
+  it('done.sessionId 可接收但不依赖:下一轮请求不带 sessionId(多轮等后端 P4)', async () => {
+    const reqs: unknown[] = [];
+    const doneWithSession = {
+      event: 'done',
+      data: { messageId: 1, sessionId: 42, droppedCitations: 0, usage: { in: 1, out: 1 } },
+    } as ChatEvent;
+    render(
+      <ChatPanel
+        repoId={1}
+        transport={createFakeTransport([doneWithSession], { onRequest: (r) => reqs.push(r) })}
+      />,
+    );
+    ask();
+    await waitFor(() => expect(lastAnswer().dataset.status).toBe('done'));
+    ask();
+    await waitFor(() => expect(reqs).toHaveLength(2));
+    expect(reqs[1]).not.toHaveProperty('sessionId');
+  });
+
   it('用户点停止 → 显示「已停止」,不是错误样式/文案', async () => {
     render(<ChatPanel repoId={1} transport={createFakeTransport([{ hang: true }])} />);
     ask();

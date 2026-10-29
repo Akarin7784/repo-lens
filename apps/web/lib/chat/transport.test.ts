@@ -1,3 +1,4 @@
+import { ChatEventSchema, ChatRequestSchema } from '@repolens/shared';
 import { chatErrorText } from './errors';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -147,6 +148,44 @@ describe('buildChatRequest(请求体唯一构造点)', () => {
     const ids = Array.from({ length: 25 }, (_, i) => `f:src/a${i}.ts`);
     expect(buildChatRequest('q', ids)?.contextNodeIds).toHaveLength(20);
     expect(buildChatRequest('q', [])).toEqual({ message: 'q' });
+    // 从不带 sessionId(多轮等后端 P4)
+    expect(buildChatRequest('q', ids)).not.toHaveProperty('sessionId');
+  });
+
+  it('不合法节点 id 被丢弃,问题照常发送;丢弃后再截 20 个', () => {
+    expect(buildChatRequest('q', ['bad id'])).toEqual({ message: 'q' });
+    expect(buildChatRequest('q', ['bad id', 'f:src/a.ts', ''])).toEqual({
+      message: 'q',
+      contextNodeIds: ['f:src/a.ts'],
+    });
+    const bad = Array.from({ length: 5 }, (_, i) => `bad ${i}`);
+    const good = Array.from({ length: 25 }, (_, i) => `f:src/a${i}.ts`);
+    const r = buildChatRequest('q', [...bad, ...good]);
+    expect(r?.contextNodeIds).toEqual(good.slice(0, 20));
+    expect(ChatRequestSchema.safeParse(r).success).toBe(true);
+  });
+
+  it.each([
+    ['', '空串'],
+    ['   \n\t ', '全空白'],
+    ['x'.repeat(2000), '恰好 2000'],
+    ['x'.repeat(2001), '2001'],
+    ['  ' + 'x'.repeat(2000) + '  ', 'trim 后 2000(含首尾空白)'],
+    ['  ' + 'x'.repeat(2001) + '  ', 'trim 后 2001'],
+    ['  问  ', '首尾空白'],
+  ])('message 边界与 shared ChatRequestSchema 一致:%#(%s)', (msg) => {
+    const shared = ChatRequestSchema.safeParse({ message: msg });
+    const mine = buildChatRequest(msg);
+    expect(mine !== null).toBe(shared.success);
+    if (shared.success) expect(mine).toEqual(shared.data);
+  });
+
+  it('done.sessionId 在类型/校验上可选:有无都能过 ChatEventSchema', () => {
+    const base = { messageId: 1, droppedCitations: 0, usage: { in: 1, out: 1 } };
+    expect(ChatEventSchema.safeParse({ event: 'done', data: base }).success).toBe(true);
+    expect(
+      ChatEventSchema.safeParse({ event: 'done', data: { ...base, sessionId: 7 } }).success,
+    ).toBe(true);
   });
 });
 

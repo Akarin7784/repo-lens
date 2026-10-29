@@ -1,30 +1,35 @@
-import { ChatEventSchema, type ChatEvent, type ChatRequest } from '@repolens/shared';
+import {
+  CHAT_CONTEXT_NODES_MAX,
+  ChatEventSchema,
+  ChatRequestSchema,
+  NodeIdSchema,
+  type ChatEvent,
+  type ChatRequest,
+} from '@repolens/shared';
 import { apiBase } from '../api/config';
 import { looseError } from '../api/errors';
 import type { ChatErrorInfo } from './answer';
 import { parseSse } from './sse';
 
-/** 输入框上限(trim 后非空);架构师裁定可能收紧 shared 到 ≤2000,前端先按 2000 */
-export const CHAT_MESSAGE_MAX = 2000;
-/** W3 后端只做格式校验、不影响检索;前端最多传 20 个 */
-export const CHAT_CONTEXT_MAX = 20;
-
 /**
- * 请求体唯一构造点:字段名只在这里出现。当前按 main 上 shared ChatRequestSchema 用 `message`;
- * 若裁定改名(如 `question`)或 P1 收紧 schema,只改这一处。
- * 返回 null 表示问题为空或超长,不发请求。
+ * 请求体唯一构造点:字段名只在这里出现,校验直接用 shared ChatRequestSchema
+ * (message trim 后 1–CHAT_MESSAGE_MAX、contextNodeIds ≤ CHAT_CONTEXT_NODES_MAX、strict)。
+ * 不带 sessionId:多轮会话等后端 P4 真正填写 done.sessionId 后再做。
+ * 不合法的节点 id 先丢弃(只是上下文提示,不应让整条问题发不出去),再截前 CHAT_CONTEXT_NODES_MAX 个。
+ * 返回 null 表示问题不合法(trim 后为空或超长),不发请求。
  */
 export function buildChatRequest(
   question: string,
   contextNodeIds?: readonly string[],
 ): ChatRequest | null {
-  const q = question.trim();
-  if (!q || q.length > CHAT_MESSAGE_MAX) return null;
-  const ctx = contextNodeIds?.slice(0, CHAT_CONTEXT_MAX);
-  return {
-    message: q,
-    ...(ctx?.length ? { contextNodeIds: ctx as ChatRequest['contextNodeIds'] } : {}),
-  };
+  const ctx = contextNodeIds
+    ?.filter((id) => NodeIdSchema.safeParse(id).success)
+    .slice(0, CHAT_CONTEXT_NODES_MAX);
+  const r = ChatRequestSchema.safeParse({
+    message: question,
+    ...(ctx?.length ? { contextNodeIds: ctx } : {}),
+  });
+  return r.success ? r.data : null;
 }
 
 /** 回答文本里模型输出的 [[Sn:a-b]] 标记:路径/行号一律以 citation 事件为准,原始标记不显示 */
