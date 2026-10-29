@@ -166,18 +166,39 @@ function Inner({
     };
   }, [source, owner, repo]);
 
+  // 正在加载子节点的 id → 是否有用户点击认领了这次加载。加载中重复点击不发第二次请求,
+  // 只做认领:请求返回时即使自动下探已被用户中止,结果也照常应用并按用户点击锚定
+  const loadingRef = useRef<Map<string, { user: boolean }>>(new Map());
+
+  // 锚点只在确认 expanded 将要变化、紧接着 dispatch 之前记录(用户操作才锚定),随后由布局 effect
+  // 消费并清空;失败/被丢弃/重复点击的路径从不设置锚点,因此无需在这些路径上清空
   const toggle = useCallback(
-    async (id: string, autoFor?: string): Promise<boolean> => {
+    async (id: string, autoFor?: string, anchor = false): Promise<boolean> => {
       setError(null);
+      const setAnchor = (user = anchor) => {
+        if (!user) return;
+        const abs = absolutePosition(getNodes(), id);
+        anchorRef.current = abs ? makeAnchor(id, abs, getViewport()) : null;
+      };
       if (state.expanded.has(id)) {
+        setAnchor();
         dispatch({ type: 'collapse', id });
         return true;
       }
       if (!state.loaded.has(id)) {
+        const inflight = loadingRef.current.get(id);
+        if (inflight) {
+          if (anchor) inflight.user = true;
+          return false;
+        }
+        const entry = { user: anchor };
+        loadingRef.current.set(id, entry);
         try {
           const slice = await source.loadChildren(id);
-          // 自动下探的请求返回时,用户可能已手动操作(autoFocus 被置空或换了目标):丢弃结果
-          if (autoFor !== undefined && autoFocus.current !== autoFor) return false;
+          // 自动下探的请求返回时,用户可能已手动操作(autoFocus 被置空或换了目标):丢弃结果,
+          // 除非用户在加载中点了同一个节点(认领了这次加载)
+          if (!entry.user && autoFor !== undefined && autoFocus.current !== autoFor) return false;
+          setAnchor(entry.user);
           dispatch({
             type: 'childrenLoaded',
             parentId: id,
@@ -186,28 +207,31 @@ function Inner({
             truncated: slice.truncated,
           });
         } catch (e) {
-          if (autoFor !== undefined && autoFocus.current !== autoFor) return false;
+          if (!entry.user && autoFor !== undefined && autoFocus.current !== autoFor) return false;
           setError(
             e instanceof SliceTooLargeError ? e.message : `加载 ${id} 失败:${userMessageOf(e)}`,
           );
           return false;
+        } finally {
+          loadingRef.current.delete(id);
         }
+        dispatch({ type: 'expand', id });
+        return true;
       }
+      setAnchor();
       dispatch({ type: 'expand', id });
       return true;
     },
-    [state.expanded, state.loaded, source],
+    [state.expanded, state.loaded, source, getNodes, getViewport],
   );
 
   // 用户操作(▸、双击、全部收起)都会终止自动下探
   const userToggle = useCallback(
     (id: string) => {
       autoFocus.current = null;
-      const abs = absolutePosition(getNodes(), id);
-      anchorRef.current = abs ? makeAnchor(id, abs, getViewport()) : null;
-      return toggle(id);
+      return toggle(id, undefined, true);
     },
-    [toggle, getNodes, getViewport],
+    [toggle],
   );
 
   useEffect(() => {
@@ -297,7 +321,7 @@ function Inner({
         const v = viewportAfterLayout(anchorRef.current, next.nodes);
         anchorRef.current = null;
         if (v === 'fit') requestAnimationFrame(() => fitView({ padding: 0.12, duration: 300 }));
-        else setViewport(v);
+        else void setViewport(v, { duration: 200 });
       })
       .catch((e: unknown) => alive && setError(`布局失败:${String(e)}`));
     return () => {
