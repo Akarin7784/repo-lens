@@ -82,6 +82,11 @@ export const GraphEdgeSchema = z.object({
   srcFileId: FileIdSchema,
   weight: z.number().int().positive(),
   aggregated: z.boolean().optional(),
+  /**
+   * 是否在环里(T-003h)。file 级边:两端文件在同一强连通分量;聚合边:被聚合的底层 file 边中至少一条在环里。
+   * 只在为 true 时返回,缺省即 false;`x:` 外部包边不会是 true。前端标环边只读这个字段。
+   */
+  inCycle: z.boolean().optional(),
 });
 
 export const GraphMetaSchema = z.object({

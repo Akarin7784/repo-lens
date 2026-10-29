@@ -203,3 +203,70 @@ describe('跨子树聚合边', () => {
     expect(dup.meta.cycles).toEqual([['m:packages/core', 'm:packages/utils']]);
   });
 });
+
+describe('边的 inCycle(T-003h)', () => {
+  // SCC1 = {deep/x, deep/y};SCC2 = {core/index, utils/a};index→x、b→index、main→index 不在环里
+  const ix = graph([
+    [`${C}deep/x.ts`, `${C}deep/y.ts`, 'static'],
+    [`${C}deep/y.ts`, `${C}deep/x.ts`, 'static'],
+    [`${C}index.ts`, `${U}a.ts`, 'static'],
+    [`${U}a.ts`, `${C}index.ts`, 'static'],
+    [`${C}index.ts`, `${C}deep/x.ts`, 'static'],
+    [`${U}b.ts`, `${C}index.ts`, 'static'],
+    ['packages/app/main.ts', `${C}index.ts`, 'static'],
+  ]);
+  const scc = [
+    [`f:${C}deep/x.ts`, `f:${C}deep/y.ts`],
+    [`f:${C}index.ts`, `f:${U}a.ts`],
+  ];
+  const at = (parentId: string | null, cycles: string[][] | undefined = scc) => {
+    const g = GraphDataSchema.parse(
+      projectGraph(ix, {
+        repoId: 1,
+        commitSha: 'a'.repeat(40),
+        parentId,
+        includeExternal: false,
+        cycles,
+      }),
+    );
+    return Object.fromEntries(
+      g.edges.map((e) => [`${e.source}->${e.target}`, e.inCycle ?? false]),
+    ) as Record<string, boolean>;
+  };
+
+  it('file 级边:两端在同一 SCC 为 true;两端分属不同 SCC 为 false', () => {
+    expect(at('d:packages/core/src/deep')).toEqual({
+      [`f:${C}deep/x.ts->f:${C}deep/y.ts`]: true,
+      [`f:${C}deep/y.ts->f:${C}deep/x.ts`]: true,
+      // index 与 x 各自在环里,但不在同一个 SCC
+      [`f:${C}index.ts->f:${C}deep/x.ts`]: false,
+    });
+  });
+
+  it('聚合边:任一底层 file 边在环里即为 true', () => {
+    expect(at(null)).toEqual({
+      'm:packages/core->m:packages/utils': true, // index→a
+      'm:packages/utils->m:packages/core': true, // a→index(true)+ b→index(false)
+      'm:packages/app->m:packages/core': false,
+    });
+    // d:deep 内部的环在本层是自环、不返回;f:index → d:deep 只聚合了 index→x,不在环里
+    expect(at('d:packages/core/src')).toEqual({
+      [`f:${C}index.ts->d:${C}deep`]: false,
+      [`f:${C}index.ts->m:packages/utils`]: true,
+      [`m:packages/utils->f:${C}index.ts`]: true,
+      [`m:packages/app->f:${C}index.ts`]: false,
+    });
+  });
+
+  it('只在为 true 时输出字段;cycles 为空时一律不输出', () => {
+    const g = projectGraph(ix, {
+      repoId: 1,
+      commitSha: 'a'.repeat(40),
+      parentId: null,
+      includeExternal: false,
+      cycles: scc,
+    })!;
+    expect(g.edges.every((e) => e.inCycle === true || !('inCycle' in e))).toBe(true);
+    expect(Object.values(at(null, [])).some(Boolean)).toBe(false);
+  });
+});

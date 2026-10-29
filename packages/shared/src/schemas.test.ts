@@ -143,6 +143,16 @@ describe('GraphDataSchema', () => {
         false,
       );
   });
+  it('边的 inCycle 可选,只接受布尔值', () => {
+    for (const v of [true, false, undefined])
+      expect(
+        GraphDataSchema.parse({ ...graph, edges: [{ ...edge, inCycle: v }] }).edges[0]!.inCycle,
+      ).toBe(v);
+    for (const v of ['true', 1, null])
+      expect(
+        GraphDataSchema.safeParse({ ...graph, edges: [{ ...edge, inCycle: v }] }).success,
+      ).toBe(false);
+  });
   it('派生的 external 节点和 aggregated 边合法', () => {
     const g = {
       ...graph,
