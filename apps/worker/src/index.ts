@@ -1,11 +1,11 @@
 import { Worker } from 'bullmq';
 import { Redis } from 'ioredis';
 import { DEFAULT_PRICES, LlmGateway, createLlmClient } from '@repolens/agent';
-import { MysqlStore, redisKeys, waitForSchema } from '@repolens/db';
-import { CachedEmbedder, qdrantCollectionFor, QdrantVectorStore } from '@repolens/rag';
-import { buildEmbeddingDeps, selectEmbedder } from './embedder-select.js';
+import { MysqlStore, waitForSchema } from '@repolens/db';
+import { qdrantCollectionFor } from '@repolens/rag';
 import { loadConfig } from './config.js';
 import { RedisEventSink } from './events.js';
+import { buildJobDeps } from './job-deps.js';
 import { ANALYZE_QUEUE, processAnalyzeJob, type AnalyzeJobData } from './queue.js';
 
 // 配置(含 LLM 预算等)不合法时启动即失败
@@ -30,51 +30,25 @@ const gateway = new LlmGateway({
   taskBudgetCents: config.llm.taskBudgetCents,
 });
 
-// embedding 只在 worker 里跑(本地 ONNX 峰值约 2.5 GB);未配置 QDRANT_URL 时跳过向量化阶段
+// embedding 只在 worker 里跑;装配(选 embedder / 缓存 / skip reason / 向量库)见 buildJobDeps
 const emb = config.embedding;
 const ds = emb.dashscope;
-// EMBEDDING_PROVIDER=dashscope 时不构造 OnnxEmbedder、不读 /models;无 key → 向量化记 skipped 并告警(不打印 key)
-const { base: baseEmbedder, dashscope } = selectEmbedder(emb);
-const embedder = new CachedEmbedder(baseEmbedder, redis);
-const embeddingDeps = buildEmbeddingDeps(emb, dashscope, redis);
-// 每个提供方 / 维度一个集合,local 仍是 QDRANT_COLLECTION(默认 code_chunks)
-const collection = emb.qdrant ? qdrantCollectionFor(emb.qdrant.collection, ds) : null;
-// 缺 key 时向量库不会被使用:embeddingSkipReason='no-key' 使向量化整段跳过,不建集合、不写入
-const vectorStore = emb.qdrant
-  ? new QdrantVectorStore({ ...emb.qdrant, collection: collection!, dim: embedder.dim })
-  : undefined;
+const deps = buildJobDeps({ config, emb, redis, gateway, store, events });
 if (ds && !ds.apiKey)
   console.warn(
     '[worker] EMBEDDING_PROVIDER=dashscope 但未配置 DASHSCOPE_API_KEY:向量化将记为 skipped',
   );
+const collection = emb.qdrant ? qdrantCollectionFor(emb.qdrant.collection, ds) : null;
 console.log(
   ds
     ? `[worker] embedder=dashscope model=${ds.model} dim=${ds.dim} batch=${ds.batchSize} budget=${ds.taskBudgetCents}c collection=${collection ?? '-'} qdrant=${emb.qdrant ? 'on' : 'off'}`
     : `[worker] embedder=${emb.provider} model=${emb.model}@${emb.revision.slice(0, 7)} batch=${emb.batchSize} qdrant=${emb.qdrant ? 'on' : 'off'}`,
 );
 
-async function invalidateGraphCache(repoId: number, commitSha: string) {
-  const stream = redis.scanStream({ match: redisKeys.graphPattern(repoId, commitSha), count: 200 });
-  for await (const keys of stream as AsyncIterable<string[]>)
-    if (keys.length) await redis.del(...keys);
-}
-
-const worker = new Worker<AnalyzeJobData>(
-  ANALYZE_QUEUE,
-  (job) =>
-    processAnalyzeJob(job, {
-      store,
-      events,
-      config,
-      lockKv: redis,
-      gateway,
-      embedder,
-      vectorStore,
-      ...embeddingDeps,
-      onGraphPersisted: invalidateGraphCache,
-    }),
-  { connection: redis.duplicate(), concurrency: config.concurrency },
-);
+const worker = new Worker<AnalyzeJobData>(ANALYZE_QUEUE, (job) => processAnalyzeJob(job, deps), {
+  connection: redis.duplicate(),
+  concurrency: config.concurrency,
+});
 
 worker.on('ready', () => console.log(`[worker] listening on queue "${ANALYZE_QUEUE}"`));
 worker.on('completed', (job) => console.log(`[worker] job ${job.data.jobId} done`));
