@@ -2,13 +2,40 @@ import { createHash } from 'node:crypto';
 import type { GraphIndex, SummaryLevel, SummaryRow } from '@repolens/db';
 import type { LlmGateway } from '../llm/gateway.js';
 import { LlmError, type LlmMessage } from '../llm/types.js';
-import { PROMPT_VERSION, dirPrompt, filePrompt, parseSummary, repoPrompt } from './prompts.js';
+import {
+  PROMPT_VERSION,
+  capChildren,
+  dirPrompt,
+  filePrompt,
+  parseSummary,
+  repoPrompt,
+} from './prompts.js';
 import { ruleDirSummary, ruleFileSummary, ruleRepoSummary } from './rules.js';
 
 export const RULE_MODEL = 'rule';
 /** D8:按 fanIn 取前 200 个文件做 LLM 文件摘要,其余只做规则摘要 */
 export const DEFAULT_MAX_LLM_FILES = 200;
 export const REPO_TARGET = 'repo';
+/** 单个文件摘要调用的超时(每次尝试);超时按失败处理:重试 1 次,仍超时用规则摘要 */
+export const DEFAULT_FILE_TIMEOUT_MS = 30_000;
+
+export class SummaryTimeoutError extends Error {
+  constructor(ms: number) {
+    super(`摘要调用超过 ${ms}ms`);
+    this.name = 'SummaryTimeoutError';
+  }
+}
+
+function withTimeout<T>(p: Promise<T>, ms: number | undefined): Promise<T> {
+  if (!ms || ms <= 0) return p;
+  let t: ReturnType<typeof setTimeout>;
+  return Promise.race([
+    p,
+    new Promise<never>((_, rej) => {
+      t = setTimeout(() => rej(new SummaryTimeoutError(ms)), ms);
+    }),
+  ]).finally(() => clearTimeout(t));
+}
 
 export interface SummaryFileInput {
   path: string;
@@ -44,6 +71,8 @@ export interface SummarizeDeps {
   taskId?: number;
   maxLlmFiles?: number;
   concurrency?: number;
+  /** 单文件摘要调用超时,默认 DEFAULT_FILE_TIMEOUT_MS;0 表示不限 */
+  fileTimeoutMs?: number;
   save: (row: SummaryRow) => Promise<void>;
   onProgress?: (done: number, total: number) => void | Promise<void>;
 }
@@ -58,6 +87,8 @@ export interface SummarizeResult {
   reused: number;
   /** LLM 重试后仍失败、降级成规则摘要的节点数 */
   failed: number;
+  /** 文件摘要调用超时的次数(每次尝试计 1) */
+  timedOut: number;
   /** 预算熔断:触发的预算级别与之后改用规则摘要的节点数 */
   budget: { scope: 'daily' | 'task'; degraded: number } | null;
 }
@@ -91,7 +122,15 @@ export async function summarizeRepo(
   const { tree } = inp;
   const conc = deps.concurrency ?? 4;
   const content = new Map<string, string>(); // nodeId → 摘要
-  const res: SummarizeResult = { total: 0, llm: 0, rule: 0, reused: 0, failed: 0, budget: null };
+  const res: SummarizeResult = {
+    total: 0,
+    llm: 0,
+    rule: 0,
+    reused: 0,
+    failed: 0,
+    timedOut: 0,
+    budget: null,
+  };
 
   const fileNodes = [...tree.nodes.values()].filter((n) => n.type === 'file');
   const dirs = [...tree.nodes.values()].filter((n) => n.type === 'dir');
@@ -114,6 +153,7 @@ export async function summarizeRepo(
   const callLlm = async (
     model: string,
     messages: LlmMessage[],
+    timeoutMs?: number,
   ): Promise<{ text: string; tokensIn: number; tokensOut: number } | null> => {
     if (res.budget) return null;
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -128,15 +168,18 @@ export async function summarizeRepo(
               },
             ];
       try {
-        const r = await deps.gateway.complete({
-          model,
-          messages: msgs,
-          json: true,
-          maxTokens: 600,
-          purpose: 'summary',
-          repoId: deps.repoId,
-          taskId: deps.taskId,
-        });
+        const r = await withTimeout(
+          deps.gateway.complete({
+            model,
+            messages: msgs,
+            json: true,
+            maxTokens: 600,
+            purpose: 'summary',
+            repoId: deps.repoId,
+            taskId: deps.taskId,
+          }),
+          timeoutMs,
+        );
         const s = parseSummary(r.text);
         if (s) return { text: s, ...r.usage };
       } catch (err) {
@@ -144,7 +187,8 @@ export async function summarizeRepo(
           res.budget ??= { scope: err.scope ?? 'daily', degraded: 0 };
           return null;
         }
-        // LLM_UNAVAILABLE / 未知模型等:重试一次
+        if (err instanceof SummaryTimeoutError) res.timedOut++;
+        // 超时 / LLM_UNAVAILABLE / 未知模型等:重试一次
       }
     }
     res.failed++;
@@ -161,6 +205,7 @@ export async function summarizeRepo(
     messages: () => LlmMessage[],
     ruleInput: string,
     rule: () => string,
+    timeoutMs?: number,
   ) => {
     const prev = inp.existing.get(summaryKey(level, targetId));
     const llmHash = inputHash(level, model, llmInput);
@@ -173,7 +218,7 @@ export async function summarizeRepo(
       return;
     }
     if (mode === 'llm') {
-      const out = await callLlm(model, messages());
+      const out = await callLlm(model, messages(), timeoutMs);
       if (out) {
         res.llm++;
         row = {
@@ -249,6 +294,7 @@ export async function summarizeRepo(
       () => filePrompt({ ...info, code: info.code ?? '' }),
       ruleInput,
       () => ruleFileSummary(info),
+      deps.fileTimeoutMs ?? DEFAULT_FILE_TIMEOUT_MS,
     );
   });
 
@@ -265,7 +311,10 @@ export async function summarizeRepo(
     kind: 'dir' | 'module',
   ) => {
     const kids = (tree.children.get(n.id) ?? []).slice().sort();
-    const children = kids.map((id) => ({ id, summary: content.get(id) ?? '' }));
+    // 子项摘要总长度有上限;hash 只看实际放进提示词的子项与省略数
+    const { kept: children, omitted } = capChildren(
+      kids.map((id) => ({ id, summary: content.get(id) ?? '' })),
+    );
     const files = tree.filesUnder(n.id);
     const loc = files.reduce((s, f) => s + ('loc' in f ? (f.loc ?? 0) : 0), 0);
     const labels = kids
@@ -278,8 +327,8 @@ export async function summarizeRepo(
       n.id,
       'llm',
       deps.summaryModel,
-      JSON.stringify([n.path, kind, children]),
-      () => dirPrompt({ path: n.path, kind, children }),
+      JSON.stringify(omitted ? [n.path, kind, children, omitted] : [n.path, kind, children]),
+      () => dirPrompt({ path: n.path, kind, children, omitted }),
       ruleInput,
       () => ruleDirSummary({ path: n.path, kind, fileCount: files.length, loc, children: labels }),
     );

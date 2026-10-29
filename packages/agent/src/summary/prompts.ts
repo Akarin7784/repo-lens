@@ -5,6 +5,24 @@ export const PROMPT_VERSION = 1;
 export const MAX_SUMMARY_CHARS = 600;
 const CODE_MAX_LINES = 150;
 const CODE_MAX_CHARS = 6000;
+/** dir/module 提示词里子项摘要的总长度上限(字符);超出的子项不放进提示词,只注明省略个数 */
+export const CHILDREN_MAX_CHARS = 8000;
+
+/** 按给定顺序装入子项,直到总长度(id + 摘要)超过上限;至少保留 1 个 */
+export function capChildren<T extends { id: string; summary: string }>(
+  children: T[],
+  max = CHILDREN_MAX_CHARS,
+): { kept: T[]; omitted: number } {
+  const kept: T[] = [];
+  let total = 0;
+  for (const c of children) {
+    const n = c.id.length + c.summary.length;
+    if (kept.length > 0 && total + n > max) break;
+    kept.push(c);
+    total += n;
+  }
+  return { kept, omitted: children.length - kept.length };
+}
 
 const SYSTEM =
   '你是代码分析助手。只依据给出的代码或摘要作答;不确定就写"未知"。' +
@@ -46,10 +64,12 @@ export function dirPrompt(d: {
   path: string;
   kind: 'dir' | 'module';
   children: { id: string; summary: string }[];
+  /** 因总长度上限被省略的子项个数 */
+  omitted?: number;
 }): LlmMessage[] {
-  const body = d.children
-    .map((c) => `<summary id="${c.id}">${esc(c.summary)}</summary>`)
-    .join('\n');
+  const body =
+    d.children.map((c) => `<summary id="${c.id}">${esc(c.summary)}</summary>`).join('\n') +
+    (d.omitted ? `\n(另有 ${d.omitted} 个子项因长度上限省略)` : '');
   return [
     sys(150),
     {

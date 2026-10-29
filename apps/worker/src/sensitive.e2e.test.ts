@@ -91,6 +91,17 @@ describe('端到端:含假 key 的仓库跑完整流水线', () => {
     expect(aws?.model).toBe('rule');
     for (const r of rows) for (const s of secrets) expect(r.content).not.toContain(s);
 
+    // 2b) /nodes 的 exports 来源(loadGraph → exportsOf):敏感文件没有持久化 symbols,.env 不是图节点
+    const g = await store.loadGraph(repo.id, sha);
+    const exportsOf = async (path: string) => {
+      const row = g.files.find((f) => f.path === path);
+      return row ? store.exportsOf(row.id) : null;
+    };
+    expect(await exportsOf('src/aws.ts')).toEqual([]);
+    expect(await exportsOf('src/tls.ts')).toEqual([]);
+    expect(await exportsOf('.env')).toBeNull();
+    expect(await exportsOf('src/index.ts')).toEqual(['a']);
+
     // 3) 切块(embedding / RAG 来源):敏感文件没有切块,所有切块对应的文本都不含假 key
     const root = mkRoot(config.workdir);
     const parsed = (await analyzeRepo({ root, files: scanSourceFiles(root) })).parsed;

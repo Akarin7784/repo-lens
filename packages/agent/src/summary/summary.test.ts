@@ -4,9 +4,21 @@ import { FakeLlm } from '../llm/fake.js';
 import { LlmGateway, type LlmKv } from '../llm/gateway.js';
 import type { LlmCall, LlmCallResult, LlmClient } from '../llm/types.js';
 import { DEFAULT_PRICES } from '../llm/pricing.js';
-import { parseSummary, truncateCode } from './prompts.js';
+import {
+  CHILDREN_MAX_CHARS,
+  capChildren,
+  dirPrompt,
+  parseSummary,
+  truncateCode,
+} from './prompts.js';
 import { ruleDirSummary, ruleFileSummary, ruleRepoSummary } from './rules.js';
-import { RULE_MODEL, summarizeRepo, summaryKey, type SummaryFileInput } from './summarize.js';
+import {
+  DEFAULT_FILE_TIMEOUT_MS,
+  RULE_MODEL,
+  summarizeRepo,
+  summaryKey,
+  type SummaryFileInput,
+} from './summarize.js';
 
 class MemKv implements LlmKv {
   m = new Map<string, string>();
@@ -82,6 +94,7 @@ function setup(
     taskCents?: number;
     dailyCents?: number;
     maxLlmFiles?: number;
+    fileTimeoutMs?: number;
   } = {},
 ) {
   const tree = new GraphIndex(graph);
@@ -125,6 +138,7 @@ function setup(
         repoId: 1,
         taskId: 7,
         maxLlmFiles: o.maxLlmFiles,
+        fileTimeoutMs: o.fileTimeoutMs,
         concurrency: 2,
         save: async (r) => void db.set(summaryKey(r.level, r.targetId), r),
       },
@@ -231,5 +245,57 @@ describe('summarizeRepo', () => {
     expect(client.calls).toBe(r.total * 2);
     for (const row of db.values()) expect(row.model).toBe(RULE_MODEL);
     // 规则摘要也按 hash 复用;LLM 恢复后再跑会升级为 LLM 摘要
+  });
+
+  it('单文件摘要调用超时:按失败重试 1 次,仍超时降级为规则摘要,其它节点不受影响', async () => {
+    expect(DEFAULT_FILE_TIMEOUT_MS).toBe(30_000);
+    let hung = 0;
+    const client: LlmClient = {
+      provider: 'fake',
+      async call(req: LlmCall): Promise<LlmCallResult> {
+        const text = req.messages.map((m) => m.content).join('\n');
+        if (text.includes('路径:src/middleware/b.ts')) {
+          hung++;
+          return new Promise(() => {}); // 永不返回
+        }
+        return { text: '{"summary":"ok"}', usage: { tokensIn: 1, tokensOut: 1 } };
+      },
+    } as LlmClient;
+    const { run, db } = setup({ client, fileTimeoutMs: 30 });
+    const t0 = Date.now();
+    const r = await run();
+    expect(Date.now() - t0).toBeLessThan(2000);
+    expect(hung).toBe(2);
+    expect(r.timedOut).toBe(2);
+    expect(r.failed).toBe(1);
+    expect(db.get(summaryKey('file', 'f:src/middleware/b.ts'))?.model).toBe(RULE_MODEL);
+    expect(db.get(summaryKey('file', 'f:src/middleware/a.ts'))?.content).toBe('ok');
+    expect(db.get(summaryKey('dir', 'm:src/middleware'))?.content).toBe('ok');
+  });
+});
+
+describe('dir/module 子项总长度上限', () => {
+  const kid = (i: number) => ({ id: `f:src/d/f${i}.ts`, summary: '摘'.repeat(600) });
+  it('超过上限的子项不进提示词,只注明省略个数;总长度不超过上限', () => {
+    const all = Array.from({ length: 40 }, (_, i) => kid(i));
+    const { kept, omitted } = capChildren(all);
+    expect(kept.length + omitted).toBe(40);
+    expect(omitted).toBeGreaterThan(0);
+    expect(kept.reduce((n, c) => n + c.id.length + c.summary.length, 0)).toBeLessThanOrEqual(
+      CHILDREN_MAX_CHARS,
+    );
+    expect(kept).toEqual(all.slice(0, kept.length)); // 保持原顺序
+    const msg = dirPrompt({ path: 'src/d', kind: 'dir', children: kept, omitted })[1]!.content;
+    expect(msg).toContain(`另有 ${omitted} 个子项因长度上限省略`);
+    expect(msg).not.toContain(all[kept.length]!.id);
+  });
+  it('未超上限时原样保留、不加省略说明;单个超长子项至少保留 1 个', () => {
+    const few = [kid(1), kid(2)];
+    expect(capChildren(few)).toEqual({ kept: few, omitted: 0 });
+    expect(dirPrompt({ path: 'src/d', kind: 'dir', children: few })[1]!.content).not.toContain(
+      '省略',
+    );
+    const big = [{ id: 'd:x', summary: 'x'.repeat(20_000) }, kid(3)];
+    expect(capChildren(big)).toEqual({ kept: [big[0]], omitted: 1 });
   });
 });

@@ -10,6 +10,7 @@ import {
   type HealthResponse,
   type NodeDetail,
   type RepoStatus,
+  sensitivePathRule,
 } from '@repolens/shared';
 import {
   GRAPH_CACHE_TTL_S,
@@ -295,7 +296,8 @@ export function buildApp(deps?: AppDeps): FastifyInstance {
       const row = (await store.loadGraph(repoId, task.commitSha)).files.find(
         (f) => f.path === d.path,
       );
-      if (row) exports = await store.exportsOf(row.id);
+      // 双保险:路径命中敏感规则的文件一律不返回导出名(内容规则在 worker 持久化时已过滤)
+      if (row && !sensitivePathRule(d.path)) exports = await store.exportsOf(row.id);
     }
     // summary 表不带 commit:返回该仓库最近一次分析写入的摘要;module 存在 level 'dir' 下
     const level = d.kind === 'file' ? 'file' : d.kind === 'external' ? null : 'dir';
