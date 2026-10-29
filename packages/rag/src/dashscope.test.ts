@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { readEmbeddingConfig, type DashscopeConfig } from './config.js';
+import { DASHSCOPE_MODELS } from './models.js';
 import {
   DASHSCOPE_MAX_INPUT_CHARS,
   DashscopeEmbedder,
@@ -140,6 +141,77 @@ describe('DashscopeEmbedder', () => {
     await expect(mb.e.embedQuery('q')).rejects.toMatchObject({ kind: 'rate-limit' });
     expect(b.calls).toHaveLength(1);
     expect(mb.sleeps).toEqual([]);
+  });
+
+  it('Retry-After 为 0 或过去日期:取 max(Retry-After, 常规退避),不立即重打', async () => {
+    for (const h of ['0', 'Thu, 01 Jan 1970 00:00:00 GMT']) {
+      const a = fakeFetch(() => new Response('', { status: 429, headers: { 'retry-after': h } }));
+      const sleeps: number[] = [];
+      const sleep = async (ms: number) => void sleeps.push(ms);
+      const e = new DashscopeEmbedder(cfg, {
+        fetch: a.f,
+        sleep,
+        backoffMs: 1000,
+        bucket: new TokenBucket(1e9, () => 0, sleep),
+      });
+      await expect(e.embedQuery('q')).rejects.toMatchObject({ kind: 'rate-limit' });
+      expect(a.calls).toHaveLength(2);
+      expect(sleeps).toHaveLength(1);
+      // 常规退避 1s·2^0 + ≤25% 抖动
+      expect(sleeps[0]).toBeGreaterThanOrEqual(1000);
+      expect(sleeps[0]).toBeLessThanOrEqual(1250);
+    }
+  });
+
+  it('Retry-After 小于常规退避时取常规退避;大于时取 Retry-After', async () => {
+    const r = (s: string) => () => new Response('', { status: 429, headers: { 'retry-after': s } });
+    const run = async (h: string) => {
+      const a = fakeFetch(r(h));
+      const sleeps: number[] = [];
+      const sleep = async (ms: number) => void sleeps.push(ms);
+      const e = new DashscopeEmbedder(cfg, {
+        fetch: a.f,
+        sleep,
+        backoffMs: 1000,
+        bucket: new TokenBucket(1e9, () => 0, sleep),
+      });
+      await expect(e.embedDocuments(['x'])).rejects.toMatchObject({ kind: 'rate-limit' });
+      return sleeps;
+    };
+    const lo = await run('0.5');
+    expect(lo[0]).toBeGreaterThanOrEqual(1000);
+    expect(lo[2]).toBeGreaterThanOrEqual(4000);
+    expect(await run('8')).toEqual([8000, 8000, 8000]);
+  });
+
+  it('按模型参数化:请求体 model / dimensions 取自配置', async () => {
+    const a = fakeFetch((c) => {
+      const n = c.body.dimensions as number;
+      return new Response(
+        JSON.stringify({ data: [{ index: 0, embedding: new Array(n).fill(0.1) }] }),
+        { status: 200 },
+      );
+    });
+    const m = mk(a.f, { ...cfg, model: 'qwen3.7-text-embedding-flash', dim: 256 });
+    expect(m.e.model).toBe('dashscope:qwen3.7-text-embedding-flash');
+    expect(m.e.revision).toBe('256');
+    expect((await m.e.embedDocuments(['x']))[0]).toHaveLength(256);
+    expect(a.calls[0]!.body).toMatchObject({
+      model: 'qwen3.7-text-embedding-flash',
+      dimensions: 256,
+    });
+  });
+
+  it('返回维度与请求维度不一致(如 flash 静默回落 1024)视为 bad-response', async () => {
+    const a = fakeFetch(
+      () =>
+        new Response(
+          JSON.stringify({ data: [{ index: 0, embedding: new Array(1024).fill(0.1) }] }),
+          { status: 200 },
+        ),
+    );
+    const m = mk(a.f, { ...cfg, model: 'qwen3.7-text-embedding', dim: 2560 });
+    await expect(m.e.embedDocuments(['x'])).rejects.toMatchObject({ kind: 'bad-response' });
   });
 
   it('批量超过上限直接拒绝(不发请求)', async () => {
@@ -301,6 +373,58 @@ describe('EMBEDDING_PROVIDER 配置', () => {
       readEmbeddingConfig({ EMBEDDING_PROVIDER: 'dashscope', DASHSCOPE_EMBEDDING_DIM: '1000' }),
     ).toThrow();
   });
+  it('能力表:按模型取默认维度 / TPM / 批量;表外模型与表外维度报错只含变量名', () => {
+    const d = (env: Record<string, string>) =>
+      readEmbeddingConfig({ EMBEDDING_PROVIDER: 'dashscope', ...env }).dashscope!;
+    const q = d({ DASHSCOPE_EMBEDDING_MODEL: 'qwen3.7-text-embedding' });
+    expect(q).toMatchObject({ dim: 1024, tpm: 800_000, batchSize: 10 });
+    const f = d({ DASHSCOPE_EMBEDDING_MODEL: 'qwen3.7-text-embedding-flash' });
+    expect(f).toMatchObject({ dim: 1024, tpm: 800_000, batchSize: 10 });
+    // 文档批量 20,但实际默认上限仍 10
+    expect(
+      d({ DASHSCOPE_EMBEDDING_MODEL: 'qwen3.7-text-embedding', EMBEDDING_BATCH_SIZE: '64' })
+        .batchSize,
+    ).toBe(10);
+    expect(DASHSCOPE_MODELS['qwen3.7-text-embedding']!.docBatchMax).toBe(20);
+    expect(DASHSCOPE_MODELS['text-embedding-v3']!.docBatchMax).toBe(10);
+    expect(
+      d({ DASHSCOPE_EMBEDDING_MODEL: 'qwen3.7-text-embedding', DASHSCOPE_EMBEDDING_DIM: '2560' })
+        .dim,
+    ).toBe(2560);
+    expect(d({ DASHSCOPE_EMBEDDING_TPM: '5000' }).tpm).toBe(5000);
+    for (const dim of ['2560', '2048', '1536', '128']) {
+      expect(() =>
+        d({
+          DASHSCOPE_EMBEDDING_MODEL: 'qwen3.7-text-embedding-flash',
+          DASHSCOPE_EMBEDDING_DIM: dim,
+        }),
+      ).toThrow(/DASHSCOPE_EMBEDDING_DIM/);
+    }
+    for (const dim of ['1024', '768', '512', '256'])
+      expect(
+        d({
+          DASHSCOPE_EMBEDDING_MODEL: 'qwen3.7-text-embedding-flash',
+          DASHSCOPE_EMBEDDING_DIM: dim,
+        }).dim,
+      ).toBe(Number(dim));
+    expect(() =>
+      d({ DASHSCOPE_EMBEDDING_MODEL: 'qwen3.7-text-embedding', DASHSCOPE_EMBEDDING_DIM: '128' }),
+    ).toThrow(/DASHSCOPE_EMBEDDING_DIM/);
+    let msg = '';
+    try {
+      d({ DASHSCOPE_EMBEDDING_MODEL: 'secret-model-xyz' });
+    } catch (e) {
+      msg = String(e);
+    }
+    expect(msg).toContain('DASHSCOPE_EMBEDDING_MODEL');
+    expect(msg).not.toContain('secret-model-xyz');
+    // 原型链上的名字不算表内模型
+    expect(() => d({ DASHSCOPE_EMBEDDING_MODEL: 'constructor' })).toThrow(
+      /DASHSCOPE_EMBEDDING_MODEL/,
+    );
+    // local 下不校验 dashscope 模型,行为不变
+    expect(readEmbeddingConfig({ DASHSCOPE_EMBEDDING_MODEL: 'whatever' }).dashscope).toBeNull();
+  });
   it('BASE_URL 只允许 https + 官方主机;报错不回显值', () => {
     const ds = (u: string) =>
       readEmbeddingConfig({ EMBEDDING_PROVIDER: 'dashscope', DASHSCOPE_EMBEDDING_BASE_URL: u });
@@ -324,6 +448,8 @@ describe('EMBEDDING_PROVIDER 配置', () => {
       'https://47.93.1.2/compatible-mode/v1',
       'https://[::1]/v1',
       'https://a.b.c.maas.aliyuncs.com/v1',
+      // 正则去掉 $ 时会被前缀匹配放行(变异检查用例)
+      'https://a.b.maas.aliyuncs.com.evil.com',
     ]) {
       let msg = '';
       try {

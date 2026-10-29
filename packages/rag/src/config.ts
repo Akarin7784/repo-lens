@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { DEFAULT_EMBED_LOCK_MAX_WAIT_SEC, DEFAULT_EMBED_LOCK_TTL_SEC } from './lock.js';
+import { DASHSCOPE_DEFAULT_BATCH_CAP, dashscopeModelCaps } from './models.js';
 
 /** D4:本地 multilingual-e5-small(fp32),384 维 */
 export const DEFAULT_EMBEDDING_MODEL = 'Xenova/multilingual-e5-small';
@@ -10,7 +11,6 @@ export const DEFAULT_EMBEDDING_MODEL_REVISION = '761b726dd34fb83930e26aab4e9ac38
 /** T-214c:外部提供方阿里云百炼(OpenAI 兼容 /embeddings) */
 export const DASHSCOPE_DEFAULT_BASE_URL = 'https://dashscope.aliyuncs.com/compatible-mode/v1';
 export const DASHSCOPE_DEFAULT_MODEL = 'text-embedding-v3';
-export const DASHSCOPE_DEFAULT_DIM = 1024;
 /**
  * 只允许 https + 官方主机(北京 / 国际)或百炼业务空间专属域名 `<空间>.<地域>.maas.aliyuncs.com`
  * (整串锚定);不允许端口、用户名/密码、IP。其余在读配置时报错(只报变量名)。路径不限制。
@@ -31,8 +31,6 @@ export function isAllowedDashscopeBaseUrl(u: string): boolean {
     return false;
   }
 }
-/** 官方 v3 单次最多 10 条(2026-10-29 实测 11 条返回 400) */
-export const DASHSCOPE_MAX_BATCH = 10;
 /**
  * 单任务 embedding 预算(美分)。依据:2991 块 × ≤4000 字符上限约 4M token ≈ 2 元 ≈ 30 美分
  * (0.0005 元/千 token,汇率 6.67);MAX_FILES=5000 的仓库按比例约 50 美分,取 50 留余量。
@@ -41,58 +39,61 @@ export const DASHSCOPE_MAX_BATCH = 10;
 export const DEFAULT_EMBEDDING_TASK_BUDGET_CENTS = 50;
 
 const empty = (v: unknown) => (v === '' ? undefined : v);
-const Schema = z.object({
-  EMBEDDER: z.preprocess(empty, z.enum(['fake', 'onnx']).default('fake')),
-  EMBEDDING_MODEL: z.preprocess(empty, z.string().default(DEFAULT_EMBEDDING_MODEL)),
-  EMBEDDING_MODEL_REVISION: z.preprocess(
-    empty,
-    z.string().default(DEFAULT_EMBEDDING_MODEL_REVISION),
-  ),
-  EMBEDDING_MODEL_DIR: z.preprocess(empty, z.string().default('/app/models')),
-  EMBEDDING_BATCH_SIZE: z.preprocess(empty, z.coerce.number().int().min(1).max(256).default(16)),
-  EMBEDDING_THREADS: z.preprocess(empty, z.coerce.number().int().min(1).max(64).optional()),
-  WORKER_CPUS: z.preprocess(empty, z.coerce.number().positive().optional()),
-  EMBEDDING_LOCK_TTL_SEC: z.preprocess(
-    empty,
-    z.coerce.number().int().min(60).default(DEFAULT_EMBED_LOCK_TTL_SEC),
-  ),
-  EMBEDDING_LOCK_MAX_WAIT_SEC: z.preprocess(
-    empty,
-    z.coerce.number().int().min(1).default(DEFAULT_EMBED_LOCK_MAX_WAIT_SEC),
-  ),
-  EMBEDDING_PROVIDER: z.preprocess(empty, z.enum(['local', 'dashscope']).default('local')),
-  DASHSCOPE_API_KEY: z.preprocess(empty, z.string().optional()),
-  DASHSCOPE_EMBEDDING_BASE_URL: z.preprocess(
-    empty,
-    z.string().url().refine(isAllowedDashscopeBaseUrl).default(DASHSCOPE_DEFAULT_BASE_URL),
-  ),
-  DASHSCOPE_EMBEDDING_MODEL: z.preprocess(empty, z.string().default(DASHSCOPE_DEFAULT_MODEL)),
-  DASHSCOPE_EMBEDDING_DIM: z.preprocess(
-    empty,
-    z.coerce
-      .number()
-      .int()
-      .refine((d) => [1024, 768, 512, 256, 128, 64].includes(d))
-      .default(DASHSCOPE_DEFAULT_DIM),
-  ),
-  DASHSCOPE_EMBEDDING_TPM: z.preprocess(
-    empty,
-    z.coerce.number().int().min(1000).default(1_000_000),
-  ),
-  EMBEDDING_TASK_BUDGET_CENTS: z.preprocess(
-    empty,
-    z.coerce.number().int().min(0).default(DEFAULT_EMBEDDING_TASK_BUDGET_CENTS),
-  ),
-  QDRANT_URL: z.preprocess(empty, z.string().url().optional()),
-  QDRANT_API_KEY: z.preprocess(empty, z.string().optional()),
-  QDRANT_COLLECTION: z.preprocess(
-    empty,
-    z
-      .string()
-      .regex(/^[A-Za-z0-9_-]+$/)
-      .default('code_chunks'),
-  ),
-});
+const Schema = z
+  .object({
+    EMBEDDER: z.preprocess(empty, z.enum(['fake', 'onnx']).default('fake')),
+    EMBEDDING_MODEL: z.preprocess(empty, z.string().default(DEFAULT_EMBEDDING_MODEL)),
+    EMBEDDING_MODEL_REVISION: z.preprocess(
+      empty,
+      z.string().default(DEFAULT_EMBEDDING_MODEL_REVISION),
+    ),
+    EMBEDDING_MODEL_DIR: z.preprocess(empty, z.string().default('/app/models')),
+    EMBEDDING_BATCH_SIZE: z.preprocess(empty, z.coerce.number().int().min(1).max(256).default(16)),
+    EMBEDDING_THREADS: z.preprocess(empty, z.coerce.number().int().min(1).max(64).optional()),
+    WORKER_CPUS: z.preprocess(empty, z.coerce.number().positive().optional()),
+    EMBEDDING_LOCK_TTL_SEC: z.preprocess(
+      empty,
+      z.coerce.number().int().min(60).default(DEFAULT_EMBED_LOCK_TTL_SEC),
+    ),
+    EMBEDDING_LOCK_MAX_WAIT_SEC: z.preprocess(
+      empty,
+      z.coerce.number().int().min(1).default(DEFAULT_EMBED_LOCK_MAX_WAIT_SEC),
+    ),
+    EMBEDDING_PROVIDER: z.preprocess(empty, z.enum(['local', 'dashscope']).default('local')),
+    DASHSCOPE_API_KEY: z.preprocess(empty, z.string().optional()),
+    DASHSCOPE_EMBEDDING_BASE_URL: z.preprocess(
+      empty,
+      z.string().url().refine(isAllowedDashscopeBaseUrl).default(DASHSCOPE_DEFAULT_BASE_URL),
+    ),
+    DASHSCOPE_EMBEDDING_MODEL: z.preprocess(empty, z.string().default(DASHSCOPE_DEFAULT_MODEL)),
+    // 取值是否合法取决于模型,在 superRefine 里按能力表校验
+    DASHSCOPE_EMBEDDING_DIM: z.preprocess(empty, z.coerce.number().int().optional()),
+    DASHSCOPE_EMBEDDING_TPM: z.preprocess(empty, z.coerce.number().int().min(1000).optional()),
+    EMBEDDING_TASK_BUDGET_CENTS: z.preprocess(
+      empty,
+      z.coerce.number().int().min(0).default(DEFAULT_EMBEDDING_TASK_BUDGET_CENTS),
+    ),
+    QDRANT_URL: z.preprocess(empty, z.string().url().optional()),
+    QDRANT_API_KEY: z.preprocess(empty, z.string().optional()),
+    QDRANT_COLLECTION: z.preprocess(
+      empty,
+      z
+        .string()
+        .regex(/^[A-Za-z0-9_-]+$/)
+        .default('code_chunks'),
+    ),
+  })
+  .superRefine((e, ctx) => {
+    // 只在 provider=dashscope 时按能力表校验,local 路径行为不变
+    if (e.EMBEDDING_PROVIDER !== 'dashscope') return;
+    const caps = dashscopeModelCaps(e.DASHSCOPE_EMBEDDING_MODEL);
+    if (!caps) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['DASHSCOPE_EMBEDDING_MODEL'] });
+      return;
+    }
+    if (e.DASHSCOPE_EMBEDDING_DIM !== undefined && !caps.dims.includes(e.DASHSCOPE_EMBEDDING_DIM))
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['DASHSCOPE_EMBEDDING_DIM'] });
+  });
 
 export interface EmbeddingConfig {
   provider: 'fake' | 'onnx';
@@ -121,9 +122,9 @@ export interface DashscopeConfig {
   baseUrl: string;
   model: string;
   dim: number;
-  /** min(EMBEDDING_BATCH_SIZE, 10) */
+  /** min(EMBEDDING_BATCH_SIZE, 10, 模型文档批量上限) */
   batchSize: number;
-  /** 进程内令牌桶的每分钟 token 上限(官方北京 v3 TPM 1.2M,默认留 ~17% 余量) */
+  /** 进程内令牌桶的每分钟 token 上限;缺省取能力表 defaultTpm(见 models.ts) */
   tpm: number;
   /** 单任务 embedding 预算(美分),0 表示禁止外部 embedding */
   taskBudgetCents: number;
@@ -150,17 +151,20 @@ export function readEmbeddingConfig(env: NodeJS.ProcessEnv = process.env): Embed
     qdrant: e.QDRANT_URL
       ? { url: e.QDRANT_URL, apiKey: e.QDRANT_API_KEY, collection: e.QDRANT_COLLECTION }
       : null,
-    dashscope:
-      e.EMBEDDING_PROVIDER === 'dashscope'
-        ? {
-            apiKey: e.DASHSCOPE_API_KEY,
-            baseUrl: e.DASHSCOPE_EMBEDDING_BASE_URL,
-            model: e.DASHSCOPE_EMBEDDING_MODEL,
-            dim: e.DASHSCOPE_EMBEDDING_DIM,
-            batchSize: Math.min(e.EMBEDDING_BATCH_SIZE, DASHSCOPE_MAX_BATCH),
-            tpm: e.DASHSCOPE_EMBEDDING_TPM,
-            taskBudgetCents: e.EMBEDDING_TASK_BUDGET_CENTS,
-          }
-        : null,
+    dashscope: e.EMBEDDING_PROVIDER === 'dashscope' ? dashscopeConfig(e) : null,
+  };
+}
+
+function dashscopeConfig(e: z.infer<typeof Schema>): DashscopeConfig {
+  // 模型已在 Schema 中校验在表内
+  const caps = dashscopeModelCaps(e.DASHSCOPE_EMBEDDING_MODEL)!;
+  return {
+    apiKey: e.DASHSCOPE_API_KEY,
+    baseUrl: e.DASHSCOPE_EMBEDDING_BASE_URL,
+    model: e.DASHSCOPE_EMBEDDING_MODEL,
+    dim: e.DASHSCOPE_EMBEDDING_DIM ?? caps.defaultDim,
+    batchSize: Math.min(e.EMBEDDING_BATCH_SIZE, DASHSCOPE_DEFAULT_BATCH_CAP, caps.docBatchMax),
+    tpm: e.DASHSCOPE_EMBEDDING_TPM ?? caps.defaultTpm,
+    taskBudgetCents: e.EMBEDDING_TASK_BUDGET_CENTS,
   };
 }
