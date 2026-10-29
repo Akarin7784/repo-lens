@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { THIRD_PARTY_DISCLOSURE } from '../../lib/privacy/disclosure';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { createApiClient, type ApiClient } from '../../lib/api/client';
@@ -49,11 +52,25 @@ describe('首页提交', () => {
     expect((await screen.findByRole('status')).textContent).toContain('提交太频繁了');
   });
 
-  it('输入框下方显示公开仓库与第三方模型提示', () => {
+  it('输入框下方显示公开仓库提示与第三方数据流披露(次要文字,关联到输入框)', () => {
     render(<RepoUrlInput api={{} as unknown as ApiClient} />);
-    const notice = screen.getByText('只支持公开仓库。源码内容会发送给第三方模型服务。');
-    expect(notice).toHaveClass('text-muted');
-    expect(screen.getByLabelText('GitHub 仓库地址')).toHaveAttribute('aria-describedby', notice.id);
+    const notice = screen.getByText('只支持公开仓库。');
+    const disclosure = screen.getByTestId('third-party-disclosure');
+    expect(disclosure.textContent).toBe(THIRD_PARTY_DISCLOSURE);
+    expect(disclosure.textContent).toContain('启用外部向量服务时');
+    expect(disclosure.textContent).toContain('你输入的问题也会发送给阿里云百炼和大模型服务');
+    expect(disclosure.textContent).toContain('不保证覆盖所有敏感内容');
+    for (const el of [notice, disclosure]) expect(el).toHaveClass('text-muted');
+    expect(screen.getByLabelText('GitHub 仓库地址')).toHaveAttribute(
+      'aria-describedby',
+      `${notice.id} ${disclosure.id}`,
+    );
+  });
+
+  it('README 隐私与数据流一节与提交页披露文案逐字一致', () => {
+    const readme = readFileSync(resolve(__dirname, '../../../../README.md'), 'utf8');
+    expect(readme).toContain('## 隐私与数据流');
+    expect(readme).toContain(THIRD_PARTY_DISCLOSURE);
   });
 
   it('提交返回 422 REPO_NOT_PUBLIC → 表单下显示「只支持公开仓库」,不跳转、不当作网络错误', async () => {
