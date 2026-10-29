@@ -614,3 +614,12 @@ zustand（秒出图）和 zod（默认 module 层、按需下钻）不在 3 分�
 - 聚合边默认透明度 0.3(`AGG_EDGE_OPACITY`,投影仪验收不清楚时调到 0.35–0.4),线宽上限从 8 降到 5(`AGG_WIDTH_MAX`);环边、选中相关边不调淡,其它节点被选中时的 dim 仍为 0.15。
 - ×N 标签:zoom < 0.9(`WEIGHT_LABEL_MIN_ZOOM`)时隐藏,选中相关边和环边例外;用布尔 selector 读 zoom,跨阈值才重渲染。不隐藏任何边。
 - 系数依据:hono@ed1d5f7 `d:src`/`d:src/middleware`/`d:src/jsx` 三层共 196 条聚合边,weight=1 占 63%,中位数 1,p90 6,最大 29;截图见 `docs/assets/T-220/`。
+- 透明度切换:`AGG_EDGE_OPACITY` 默认 0.3(`AGG_EDGE_OPACITY_DEFAULT`);投影仪验收时启动/构建前设 `NEXT_PUBLIC_AGG_EDGE_OPACITY=0.4` 即可切换,不改代码,非 (0,1] 的值回落到 0.3。0.3/0.4 对比截图见 `docs/assets/T-221/opacity-0.3.png`、`opacity-0.4.png`。
+
+### 悬停预览(T-221)
+- 悬停节点 120ms(`HOVER_DELAY_MS`)防抖后,与它相连的边按选中样式高亮:`--accent-strong`、透明度 0.9(被调淡的聚合边也恢复)、线宽 +0.75px,×N 标签不受 zoom 阈值限制直接显示;不相连的边与 ×N/↻ 标签整体略压暗到 0.6 倍(纯 CSS,`[data-hovering]`),节点不淡出。鼠标移开立即恢复;快速划过(<120ms)不触发。
+- 选中优先:有选中节点时悬停完全不生效(不叠加),点击选中时清掉已有悬停;展开/收起后也清掉悬停。
+- 不改变节点数/边数和状态栏计数,不隐藏任何边。
+- 性能:悬停状态不进 React state 和 `node.data`,放在外部 store(`lib/graph/hover.ts`),每条边用 `useSyncExternalStore` 订阅布尔值「是否与悬停节点相连」,只有翻转的边重渲染;其余边的压暗由容器 `data-hovering` 属性 + CSS 完成。
+- 触屏设备没有悬停,不做替代(计划约定),点击选中仍可用。
+- 截图(hono `d:src`,浅色):`docs/assets/T-221/hover-before.png`、`hover-d-src-utils.png`。

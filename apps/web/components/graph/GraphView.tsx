@@ -35,6 +35,8 @@ import { loadLayoutFile, type LayoutFile } from '../../lib/layout/layoutFile';
 import { edgeTypes } from './WeightedEdge';
 import { nodeTypes } from './nodes';
 import { ToggleContext } from './ToggleContext';
+import { HoverContext } from './HoverContext';
+import { createHoverController, createHoverStore } from '../../lib/graph/hover';
 
 export type GraphViewProps = {
   source: GraphSource;
@@ -230,6 +232,33 @@ function Inner({ source, owner, repo, engine, onRootLoaded }: GraphViewProps) {
   }, [derived, state.expanded, state.nodes, engine, fitView]);
 
   const view = useMemo(() => highlightSelection(flow, selectedId), [flow, selectedId]);
+
+  // T-221 悬停预览:外部 store + 防抖,不进 React state,悬停时不整图重渲染
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [hoverStore] = useState(createHoverStore);
+  const selectedRef = useRef(selectedId);
+  selectedRef.current = selectedId;
+  const [hover] = useState(() =>
+    createHoverController(hoverStore, () => selectedRef.current !== null),
+  );
+  useEffect(() => {
+    const sync = () => {
+      const el = wrapRef.current;
+      if (!el) return;
+      if (hoverStore.get() !== null) el.dataset.hovering = 'true';
+      else delete el.dataset.hovering;
+    };
+    const off = hoverStore.subscribe(sync);
+    return () => {
+      off();
+      hover.dispose();
+    };
+  }, [hoverStore, hover]);
+  // 选中优先:一旦选中就清掉悬停;图数据变化(展开/收起)后悬停节点可能已不存在,也清掉
+  useEffect(() => {
+    if (selectedId !== null) hover.leave();
+  }, [selectedId, hover]);
+  useEffect(() => hover.leave(), [flow, hover]);
   const selectedNode = view.nodes.find((n) => n.id === selectedId);
 
   useEffect(() => {
@@ -240,75 +269,79 @@ function Inner({ source, owner, repo, engine, onRootLoaded }: GraphViewProps) {
 
   return (
     <ToggleContext.Provider value={userToggle}>
-      <div className="relative h-full w-full bg-canvas">
-        <div className="absolute right-3 top-3 z-10 flex gap-2">
-          <button
-            type="button"
-            className="rounded-control border border-line bg-panel px-3 py-1.5 text-[13px] text-fg shadow-soft hover:border-accent-strong"
-            onClick={() => {
-              autoFocus.current = null;
-              dispatch({ type: 'collapseAll' });
-            }}
-          >
-            全部收起
-          </button>
-          <label className="flex items-center gap-1.5 rounded-control border border-line bg-panel px-3 py-1.5 text-[13px] text-fg shadow-soft">
-            <input
-              type="checkbox"
-              className="accent-[var(--accent)]"
-              checked={state.includeExternal}
-              onChange={() => dispatch({ type: 'toggleExternal' })}
-            />
-            外部依赖
-          </label>
-        </div>
-        <ReactFlow
-          nodes={view.nodes}
-          edges={view.edges}
-          nodeTypes={nodeTypes}
-          edgeTypes={edgeTypes}
-          defaultEdgeOptions={defaultEdgeOptions}
-          // 单击 = 选中并高亮一跳邻居;展开只走卡片上的 ▸,双击 module/dir 作为附加快捷方式
-          onNodeClick={(_, n) => setSelectedId(n.id)}
-          onNodeDoubleClick={(_, n) =>
-            (n.type === 'module' || n.type === 'dir') && void userToggle(n.id)
-          }
-          onPaneClick={() => setSelectedId(null)}
-          zoomOnDoubleClick={false}
-          elementsSelectable={false}
-          nodesDraggable={false}
-          nodesConnectable={false}
-          onlyRenderVisibleElements
-          minZoom={0.1}
-          proOptions={{ hideAttribution: true }}
-          fitView
-        >
-          <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="var(--border)" />
-          <Controls showInteractive={false} position="bottom-right" />
-        </ReactFlow>
-        <Legend />
-        {derived.truncatedLayers.length > 0 && (
-          <div
-            role="note"
-            data-testid="truncated-notice"
-            className="absolute left-3 top-3 z-10 max-w-[420px] rounded-control border border-line bg-panel px-3 py-1.5 text-[12px] text-fg shadow-soft"
-          >
-            {derived.truncatedLayers
-              .map((p) => (p === '' ? '顶层' : `「${p.replace(/^[a-z]:/, '')}」`))
-              .join('、')}
-            的子节点超过 {MAX_NODES_PER_RESPONSE} 个,只显示了前 {MAX_NODES_PER_RESPONSE} 个。
+      <HoverContext.Provider value={hoverStore}>
+        <div ref={wrapRef} data-testid="graph-wrap" className="relative h-full w-full bg-canvas">
+          <div className="absolute right-3 top-3 z-10 flex gap-2">
+            <button
+              type="button"
+              className="rounded-control border border-line bg-panel px-3 py-1.5 text-[13px] text-fg shadow-soft hover:border-accent-strong"
+              onClick={() => {
+                autoFocus.current = null;
+                dispatch({ type: 'collapseAll' });
+              }}
+            >
+              全部收起
+            </button>
+            <label className="flex items-center gap-1.5 rounded-control border border-line bg-panel px-3 py-1.5 text-[13px] text-fg shadow-soft">
+              <input
+                type="checkbox"
+                className="accent-[var(--accent)]"
+                checked={state.includeExternal}
+                onChange={() => dispatch({ type: 'toggleExternal' })}
+              />
+              外部依赖
+            </label>
           </div>
-        )}
-        <div
-          role="status"
-          className="absolute bottom-3 left-3 z-10 rounded-full border border-line bg-panel px-3 py-1 text-[12px] text-muted"
-        >
-          {error ??
-            (selectedNode
-              ? `已选中 ${selectedNode.data.node.path} · 依赖 ${view.out} · 被依赖 ${view.in} · Esc 取消`
-              : status)}
+          <ReactFlow
+            nodes={view.nodes}
+            edges={view.edges}
+            nodeTypes={nodeTypes}
+            edgeTypes={edgeTypes}
+            defaultEdgeOptions={defaultEdgeOptions}
+            // 单击 = 选中并高亮一跳邻居;展开只走卡片上的 ▸,双击 module/dir 作为附加快捷方式
+            onNodeClick={(_, n) => setSelectedId(n.id)}
+            onNodeDoubleClick={(_, n) =>
+              (n.type === 'module' || n.type === 'dir') && void userToggle(n.id)
+            }
+            onPaneClick={() => setSelectedId(null)}
+            onNodeMouseEnter={(_, n) => hover.enter(n.id)}
+            onNodeMouseLeave={() => hover.leave()}
+            zoomOnDoubleClick={false}
+            elementsSelectable={false}
+            nodesDraggable={false}
+            nodesConnectable={false}
+            onlyRenderVisibleElements
+            minZoom={0.1}
+            proOptions={{ hideAttribution: true }}
+            fitView
+          >
+            <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="var(--border)" />
+            <Controls showInteractive={false} position="bottom-right" />
+          </ReactFlow>
+          <Legend />
+          {derived.truncatedLayers.length > 0 && (
+            <div
+              role="note"
+              data-testid="truncated-notice"
+              className="absolute left-3 top-3 z-10 max-w-[420px] rounded-control border border-line bg-panel px-3 py-1.5 text-[12px] text-fg shadow-soft"
+            >
+              {derived.truncatedLayers
+                .map((p) => (p === '' ? '顶层' : `「${p.replace(/^[a-z]:/, '')}」`))
+                .join('、')}
+              的子节点超过 {MAX_NODES_PER_RESPONSE} 个,只显示了前 {MAX_NODES_PER_RESPONSE} 个。
+            </div>
+          )}
+          <div
+            role="status"
+            className="absolute bottom-3 left-3 z-10 rounded-full border border-line bg-panel px-3 py-1 text-[12px] text-muted"
+          >
+            {error ??
+              (selectedNode
+                ? `已选中 ${selectedNode.data.node.path} · 依赖 ${view.out} · 被依赖 ${view.in} · Esc 取消`
+                : status)}
+          </div>
         </div>
-      </div>
+      </HoverContext.Provider>
     </ToggleContext.Provider>
   );
 }

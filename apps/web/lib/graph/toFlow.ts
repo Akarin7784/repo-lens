@@ -23,8 +23,8 @@ export type RepoEdgeData = {
 };
 export type RepoFlowEdge = Edge<RepoEdgeData, 'weighted'>;
 
-/** 聚合边线宽:1 + 1.5·log2(weight),上限 8px(FRONTEND_DESIGN.md §8);原始边固定 1.25px */
 /**
+ * 聚合边线宽:1 + 1.5·log2(weight),上限 AGG_WIDTH_MAX;原始边固定 1.25px(FRONTEND_DESIGN.md §8)。
  * T-220:聚合边线宽上限从 8 降到 5。hono 实测(d:src / middleware / jsx 三层 196 条聚合边)
  * 中位数 weight=1、p90=6、最大 29:上限 5 时 weight≥6 才封顶,1/2/4 仍有 1/2.5/4 的粗细差。
  */
@@ -34,8 +34,17 @@ export function edgeWidth(weight: number, aggregated: boolean): number {
   return Math.min(AGG_WIDTH_MAX, 1 + 1.5 * Math.log2(Math.max(1, weight)));
 }
 
-/** T-220:聚合边默认透明度(WEEK2_PLAN 默认约 0.3;投影仪验收不清楚时可调到 0.35–0.4) */
-export const AGG_EDGE_OPACITY = 0.3;
+/** T-220:聚合边默认透明度(WEEK2_PLAN 默认约 0.3) */
+export const AGG_EDGE_OPACITY_DEFAULT = 0.3;
+/**
+ * T-221:投影仪验收时可不改代码切换透明度:构建/启动时设 NEXT_PUBLIC_AGG_EDGE_OPACITY=0.4。
+ * 只接受 (0,1] 的数,其它值回落到默认 0.3。
+ */
+export function parseAggOpacity(raw: string | undefined): number {
+  const v = raw === undefined || raw.trim() === '' ? NaN : Number(raw);
+  return Number.isFinite(v) && v > 0 && v <= 1 ? v : AGG_EDGE_OPACITY_DEFAULT;
+}
+export const AGG_EDGE_OPACITY = parseAggOpacity(process.env.NEXT_PUBLIC_AGG_EDGE_OPACITY);
 /** T-220:zoom 低于此值时隐藏 ×N 标签(选中相关边、环边例外) */
 export const WEIGHT_LABEL_MIN_ZOOM = 0.9;
 

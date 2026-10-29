@@ -119,3 +119,19 @@ body {
     transition: none;
   }
 }
+
+/* T-221 悬停预览:悬停节点时,不相连的边/标签略压暗(只改 CSS,不触发 React 重渲染);选中时不生效 */
+.rl-edge,
+.rl-edge-label {
+  transition: opacity 120ms ease;
+}
+[data-hovering='true'] .rl-edge:not([data-hover='on']),
+[data-hovering='true'] .rl-edge-label:not([data-hover='on']) {
+  opacity: 0.6;
+}
+@media (prefers-reduced-motion: reduce) {
+  .rl-edge,
+  .rl-edge-label {
+    transition: none;
+  }
+}
