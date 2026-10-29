@@ -4,6 +4,7 @@ import { ProgressStageSchema } from './progress.js';
 
 /** T-214 向量化状态 */
 export const EmbeddingStatusSchema = z.enum(['ready', 'reused', 'skipped', 'failed']);
+export const EmbeddingProviderSchema = z.enum(['local', 'dashscope']);
 export type EmbeddingStatus = z.infer<typeof EmbeddingStatusSchema>;
 
 const GITHUB_URL = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+?(\.git)?\/?$/;
@@ -78,6 +79,11 @@ export const RepoStatusSchema = z.object({
    * 只增不改:缺省按 null 解析。
    */
   embeddingStatus: EmbeddingStatusSchema.nullable().default(null),
+  /**
+   * P4:commitSha 对应任务索引时用的 embedding provider(worker 写入 stats.embeddingProvider)。
+   * 问答检索据此判断查询与索引是否同源。只增不改:旧任务没有该字段时省略。
+   */
+  embeddingProvider: EmbeddingProviderSchema.optional(),
 });
 
 /** GET /api/repos/:id/graph?parentId= */
