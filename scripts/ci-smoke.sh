@@ -83,6 +83,20 @@ echo "SMOKE migration_0002 explain_key=$plan"
 # 只打印不断言:CI 小数据量下优化器选了 uk_target_commit(同为前缀 repo_id,level,target_id 的唯一索引),
 # 是否在真实数据量下走 idx_reuse 未确认
 [ "$plan" = "idx_reuse" ] || echo "SMOKE WARN: 复用查询实际使用 $plan(非 idx_reuse,未断言)"
+# 迁移 0003:code_chunk(T-214,关键词检索数据源)连跑两遍断言幂等、列与索引
+for i in 1 2; do
+  mig_sql packages/db/migrations/0003_code_chunk.sql | mysql_q mig_check \
+    || { echo "SMOKE FAIL: 0003 第 $i 次执行失败"; exit 1; }
+  echo "SMOKE migration_0003_run_$i=ok"
+done
+cc_cols=$(mysql_q mig_check -e "SELECT GROUP_CONCAT(COLUMN_NAME ORDER BY ORDINAL_POSITION) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='mig_check' AND TABLE_NAME='code_chunk'")
+cc_idx=$(mysql_q mig_check -e "SELECT GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA='mig_check' AND TABLE_NAME='code_chunk' AND INDEX_NAME='idx_repo_commit'")
+cc_n=$(mysql_q mig_check -e "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='mig_check' AND TABLE_NAME='code_chunk'")
+echo "SMOKE migration_0003 tables=$cc_n cols=$cc_cols idx_repo_commit=$cc_idx"
+[ "$cc_n" = "1" ] || { echo "SMOKE FAIL: code_chunk 表数不为 1"; exit 1; }
+[ "$cc_cols" = "id,repo_id,commit_sha,path,symbol,start_line,end_line,content,content_hash,qdrant_point_id,created_at" ] \
+  || { echo "SMOKE FAIL: code_chunk 列不对"; exit 1; }
+[ "$cc_idx" = "repo_id,commit_sha" ] || { echo "SMOKE FAIL: idx_repo_commit 列不对或不存在"; exit 1; }
 mysql_q -e 'DROP DATABASE mig_check'
 
 # web 也要能响应(不要求 200 的具体内容)

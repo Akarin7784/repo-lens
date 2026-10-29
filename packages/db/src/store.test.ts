@@ -214,6 +214,34 @@ function suite(name: string, make: () => Promise<Store>, enabled = true) {
       expect(await s.exportsOf(ids2.get('src/b.ts')!)).toEqual(['b']);
       expect(await s.hasGraph(1, C)).toBe(true);
     });
+
+    it('code_chunk 按 (repo, commit) 整体替换,按写入顺序读回,commit 间隔离(T-214)', async () => {
+      const r = await s.upsertRepo({ url: 'https://github.com/o/cc', owner: 'o', name: 'cc' });
+      const A = 'c'.repeat(40);
+      const B = 'd'.repeat(40);
+      const row = (i: number, tag = 'v1') => ({
+        path: `src/f${i}.ts`,
+        symbol: i % 2 ? null : `fn${i}`,
+        startLine: i + 1,
+        endLine: i + 3,
+        content: `${tag} 第${i}块 export function fn${i}() {}`,
+        contentHash: String(i).padStart(64, '0'),
+        qdrantPointId: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+      });
+      // 450 行 > 一批 200,覆盖分批插入
+      const v1 = Array.from({ length: 450 }, (_, i) => row(i));
+      await s.replaceCodeChunks(r.id, A, v1);
+      await s.replaceCodeChunks(r.id, B, [row(0, 'other')]);
+      expect(await s.listCodeChunks(r.id, A)).toEqual(v1);
+      // 再次替换:旧行全部删除,不残留
+      const v2 = [row(7, 'v2'), row(3, 'v2')];
+      await s.replaceCodeChunks(r.id, A, v2);
+      expect(await s.listCodeChunks(r.id, A)).toEqual(v2);
+      expect(await s.listCodeChunks(r.id, B)).toEqual([row(0, 'other')]);
+      await s.replaceCodeChunks(r.id, A, []);
+      expect(await s.listCodeChunks(r.id, A)).toEqual([]);
+      expect(await s.listCodeChunks(r.id + 999, B)).toEqual([]);
+    });
   });
 }
 

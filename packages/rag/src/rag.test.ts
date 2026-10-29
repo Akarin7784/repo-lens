@@ -107,6 +107,25 @@ describe('buildChunks 排除规则', () => {
   });
 });
 
+describe('buildChunks:analyzer 已标敏感但仍带切块', () => {
+  it('按 sensitive 标记拒绝,且不读源文件', async () => {
+    const read = vi.fn(async () => 'export const harmless = 1;\n');
+    const r = await buildChunks(
+      [
+        {
+          path: 'src/x.ts',
+          chunks: [{ symbol: null, startLine: 1, endLine: 1 }],
+          sensitive: 'secret-content',
+        },
+      ],
+      read,
+    );
+    expect(r.chunks).toEqual([]);
+    expect(r.excluded).toEqual([{ path: 'src/x.ts', rule: 'secret-content' }]);
+    expect(read).not.toHaveBeenCalled();
+  });
+});
+
 describe('indexChunks', () => {
   const chunks = Array.from({ length: 5 }, (_, i) => ({
     path: `src/f${i}.ts`,
