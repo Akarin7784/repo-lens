@@ -131,7 +131,7 @@
 - [ ] 演示前抽查 hono 的 `embeddingStatus` 为 `ready`(或 `reused`)。
 - [ ] 「镜像构建下载模型」:CI 已验证(GitHub 环境直连 huggingface.co,手动 workflow `worker-model-build.yml` run 40838998679,5 个文件 `sha256sum -c` 全 OK,镜像内 ONNX embedding 维度 384,构建约 58 秒);**演示机(国内网络)上的构建仍待验证**:演示前先在演示机构建好镜像,下载慢时设 `EMBEDDING_MODEL_BASE_URL` 为镜像站(哈希校验不变)。
 - [ ] 演示前抽查 hono 的在环节点:节点详情里环上的文件显示「在环中」,数量与状态栏环边数相符(`inCycle` 须与图投影同源,不依赖 `stats`)。 具体抽查:`/nodes` 对 `src/helper/streaming/index.ts`、`src/helper/streaming/text.ts`、`src/jsx/dom/render.ts` 返回 true,`src/hono.ts` 为 false;ed1d5f7 应为 5 个环、12 个文件(CI smoke 的 `ci-smoke-cycles.mjs` 同样断言)。
-- [ ] 演示机内存至少 4 GB(本地 e5 embedding 峰值约 2.5 GB,见 D4 与 T-214;compose 已把 worker `mem_limit` 调到 3g);批大小用 `EMBEDDING_BATCH_SIZE` 配置(默认 16,内存紧时调小);worker 镜像构建时会下载约 490 MB 模型,演示机构建需能访问 huggingface.co(或 `EMBEDDING_MODEL_DOWNLOAD=0` 加 `EMBEDDER=fake`,但那样检索无意义)。
+- [ ] 演示机内存至少 4 GB(本地 e5 embedding 峰值约 2.5 GB,见 D4 与 T-214;compose 已把 worker `mem_limit` 调到 3g);批大小用 `EMBEDDING_BATCH_SIZE` 配置(默认 16):4 GB 机器上 worker 3g 加 mysql、redis、qdrant、api 很紧,演示前在 `.env` 设 `EMBEDDING_BATCH_SIZE=4`(仍紧可设 1,速度变慢但峰值内存下降),改完 `docker compose up -d worker` 重建容器生效,分析 hono 期间用 `docker stats --no-stream` 抽查 worker 峰值内存不超过 3g、无 OOMKilled(`docker inspect -f '{{.State.OOMKilled}}' <worker 容器>` 为 false);worker 镜像构建时会下载约 490 MB 模型,演示机构建需能访问 huggingface.co(或 `EMBEDDING_MODEL_DOWNLOAD=0` 加 `EMBEDDER=fake`,但那样检索无意义)。
 - [x] summary 迁移 0001 在 MySQL 8.4 上的幂等与回填:CI smoke 已验证(8.4.13)。
 - [ ] 演示机拉代码后先在仓库根目录运行 `pnpm build`(或 `pnpm --filter @repolens/shared build`),避免 shared 旧构建导致错误码显示异常。
 - 演示前提前分析好 hono、zustand、zod、trpc,演示时只走「复用已有结果」的路径,现场不依赖新分析。

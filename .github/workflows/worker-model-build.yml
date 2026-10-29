@@ -8,6 +8,8 @@ on:
         description: 模型下载地址(与 huggingface.co 同路径结构)
         default: https://huggingface.co
         required: true
+permissions:
+  contents: read
 jobs:
   build:
     runs-on: ubuntu-latest

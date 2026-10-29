@@ -363,9 +363,11 @@ Qdrant collection `code_chunks`:命名向量 `dense`,384 维(multilingual-e5-sma
 | 值 | 含义 |
 |---|---|
 | `ready` | 本次切块并写入 Qdrant |
-| `reused` | 该 commit 已有同数量 points,直接复用 |
+| `reused` | 该 commit 已有同数量 points 且 stats 中的内容 hash 汇总(`embeddingDigest`)与本次一致,直接复用;或同 commit 并发任务中未拿到锁、等持有者完成 |
 | `skipped` | 未配置向量库(EMBEDDER/QDRANT 未设),未向量化 |
 | `failed` | 向量化出错;已发一次 `stage_error{stage:"embedding"}`,任务仍 `done`,图与摘要可用 |
+
+同 commit 并发向量化互斥:Redis `SET lock:embed:{repo_id}:{commit_sha} <随机 token> NX PX <TTL>`;TTL 由 `EMBEDDING_LOCK_TTL_SEC` 配置,默认 1800 秒(须长于一次完整向量化,按 CPU 上保守 ≥10 块/秒估算可覆盖约 1.8 万块;持有者崩溃时由过期释放);释放用 Lua 校验 token,只删自己的锁;拿不到锁的任务不写,轮询等待,持有者成功(写 `:done` 标记)则记 `reused`,持有者失败或过期则接手。
 
 与架构师口径 `ok|failed|skipped` 的对应:`ready`、`reused` 都算 **ok**(向量可用),`failed`→failed,`skipped`→skipped;细分 ready/reused 只为观测复用率。
 
