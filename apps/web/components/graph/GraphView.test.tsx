@@ -90,3 +90,44 @@ describe('<GraphView> 交互', () => {
     );
   });
 });
+
+// jsdom 里 React Flow 量不到节点尺寸,不渲染边;边级别的样式断言在 WeightedEdge.test.tsx
+describe('<GraphView> 悬停预览(T-221)', () => {
+  const node = (c: HTMLElement, id: string) =>
+    c.querySelector(`[data-testid="node-${id}"]`)!.closest('.react-flow__node')!;
+  const wrap = () => screen.getByTestId('graph-wrap');
+
+  it('悬停 120ms 防抖后进入悬停态,移开立即恢复;状态栏计数不变', async () => {
+    const { container } = await mount();
+    await screen.findByRole('button', { name: '展开 middleware' });
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('当前显示'));
+    const before = screen.getByRole('status').textContent;
+    fireEvent.mouseEnter(node(container, 'm:src/middleware'));
+    expect(wrap().dataset.hovering).toBeUndefined(); // 防抖期间不生效
+    await waitFor(() => expect(wrap().dataset.hovering).toBe('true'));
+    expect(screen.getByRole('status').textContent).toBe(before);
+    fireEvent.mouseLeave(node(container, 'm:src/middleware'));
+    expect(wrap().dataset.hovering).toBeUndefined();
+    expect(screen.getByRole('status').textContent).toBe(before);
+  });
+
+  it('选中优先:有选中节点时悬停不生效;选中时清掉已有悬停', async () => {
+    const { container } = await mount();
+    await screen.findByRole('button', { name: '展开 middleware' });
+    const mw = node(container, 'm:src/middleware');
+    fireEvent.mouseEnter(mw);
+    await waitFor(() => expect(wrap().dataset.hovering).toBe('true'));
+    fireEvent.click(container.querySelector('[data-testid="node-m:src/middleware"]')!);
+    await waitFor(() =>
+      expect(screen.getByRole('status')).toHaveTextContent('已选中 src/middleware'),
+    );
+    expect(wrap().dataset.hovering).toBeUndefined();
+    const other = [...container.querySelectorAll('[data-testid^="node-m:"]')].find(
+      (n) => n.getAttribute('data-testid') !== 'node-m:src/middleware',
+    )!;
+    fireEvent.mouseEnter(other.closest('.react-flow__node')!);
+    await new Promise((r) => setTimeout(r, 250));
+    expect(wrap().dataset.hovering).toBeUndefined();
+    expect(screen.getByRole('status')).toHaveTextContent('已选中 src/middleware');
+  });
+});

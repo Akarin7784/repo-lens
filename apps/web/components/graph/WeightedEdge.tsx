@@ -15,6 +15,8 @@ import {
   WEIGHT_LABEL_MIN_ZOOM,
   type RepoFlowEdge,
 } from '../../lib/graph/toFlow';
+import { hoverHighlight } from '../../lib/graph/hover';
+import { useHoverTouches } from './HoverContext';
 
 // 布尔 selector:只有跨过阈值时才触发重渲染,缩放过程中不会每帧重渲染所有边
 const zoomedInSelector = (s: ReactFlowState) => s.transform[2] >= WEIGHT_LABEL_MIN_ZOOM;
@@ -38,15 +40,23 @@ export const WeightedEdge = memo(function WeightedEdge(props: EdgeProps<RepoFlow
   });
   const weight = data?.weight ?? 1;
   const aggregated = data?.aggregated ?? false;
-  const hl = data?.highlight;
+  // T-221:悬停只在无选中时叠加(选中优先),只有与悬停节点相连的边因布尔订阅翻转而重渲染
+  const hoverOn = useHoverTouches(props.source, props.target);
+  const hl = hoverHighlight(data?.highlight, hoverOn);
   const cycle = data?.cycle === true;
   const typeOnly = !cycle && data?.kind === 'type-only';
   const base = hl === 'on' || cycle ? 'var(--accent-strong)' : 'var(--edge)';
   const zoomedIn = useStore(zoomedInSelector);
   const opacity = edgeOpacity({ highlight: hl, cycle, aggregated, kind: data?.kind });
   const label = showWeightLabel({ highlight: hl, cycle, aggregated, weight }, zoomedIn);
+  const hoverAttr = hoverOn && data?.highlight === undefined ? 'on' : undefined;
   return (
-    <>
+    <g
+      className="rl-edge"
+      data-hover={hoverAttr}
+      data-testid={`edge-${props.id}`}
+      data-hl={hl ?? 'none'}
+    >
       <BaseEdge
         path={path}
         markerEnd={markerEnd}
@@ -73,8 +83,9 @@ export const WeightedEdge = memo(function WeightedEdge(props: EdgeProps<RepoFlow
         <EdgeLabelRenderer>
           <div
             data-testid={`cycle-mark-${props.id}`}
+            data-hover={hoverAttr}
             title="循环依赖"
-            className="pointer-events-none absolute rounded-full bg-accent-strong px-1 text-[10px] leading-4 text-on-accent"
+            className="rl-edge-label pointer-events-none absolute rounded-full bg-accent-strong px-1 text-[10px] leading-4 text-on-accent"
             style={{
               transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY - 14}px)`,
             }}
@@ -87,15 +98,16 @@ export const WeightedEdge = memo(function WeightedEdge(props: EdgeProps<RepoFlow
         <EdgeLabelRenderer>
           <div
             data-testid={`agg-weight-${props.id}`}
+            data-hover={hoverAttr}
             title={`聚合 ${weight} 条依赖`}
-            className="pointer-events-none absolute rounded-full border border-line bg-panel px-1.5 text-[10px] text-muted"
+            className="rl-edge-label pointer-events-none absolute rounded-full border border-line bg-panel px-1.5 text-[10px] text-muted"
             style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
           >
             ×{weight}
           </div>
         </EdgeLabelRenderer>
       )}
-    </>
+    </g>
   );
 });
 

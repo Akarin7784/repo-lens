@@ -5,6 +5,9 @@ WORKDIR /app
 # rewrites 在构建时固定(next.config.mjs);compose 里 api 服务名为 api
 ARG API_PROXY_TARGET=http://api:4000
 ENV API_PROXY_TARGET=$API_PROXY_TARGET
+# 聚合边透明度在构建期内联进客户端包,改值需重新构建
+ARG NEXT_PUBLIC_AGG_EDGE_OPACITY=0.3
+ENV NEXT_PUBLIC_AGG_EDGE_OPACITY=$NEXT_PUBLIC_AGG_EDGE_OPACITY
 COPY . .
 RUN pnpm install --frozen-lockfile && pnpm turbo run build --filter=@repolens/web...
 FROM node:20-alpine
