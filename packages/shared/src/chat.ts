@@ -33,7 +33,8 @@ export const ChatDoneSchema = z.object({
   usage: z.object({
     in: z.number().int().nonnegative(),
     out: z.number().int().nonnegative(),
-  }) /** 仅上游 finish_reason 为 length(达到 max_tokens 被截断)时为 true,否则省略;截断的回答照常落库。可选,只增不改 */,
+  }),
+  /** 仅上游 finish_reason 为 length(达到 max_tokens 被截断)时为 true,否则省略;截断的回答照常落库。可选,只增不改 */
   truncated: z.boolean().optional(),
 });
 export const ChatDoneEventSchema = z.object({ event: z.literal('done'), data: ChatDoneSchema });

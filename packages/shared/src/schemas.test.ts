@@ -473,6 +473,25 @@ describe('契约 v2:done.truncated 与 429 details', () => {
     ])
       expect(ApiErrorSchema.safeParse(e).success).toBe(false);
   });
+  it('收紧:retryAfterSec 只能与 rate_limit 同现,且为 1–3600 的整数', () => {
+    expect(
+      ApiErrorSchema.safeParse(err('RATE_LIMITED', { reason: 'rate_limit', retryAfterSec: 3600 }))
+        .success,
+    ).toBe(true);
+    expect(
+      ApiErrorSchema.safeParse(err('RATE_LIMITED', { reason: 'rate_limit', retryAfterSec: 1 }))
+        .success,
+    ).toBe(true);
+    for (const e of [
+      err('RATE_LIMITED', { retryAfterSec: 5 }),
+      err('RATE_LIMITED', { reason: 'concurrency', retryAfterSec: 5 }),
+      err('RATE_LIMITED', { reason: 'rate_limit', retryAfterSec: 3601 }),
+      err('RATE_LIMITED', { reason: 'rate_limit', retryAfterSec: -1 }),
+      err('REPO_NOT_READY', { reason: 'GRAPH_NOT_READY', retryAfterSec: 5 }),
+      err('INTERNAL', { retryAfterSec: 5 }),
+    ])
+      expect(ApiErrorSchema.safeParse(e).success).toBe(false);
+  });
   it('REPO_NOT_READY 原有 reason 与附加字段仍合法(只增不改)', () => {
     expect(
       ApiErrorSchema.safeParse(err('REPO_NOT_READY', { reason: 'GRAPH_NOT_READY', extra: 1 }))

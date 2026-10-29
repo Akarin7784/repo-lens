@@ -141,14 +141,7 @@ export class LlmGateway {
     try {
       res = await this.o.client.call(call);
     } catch (err) {
-      await this.o.usage.insertLlmUsage({
-        ...owner,
-        tokensIn: 0,
-        tokensOut: 0,
-        costMicroUsd: 0,
-        cacheHit: false,
-        ok: false,
-      });
+      await this.failRowSafe(owner);
       throw new LlmError('LLM_UNAVAILABLE', `LLM 调用失败(${this.o.client.provider})`, undefined, {
         cause: err,
       });
@@ -163,15 +156,23 @@ export class LlmGateway {
       res.usage.tokensOut,
       res.usage.cachedTokensIn ?? 0,
     );
-    await this.addSpend(cost, taskId);
-    await this.o.usage.insertLlmUsage({
-      ...owner,
-      tokensIn: res.usage.tokensIn,
-      tokensOut: res.usage.tokensOut,
-      costMicroUsd: cost,
-      cacheHit: false,
-      ok: true,
-    });
+    // 与流式路径一致:addSpend 与 insert 都成功才算记过账;任一步抛错包成 LLM_UNAVAILABLE 并补一行 ok=0
+    let spent = false;
+    try {
+      await this.addSpend(cost, taskId);
+      spent = true;
+      await this.o.usage.insertLlmUsage({
+        ...owner,
+        tokensIn: res.usage.tokensIn,
+        tokensOut: res.usage.tokensOut,
+        costMicroUsd: cost,
+        cacheHit: false,
+        ok: true,
+      });
+    } catch (err) {
+      await this.failRowSafe(owner, spent ? { ...res.usage, cost } : undefined, err);
+      throw new LlmError('LLM_UNAVAILABLE', 'LLM 用量记账失败', undefined, { cause: err });
+    }
     await this.o.kv.set(
       cacheKey,
       JSON.stringify({
@@ -208,16 +209,6 @@ export class LlmGateway {
         cause: call.signal.reason,
       });
     }
-    const failRow = () =>
-      this.o.usage.insertLlmUsage({
-        ...owner,
-        tokensIn: 0,
-        tokensOut: 0,
-        costMicroUsd: 0,
-        cacheHit: false,
-        ok: false,
-      });
-
     let text = '';
     let usage: LlmUsage | undefined;
     let truncated = false;
@@ -226,13 +217,9 @@ export class LlmGateway {
     // 调用方在 yield 处 it.return()(如 route 的 finally)、或成功路径 addSpend/insert 抛错时,
     // 由外层 finally 补一行 ok=0。补写失败只打日志,不掩盖原错误、不让 return() 抛错
     let recorded = false;
-    const failRowSafe = () =>
-      failRow().catch((e: unknown) => {
-        const msg = 'llm usage failure row write failed';
-        const w = { ...owner, err: e instanceof Error ? e.message : String(e) };
-        if (this.o.log) this.o.log.warn(w, msg);
-        else console.warn(msg, w);
-      });
+    // addSpend 已成功(预算已计)但 insert 失败时,补行带真实 cost/token
+    let spentRow: { tokensIn: number; tokensOut: number; cost: number } | undefined;
+    let bookErr: unknown;
     try {
       try {
         for await (const ev of this.o.client.stream(call)) {
@@ -249,7 +236,7 @@ export class LlmGateway {
         if (!usage) throw new Error('上游流在 usage 之前结束');
       } catch (err) {
         recorded = true;
-        await failRowSafe();
+        await this.failRowSafe(owner);
         const aborted = call.signal?.aborted === true;
         throw new LlmError(
           'LLM_UNAVAILABLE',
@@ -275,6 +262,7 @@ export class LlmGateway {
       }
       try {
         await this.addSpend(cost, taskId);
+        spentRow = { tokensIn: usage.tokensIn, tokensOut: usage.tokensOut, cost };
         await this.o.usage.insertLlmUsage({
           ...owner,
           tokensIn: usage.tokensIn,
@@ -286,6 +274,7 @@ export class LlmGateway {
         recorded = true;
       } catch (err) {
         // 记账失败:统一成 LlmError;recorded 仍为 false,由 finally 补一行 ok=0
+        bookErr = err;
         throw new LlmError('LLM_UNAVAILABLE', 'LLM 用量记账失败', undefined, { cause: err });
       }
       return {
@@ -300,8 +289,51 @@ export class LlmGateway {
     } finally {
       if (!recorded) {
         recorded = true;
-        await failRowSafe();
+        await this.failRowSafe(owner, spentRow, bookErr);
       }
+    }
+  }
+
+  /**
+   * 补写一行 ok=0 的 llm_usage,自身失败只打 warn(不盖原错误、不让 return() 抛错)。
+   * `spent`:addSpend 已成功、但 ok=1 那行没写进去时传入,补行带真实 token 与 cost,
+   * 并打一条带 cost 的 warn 便于对账。不会重复计预算:预算只看 Redis `llm:spend:*`(addSpend),
+   * llm_usage 只做审计,全仓库没有任何地方把它的 cost 累加回预算(见 BACKEND_AI_DESIGN「记账失败补行」)。
+   * 补行自己也失败时,这次花费只留在 Redis 预算计数和这条 warn 日志里,llm_usage 少一行。
+   */
+  private async failRowSafe(
+    owner: Omit<LlmUsageInput, 'tokensIn' | 'tokensOut' | 'costMicroUsd' | 'cacheHit' | 'ok'>,
+    spent?: { tokensIn: number; tokensOut: number; cost: number },
+    cause?: unknown,
+  ) {
+    const warn = (w: object, msg: string) =>
+      this.o.log ? this.o.log.warn(w, msg) : console.warn(msg, w);
+    const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
+    if (spent)
+      warn(
+        {
+          ...owner,
+          tokensIn: spent.tokensIn,
+          tokensOut: spent.tokensOut,
+          costMicroUsd: spent.cost,
+          err: errMsg(cause),
+        },
+        'llm usage insert failed after spend counted',
+      );
+    try {
+      await this.o.usage.insertLlmUsage({
+        ...owner,
+        tokensIn: spent?.tokensIn ?? 0,
+        tokensOut: spent?.tokensOut ?? 0,
+        costMicroUsd: spent?.cost ?? 0,
+        cacheHit: false,
+        ok: false,
+      });
+    } catch (e) {
+      warn(
+        { ...owner, costMicroUsd: spent?.cost ?? 0, err: errMsg(e) },
+        'llm usage failure row write failed',
+      );
     }
   }
 

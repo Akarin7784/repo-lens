@@ -224,7 +224,11 @@ export function buildApp(deps?: AppDeps): FastifyInstance {
     return id;
   };
 
-  /** 回退一次 hit;同样带 EXPIRE NX,防止 key 恰好过期后 DECR 建出一个没有 TTL 的 -1 */
+  /**
+   * 回退一次 hit;同样带 EXPIRE NX,防止 key 恰好过期后 DECR 建出一个没有 TTL 的 -1。
+   * 已知边界:INCR 与 DECR 之间 key 恰好过期时,DECR 会建出一个带 TTL 的 -1,
+   * 该小时桶只会多放行一次,随 TTL 过期消失,可忽略。
+   */
   async function unhit(key: string) {
     await redis.multi().decr(key).expire(key, RATE_LIMIT_TTL_S, 'NX').exec();
   }
