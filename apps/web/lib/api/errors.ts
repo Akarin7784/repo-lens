@@ -97,6 +97,7 @@ export function looseError(
     message,
     reason: typeof reason === 'string' ? reason : undefined,
     // 契约 v2(429 rate_limit):正整数秒;其他形态(0、负数、小数、字符串、NaN)一律当作没有
+    // 此处不校验上界:上界由 lib/chat/errors.ts 的 retryCooldownSec 截到 RATE_LIMIT_MAX_COOLDOWN_S(3600)
     retryAfterSec:
       typeof retryAfterSec === 'number' && Number.isInteger(retryAfterSec) && retryAfterSec > 0
         ? retryAfterSec

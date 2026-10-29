@@ -345,7 +345,11 @@ function RetryButton({ cooldown, onRetry }: { cooldown: number; onRetry: () => v
   // T-236:倒计时只写在提示行,按钮文字固定为「重试」,等待期间仅禁用
   return (
     <>
-      {left > 0 && <span data-testid="retry-wait">{formatWait(left)}后可再提问</span>}
+      {left > 0 && (
+        <span data-testid="retry-wait" role="status" aria-live="polite">
+          {formatWait(left)}后可再提问
+        </span>
+      )}
       <button
         type="button"
         disabled={left > 0}
