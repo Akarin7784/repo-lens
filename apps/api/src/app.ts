@@ -30,6 +30,7 @@ import type { GitHost } from './githost.js';
 import { GraphIndex, nodeDetail, projectGraphWithInfo } from './projection.js';
 import { streamJobEvents } from './sse.js';
 import { ipKey } from './ip-key.js';
+import { registerChatRoute, type ChatDeps } from './chat/route.js';
 
 export interface AnalyzeJobData {
   jobId: string;
@@ -54,9 +55,12 @@ export interface AppDeps {
   submitLimitPerHour?: number;
   maxRepoMb?: number;
   pingIntervalMs?: number;
-  logger?: boolean;
+  /** 测试可传 { stream } 捕获日志 */
+  logger?: boolean | { level?: string; stream: { write(msg: string): void } };
   /** T-213:worker 快照根目录(与 worker 的 REPOS_DIR 相同,api 只读挂载) */
   reposDir?: string;
+  /** P4-e:配置后注册 POST /api/repos/:id/chat */
+  chat?: ChatDeps;
 }
 
 const GH = /^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/;
@@ -219,6 +223,8 @@ export function buildApp(deps?: AppDeps): FastifyInstance {
     if (!Number.isInteger(id) || id <= 0) throw new HttpError('BAD_REQUEST', '仓库 id 格式无效');
     return id;
   };
+
+  if (deps.chat) registerChatRoute(app, { store, hit, chat: deps.chat, repoIdOf });
 
   app.get<{ Params: { id: string } }>('/api/repos/:id', async (req) => {
     const repoId = repoIdOf(req.params.id);

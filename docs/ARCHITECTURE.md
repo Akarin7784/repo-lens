@@ -153,7 +153,7 @@ sequenceDiagram
 ```
 - **状态**:本节契约(shared `chat.ts` 事件、`api.ts` 的 `ChatRequestSchema`)已定,路由尚未实现(拆分为 P1–P7,P4 接路由)。W3 不做工具循环,`tool` 事件先不发;不做答案缓存。
 - 请求体 `{message, sessionId?, contextNodeIds?}`:`message` trim 后 1..2000;`contextNodeIds` 最多 20 个,**W3 只做格式校验,服务端忽略**;未知字段 400。
-- 错误分两层：开流前用 HTTP 状态码 + `ApiError` JSON(400 `BAD_REQUEST`、404 `REPO_NOT_FOUND`、409 `REPO_NOT_READY`、429 `RATE_LIMITED`、500 `INTERNAL` 通用码);开流后才用 SSE `error` 事件。不支持断流续传,SSE 不带事件 `id`,重试就是重新发同一个问题。`done.sessionId` 在 P4(落库 `chat_message`)之前不填,P4 起服务端始终填写。
+- 错误分两层：开流前用 HTTP 状态码 + `ApiError` JSON(400 `BAD_REQUEST`、404 `REPO_NOT_FOUND`、409 `REPO_NOT_READY`、429 `RATE_LIMITED`、500 `INTERNAL` 通用码);开流后才用 SSE `error` 事件。不支持断流续传,SSE 不带事件 `id`,重试就是重新发同一个问题。`done.sessionId` 在 P4(落库 `chat_message`)之前不填,P4 起服务端始终填写。问答流有总时限 `CHAT_STREAM_TIMEOUT_MS`(默认 90000ms),超时发 `error{LLM_UNAVAILABLE, retryable:true}`。只有正常结束(`done`)才写 assistant 消息(写库失败时 `done` 不带 `messageId`);改写、检索、LLM 流中途的断开、超时与出错,一律只保留 user 消息,不写半条回答(`chat_message` 无中断标记列);上游已用的 token 仍按网关口径记 `llm_usage`。
 - 检索默认 5 条(`hybridSearch` 默认 `limit=5`)。`done.retrieval` 在 schema 上可选(兼容),**服务端每次都填**(`hybrid` | `keyword-only`)。
 - 预算超限(`BUDGET_EXCEEDED`)和 LLM 熔断/不可用都先降级为检索模式(检索结果作为 citation,`done.fallback="retrieval"`);只有拿不到检索结果时才发 `error` 事件。
 - 引用格式约定(与 BACKEND_AI_DESIGN §6 一致):模型输出 `[[Sn:a-b]]`,`Sn` 是上下文里的片段编号,`a-b` 是文件绝对行号,必须落在片段 Sn 的行范围内,超出就收缩到交集,没有交集就剔除;**模型输出的路径一概不采信**,path/nodeId 只能经片段编号映射得到。后端在流中截获并校验行号范围、内容 hash 一致(防幻觉;内容 hash 校验 P4 实现)。**只有校验通过的引用才下发 `citation` 事件,不带 `verified` 字段**;校验失败的直接丢弃,丢弃数量放在 `done.droppedCitations`。前端无需处理"未验证"状态。
@@ -370,6 +370,8 @@ CREATE TABLE llm_usage (
 );
 ```
 > `code_chunk` 由迁移 0003 落地(T-214 PR-2,可重复执行,CI smoke 连跑两遍断言列与索引)。与最初草案的偏差:**不建 FULLTEXT**(MariaDB 没有 ngram 解析器,默认解析器对中文和 camelCase 无效),关键词打分改为按 (repo, commit) 读出全部切块后在进程内做 BM25(路径/符号权重 ×3)+ 符号精确匹配;索引由 `idx_repo_path` 改为 `idx_repo_commit`(读写都按 repo+commit)。worker 在向量化之前写入,**向量化被跳过或失败时仍写**,所以关键词检索不依赖 embedding;敏感/超大/二进制文件在 chunk 层同样被排除(与向量库同一套 `exclusionRule`)。
+
+> `chat_message.retrieval_ids` 存的是 Qdrant point id,重新索引后会变,只用于追溯同一 commit 下的检索结果,不能跨 commit 或跨重索引比对。
 
 > **现状(T-214 PR-2)**:检索库(hybridSearch、rewriteQuery)与评测脚本已完成,问答链路未接入;API 目前不发 done.retrieval,仅 shared schema 有该字段。
 

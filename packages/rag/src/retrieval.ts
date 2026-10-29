@@ -90,7 +90,10 @@ export interface KeywordIndex {
   avgLen: number;
 }
 
-/** 路径与符号权重高于正文:路径/符号词重复计入 3 次 */
+/**
+ * 路径与符号权重高于正文:head(路径 + 符号)显式计入 3 次;code_chunk.content 的首行标题
+ * 也是 `path[ symbol]`,所以路径/符号词实际计入 4 次。
+ */
 export function buildKeywordIndex(chunks: RetrievableChunk[]): KeywordIndex {
   const df = new Map<string, number>();
   let total = 0;

@@ -2,11 +2,21 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Queue } from 'bullmq';
 import { Redis } from 'ioredis';
-import { readLlmConfig } from '@repolens/agent';
+import { DEFAULT_PRICES, LlmGateway, createLlmClient, readLlmConfig } from '@repolens/agent';
+import {
+  CachedEmbedder,
+  DashscopeEmbedder,
+  FakeEmbedder,
+  QdrantVectorStore,
+  qdrantCollectionFor,
+  readEmbeddingConfig,
+  type Embedder,
+} from '@repolens/rag';
 import { MysqlStore, queueJobId, runMigrations } from '@repolens/db';
 import { buildApp, type AnalyzeJobData, type JobQueue } from './app.js';
 import { createGitHost } from './githost.js';
-import { readSubmitLimits } from './limits.js';
+import { readChatLimits, readSubmitLimits } from './limits.js';
+import { redisRewriteCache } from './chat/route.js';
 
 const ANALYZE_QUEUE = 'analyze';
 /** 与 worker 的 ANALYZE_JOB_OPTS 一致 */
@@ -19,8 +29,10 @@ const JOB_OPTS = {
 
 // 限额配置不合法时启动即失败
 const limits = readSubmitLimits(process.env);
-// LLM 配置(provider、日/任务预算)不合法时启动即失败;/chat(W3)接入网关时使用
+const chatLimits = readChatLimits(process.env);
+// LLM 配置(provider、日/任务预算)不合法时启动即失败
 const llm = readLlmConfig(process.env);
+const emb = readEmbeddingConfig(process.env);
 const port = Number(process.env.API_PORT ?? 4000);
 const dbUrl = process.env.DATABASE_URL;
 if (!dbUrl) throw new Error('DATABASE_URL 未设置');
@@ -39,8 +51,33 @@ const queue: JobQueue = {
     if (j && (await j.isFailed())) await j.remove();
   },
 };
+const store = MysqlStore.create(dbUrl);
+// 与 worker 同一网关口径:预算计数放 Redis,记账写 llm_usage
+const gateway = new LlmGateway({
+  client: createLlmClient(llm, { kv: redis }),
+  kv: redis,
+  usage: store,
+  prices: DEFAULT_PRICES,
+  dailyBudgetCents: llm.dailyBudgetCents,
+  taskBudgetCents: llm.taskBudgetCents,
+});
+// 查询向量:百炼(有 key)或 fake;本地 ONNX 不在 api 里加载(峰值约 2.5 GB),此时检索 keyword-only
+const ds = emb.dashscope;
+const queryEmbedder: Embedder | null = ds?.apiKey
+  ? new CachedEmbedder(new DashscopeEmbedder({ ...ds, apiKey: ds.apiKey }), redis)
+  : emb.provider === 'fake'
+    ? new FakeEmbedder()
+    : null;
+const vectorStore =
+  emb.qdrant && queryEmbedder
+    ? new QdrantVectorStore({
+        ...emb.qdrant,
+        collection: qdrantCollectionFor(emb.qdrant.collection, ds),
+        dim: queryEmbedder.dim,
+      })
+    : null;
 const app = buildApp({
-  store: MysqlStore.create(dbUrl),
+  store,
   redis,
   queue,
   git: createGitHost({ githubToken: process.env.GITHUB_TOKEN }),
@@ -48,9 +85,26 @@ const app = buildApp({
   // 与 worker 默认值一致;compose 里两者都设为 /data/repos(api 只读挂载)
   reposDir: process.env.REPOS_DIR ?? join(tmpdir(), 'repolens-repos'),
   ...limits,
+  chat: {
+    gateway,
+    model: llm.chatModel,
+    embedder: queryEmbedder,
+    vectorStore,
+    perHour: chatLimits.perHour,
+    maxStreams: chatLimits.maxStreams,
+    userKeySecret: chatLimits.userKeySecret,
+    streamTimeoutMs: chatLimits.streamTimeoutMs,
+    rewriteCache: redisRewriteCache(redis),
+  },
 });
+if (!chatLimits.userKeySecret)
+  app.log.warn('CHAT_USER_KEY_SECRET 未设置:chat_session.user_key 将存 null');
 app.log.info(
-  { llmProvider: llm.provider, dailyBudgetCents: llm.dailyBudgetCents },
+  {
+    llmProvider: llm.provider,
+    dailyBudgetCents: llm.dailyBudgetCents,
+    chatRetrieval: vectorStore ? 'hybrid' : 'keyword-only',
+  },
   'llm config loaded',
 );
 app.listen({ port, host: '0.0.0.0' }).catch((err: unknown) => {
