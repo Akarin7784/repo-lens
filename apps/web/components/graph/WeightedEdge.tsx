@@ -1,7 +1,23 @@
 'use client';
 import { memo } from 'react';
-import { BaseEdge, EdgeLabelRenderer, getSmoothStepPath, type EdgeProps } from '@xyflow/react';
-import { edgeWidth, type RepoFlowEdge } from '../../lib/graph/toFlow';
+import {
+  BaseEdge,
+  EdgeLabelRenderer,
+  getSmoothStepPath,
+  useStore,
+  type EdgeProps,
+  type ReactFlowState,
+} from '@xyflow/react';
+import {
+  edgeOpacity,
+  edgeWidth,
+  showWeightLabel,
+  WEIGHT_LABEL_MIN_ZOOM,
+  type RepoFlowEdge,
+} from '../../lib/graph/toFlow';
+
+// 布尔 selector:只有跨过阈值时才触发重渲染,缩放过程中不会每帧重渲染所有边
+const zoomedInSelector = (s: ReactFlowState) => s.transform[2] >= WEIGHT_LABEL_MIN_ZOOM;
 
 // type-only:更淡的圆点线;dynamic:短虚线;环边:--accent-strong 长虚线 + 中点 ↻ 标记(优先级最高)
 const DASH: Record<string, string | undefined> = { 'type-only': '1 5', dynamic: '6 4' };
@@ -26,7 +42,9 @@ export const WeightedEdge = memo(function WeightedEdge(props: EdgeProps<RepoFlow
   const cycle = data?.cycle === true;
   const typeOnly = !cycle && data?.kind === 'type-only';
   const base = hl === 'on' || cycle ? 'var(--accent-strong)' : 'var(--edge)';
-  const opacity = hl === 'dim' ? 0.15 : typeOnly ? 0.55 : aggregated ? 0.75 : 0.9;
+  const zoomedIn = useStore(zoomedInSelector);
+  const opacity = edgeOpacity({ highlight: hl, cycle, aggregated, kind: data?.kind });
+  const label = showWeightLabel({ highlight: hl, cycle, aggregated, weight }, zoomedIn);
   return (
     <>
       <BaseEdge
@@ -65,7 +83,7 @@ export const WeightedEdge = memo(function WeightedEdge(props: EdgeProps<RepoFlow
           </div>
         </EdgeLabelRenderer>
       )}
-      {aggregated && weight > 1 && hl !== 'dim' && (
+      {label && (
         <EdgeLabelRenderer>
           <div
             data-testid={`agg-weight-${props.id}`}
