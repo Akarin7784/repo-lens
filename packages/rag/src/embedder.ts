@@ -6,7 +6,12 @@ export type EmbedRole = 'query' | 'passage';
 /** e5 约定:查询加 `query: `,文档加 `passage: ` */
 export const E5_PREFIX: Record<EmbedRole, string> = { query: 'query: ', passage: 'passage: ' };
 
+/** T-214c:向量来自哪个提供方;未声明视为 local(e5 本地 / fake) */
+export type EmbeddingProviderName = 'local' | 'dashscope';
+
 export interface Embedder {
+  /** 缺省 local;非 local 时进 digest(local digest 不变) */
+  readonly provider?: EmbeddingProviderName;
   readonly model: string;
   /** 模型权重版本(如 HF revision);进 embedding digest 与缓存键,换版本即重建 */
   readonly revision?: string;

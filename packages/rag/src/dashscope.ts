@@ -102,6 +102,7 @@ export interface DashscopeDeps {
  * 能力表见 models.ts;调用方负责分批(≤ cfg.batchSize)。每批校验返回长度等于请求维度。
  */
 export class DashscopeEmbedder implements Embedder {
+  readonly provider = 'dashscope' as const;
   readonly model: string;
   readonly revision: string;
   readonly dim: number;
@@ -128,11 +129,18 @@ export class DashscopeEmbedder implements Embedder {
   }
 
   async embedQuery(text: string) {
-    return (await this.call([text], QUERY_CALL))[0]!;
+    return (await this.call([text], QUERY_CALL)).vectors[0]!;
   }
 
   async embedDocuments(texts: string[]) {
-    if (texts.length === 0) return [];
+    return (await this.embedDocumentsWithUsage(texts)).vectors;
+  }
+
+  /** 同 embedDocuments,另返回本次响应的 usage.total_tokens(响应没给时为 undefined),供任务预算计量 */
+  async embedDocumentsWithUsage(
+    texts: string[],
+  ): Promise<{ vectors: number[][]; usageTokens?: number }> {
+    if (texts.length === 0) return { vectors: [] };
     if (texts.length > this.cfg.batchSize)
       throw new RangeError(`batch ${texts.length} > ${this.cfg.batchSize}`);
     return this.call(texts, INDEX_CALL);
@@ -174,7 +182,10 @@ export class DashscopeEmbedder implements Embedder {
     }
   }
 
-  private async once(input: string[], timeoutMs: number): Promise<number[][]> {
+  private async once(
+    input: string[],
+    timeoutMs: number,
+  ): Promise<{ vectors: number[][]; usageTokens?: number }> {
     let res: Response;
     try {
       res = await this.fetchFn(`${this.cfg.baseUrl.replace(/\/$/, '')}/embeddings`, {
@@ -248,7 +259,9 @@ export class DashscopeEmbedder implements Embedder {
     // some() 会跳过数组空洞,这里用 for 逐个检查缺失项
     for (let i = 0; i < input.length; i++)
       if (out[i] === undefined) throw new EmbeddingError('bad-response', res.status);
-    if (typeof j.usage?.total_tokens === 'number') this.usageTokens += j.usage.total_tokens;
-    return out as number[][];
+    const usageTokens =
+      typeof j.usage?.total_tokens === 'number' ? j.usage.total_tokens : undefined;
+    if (usageTokens !== undefined) this.usageTokens += usageTokens;
+    return { vectors: out as number[][], usageTokens };
   }
 }

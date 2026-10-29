@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { FakeEmbedder } from './embedder.js';
+import { DashscopeEmbedder, QUERY_CALL, TokenBucket } from './dashscope.js';
 import {
   EXACT_MAX,
   bm25,
@@ -157,5 +158,81 @@ describe('混合检索 hybridSearch(T-214)', () => {
     const few = exactMatches(cs.slice(0, 3), 'other/store.ts Store.put getStore', 50);
     expect(few).toEqual([2]);
     expect(exactMatches(cs.slice(0, 3), 'src/store.ts', 50)).toEqual([0]);
+  });
+});
+
+describe('hybridSearch 提供方降级(T-214c)', () => {
+  it('索引提供方与当前 embedder 不一致:keyword-only(provider-mismatch),不查向量', async () => {
+    const { emb, vs } = await vectors();
+    let searched = 0;
+    const spy = { ...vs, search: async () => (searched++, []) } as unknown as MemoryVectorStore;
+    const r = await hybridSearch({
+      ...base,
+      question: 'createPool',
+      rewritten: 'createPool',
+      embeddingStatus: 'ready',
+      embedder: emb,
+      vectorStore: spy,
+      indexedProvider: 'dashscope',
+    });
+    expect(r).toMatchObject({ retrieval: 'keyword-only', degradedReason: 'provider-mismatch' });
+    expect(searched).toBe(0);
+    expect(r.hits[0]?.symbol).toBe('createPool');
+  });
+
+  it('未记录 indexedProvider 视为 local:local embedder 仍走 hybrid', async () => {
+    const { emb, vs } = await vectors();
+    const r = await hybridSearch({
+      ...base,
+      question: 'q',
+      rewritten: 'parse command line arguments argv parseArgs',
+      embeddingStatus: 'ready',
+      embedder: emb,
+      vectorStore: vs,
+      indexedProvider: null,
+    });
+    expect(r.retrieval).toBe('hybrid');
+  });
+
+  it('dashscope embedQuery 失败(5 秒超时 / 429 等,重试 1 次后仍失败):keyword-only(vector-error)', async () => {
+    const { vs } = await vectors();
+    let calls = 0;
+    const sleeps: number[] = [];
+    const sleep = async (ms: number) => void sleeps.push(ms);
+    const ds = new DashscopeEmbedder(
+      {
+        apiKey: 'test-key-not-real',
+        baseUrl: 'https://example.invalid/v1',
+        model: 'text-embedding-v3',
+        dim: 384,
+        batchSize: 10,
+        tpm: 1_000_000,
+        taskBudgetCents: 50,
+      },
+      {
+        fetch: (async () => {
+          calls++;
+          throw new DOMException('timed out', 'TimeoutError');
+        }) as unknown as typeof fetch,
+        sleep,
+        bucket: new TokenBucket(1e9, () => 0, sleep),
+      },
+    );
+    const r = await hybridSearch({
+      ...base,
+      question: 'createPool',
+      rewritten: 'createPool',
+      embeddingStatus: 'ready',
+      embedder: ds,
+      vectorStore: vs,
+      indexedProvider: 'dashscope',
+    });
+    expect(r).toMatchObject({ retrieval: 'keyword-only', degradedReason: 'vector-error' });
+    expect(calls).toBe(1 + QUERY_CALL.retries);
+    // 最坏耗时上界:两次 5 秒超时 + 一次退避(≤1.25 秒;429 时 Retry-After ≤2 秒)≤ 12 秒
+    expect(QUERY_CALL.timeoutMs * (1 + QUERY_CALL.retries) + QUERY_CALL.maxRetryAfterMs).toBe(
+      12_000,
+    );
+    expect(sleeps.reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(QUERY_CALL.maxRetryAfterMs);
   });
 });

@@ -25,37 +25,39 @@ export interface DashscopeModelCaps {
   yuanPer1kTokens: number;
 }
 
+// 来源标记:[文档]=D1–D4(见文件头);[实测]=notes/qwen37-embedding-facts.md 2026-10-29 实测;
+// [未验证]=无文档或实测依据(含沿用 #88 的值)。D1 同步接口,D2 总览,D3 模型页,D4 限流。
 export const DASHSCOPE_MODELS: Readonly<Record<string, DashscopeModelCaps>> = {
-  // v3:官方单次 ≤10 条(2026-10-29 实测 11 条 400);单条 8192 token;TPM 沿用 #88 的 1,000,000
+  // v3 不在 qwen3.7 事实文件覆盖范围内
   'text-embedding-v3': {
-    docBatchMax: 10,
-    dims: [1024, 768, 512, 256, 128, 64],
-    defaultDim: 1024,
-    maxInputTokens: 8192,
-    defaultTpm: 1_000_000,
-    yuanPer1kTokens: 0.0005,
+    docBatchMax: 10, // [文档] 单次 ≤10 条;[实测] 11 条返回 400(#88)
+    dims: [1024, 768, 512, 256, 128, 64], // [未验证] 沿用 #88,事实文件未覆盖
+    defaultDim: 1024, // [未验证] 沿用 #88
+    maxInputTokens: 8192, // [未验证] 沿用 #88
+    defaultTpm: 1_000_000, // [未验证] 沿用 #88 的 1,000,000(Eva 2026-10-29 确认保留)
+    yuanPer1kTokens: 0.0005, // [未验证] 沿用 #88
   },
-  // qwen3.7:官方 TPM 1,000,000(北京,主账号合并计算),默认取 800,000 留余量
   'qwen3.7-text-embedding': {
-    docBatchMax: 20,
-    dims: [2560, 2048, 1536, 1024, 768, 512, 256],
-    defaultDim: 1024,
-    maxInputTokens: 128_000,
-    defaultTpm: 800_000,
-    yuanPer1kTokens: 0.0005,
+    docBatchMax: 20, // [文档] D1、D2 20 条;[实测] 20 条 200、21 条 400
+    dims: [2560, 2048, 1536, 1024, 768, 512, 256], // [文档] D1、D2;[实测] 2560/256 可用,128 返回 400
+    defaultDim: 1024, // [实测] 不传 dimensions 返回 1024;[文档] D1、D2 标为默认
+    maxInputTokens: 128_000, // [文档] D1、D3;[未验证] 未实测
+    defaultTpm: 800_000, // 本地取值:[文档] D3、D4 TPM 1,000,000(北京,主账号合并),留 20% 余量
+    yuanPer1kTokens: 0.0005, // [文档] D1、D2、D3(北京)
   },
-  // flash 传表外维度(如 2560)实测会静默返回 1024 维,故只允许下列维度,且逐批校验返回长度
   'qwen3.7-text-embedding-flash': {
+    // [文档] D1、D2 20 条;[实测] 21 条也返回 200(与文档不一致),仍按文档取 20
     docBatchMax: 20,
+    // [文档] D1、D2;[实测] 256 可用,2560 返回 200 但静默回落为 1024 维,故逐批校验返回长度
     dims: [1024, 768, 512, 256],
-    defaultDim: 1024,
-    maxInputTokens: 128_000,
-    defaultTpm: 800_000,
-    yuanPer1kTokens: 0.000125,
+    defaultDim: 1024, // [实测] 不传 dimensions 返回 1024;[文档] D1、D2 标为默认
+    maxInputTokens: 128_000, // [文档] D1;[未验证] 未实测
+    defaultTpm: 800_000, // 本地取值:[文档] D3、D4 TPM 1,000,000,留 20% 余量
+    yuanPer1kTokens: 0.000125, // [文档] D1、D2、D3(北京)
   },
 };
 
-/** 实际默认批量上限:即使文档允许 20,仍按 10 发送 */
+/** 实际默认批量上限:即使文档允许 20,仍按 10 发送(本地取值,与 #88 一致) */
 export const DASHSCOPE_DEFAULT_BATCH_CAP = 10;
 
 export function dashscopeModelCaps(model: string): DashscopeModelCaps | undefined {

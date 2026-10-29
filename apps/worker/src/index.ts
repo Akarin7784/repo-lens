@@ -4,7 +4,10 @@ import { DEFAULT_PRICES, LlmGateway, createLlmClient } from '@repolens/agent';
 import { MysqlStore, redisKeys, waitForSchema } from '@repolens/db';
 import {
   CachedEmbedder,
+  DashscopeEmbedder,
   FakeEmbedder,
+  MeteredEmbedder,
+  qdrantCollectionFor,
   OnnxEmbedder,
   QdrantVectorStore,
   type Embedder,
@@ -41,10 +44,23 @@ const baseEmbedder: Embedder =
   emb.provider === 'onnx'
     ? new OnnxEmbedder(emb.model, emb.modelDir, undefined, emb.threads, emb.revision)
     : new FakeEmbedder();
-const embedder = new CachedEmbedder(baseEmbedder, redis);
-const vectorStore = emb.qdrant ? new QdrantVectorStore(emb.qdrant) : undefined;
+const ds = emb.dashscope;
+// T-214c:EMBEDDING_PROVIDER=dashscope 时用百炼;无 key → 向量化记 skipped 并告警(不打印 key)
+const dashscope = ds?.apiKey ? new DashscopeEmbedder({ ...ds, apiKey: ds.apiKey }) : null;
+const embedder = new CachedEmbedder(dashscope ?? baseEmbedder, redis);
+// 每个提供方 / 维度一个集合,local 仍是 QDRANT_COLLECTION(默认 code_chunks)
+const collection = emb.qdrant ? qdrantCollectionFor(emb.qdrant.collection, ds) : null;
+const vectorStore = emb.qdrant
+  ? new QdrantVectorStore({ ...emb.qdrant, collection: collection!, dim: embedder.dim })
+  : undefined;
+if (ds && !ds.apiKey)
+  console.warn(
+    '[worker] EMBEDDING_PROVIDER=dashscope 但未配置 DASHSCOPE_API_KEY:向量化将记为 skipped',
+  );
 console.log(
-  `[worker] embedder=${emb.provider} model=${emb.model}@${emb.revision.slice(0, 7)} batch=${emb.batchSize} qdrant=${emb.qdrant ? 'on' : 'off'}`,
+  ds
+    ? `[worker] embedder=dashscope model=${ds.model} dim=${ds.dim} batch=${ds.batchSize} budget=${ds.taskBudgetCents}c collection=${collection ?? '-'} qdrant=${emb.qdrant ? 'on' : 'off'}`
+    : `[worker] embedder=${emb.provider} model=${emb.model}@${emb.revision.slice(0, 7)} batch=${emb.batchSize} qdrant=${emb.qdrant ? 'on' : 'off'}`,
 );
 
 async function invalidateGraphCache(repoId: number, commitSha: string) {
@@ -64,6 +80,10 @@ const worker = new Worker<AnalyzeJobData>(
       gateway,
       embedder,
       vectorStore,
+      embeddingSkipReason: ds && !ds.apiKey ? 'no-key' : undefined,
+      taskEmbedder: dashscope
+        ? (meter) => new CachedEmbedder(new MeteredEmbedder(dashscope, meter), redis)
+        : undefined,
       onGraphPersisted: invalidateGraphCache,
     }),
   { connection: redis.duplicate(), concurrency: config.concurrency },

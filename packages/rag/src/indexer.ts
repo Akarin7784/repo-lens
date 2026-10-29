@@ -26,17 +26,21 @@ export const CURRENT_EMBEDDING_VERSIONS: EmbeddingVersions = {
  * (路径、行号、符号、文本 hash)。完成标记与跨任务复用都按它比较,四个版本因素任一变化都重建。
  */
 export function chunksDigest(
-  embedder: string | Pick<Embedder, 'model' | 'revision'>,
+  embedder: string | (Pick<Embedder, 'model' | 'revision' | 'provider'> & { dim?: number }),
   chunks: CodeChunkRecord[],
   versions: EmbeddingVersions = CURRENT_EMBEDDING_VERSIONS,
 ): string {
   const e = typeof embedder === 'string' ? { model: embedder, revision: undefined } : embedder;
-  const head = [
+  const headLines = [
     `model=${e.model}`,
     `revision=${e.revision ?? ''}`,
     `chunker=${versions.chunker}`,
     `embedText=${versions.embedText}`,
-  ].join('\n');
+  ];
+  // T-214c:provider≠local 时追加提供方与维度;local(含未声明)不追加,digest 与此前完全一致
+  if ('provider' in e && e.provider && e.provider !== 'local')
+    headLines.push(`provider=${e.provider}`, `dim=${('dim' in e && e.dim) || ''}`);
+  const head = headLines.join('\n');
   const lines = chunks
     .map((c) => `${c.path}\n${c.startLine}-${c.endLine}\n${c.symbol ?? ''}\n${c.contentHash}`)
     .sort();
