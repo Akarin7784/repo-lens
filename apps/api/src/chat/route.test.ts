@@ -34,8 +34,10 @@ import {
   type ChatDeps,
   type ChatMetrics,
 } from './route.js';
+import { readChatLimits } from '../limits.js';
 
-const REDIS_URL = process.env.TEST_REDIS_URL ?? 'redis://127.0.0.1:6379';
+// 未设 TEST_REDIS_URL 时用专用 db 11(不连共享 db 0;agent 用 9、worker embed-lock 用 10)
+const REDIS_URL = process.env.TEST_REDIS_URL ?? 'redis://127.0.0.1:6379/11';
 async function redisUp() {
   const r = new Redis(REDIS_URL, {
     lazyConnect: true,
@@ -142,6 +144,33 @@ class SlowLlm implements LlmClient {
     yield { type: 'usage', usage: { tokensIn: 1, tokensOut: 1 } };
   }
 }
+
+/** 吐 first 后永不结束;honorSignal 时在 abort 后抛出(像真实客户端),否则完全不理 signal */
+class HangLlm implements LlmClient {
+  readonly provider = 'fake';
+  constructor(
+    private readonly first: string,
+    private readonly honorSignal: boolean,
+  ) {}
+  async call(): Promise<never> {
+    throw new Error('not used');
+  }
+  async *stream(req: LlmCall): AsyncGenerator<LlmStreamEvent> {
+    yield { type: 'text', text: this.first };
+    await new Promise<void>((_, rej) => {
+      if (this.honorSignal)
+        req.signal?.addEventListener('abort', () => rej(req.signal!.reason), { once: true });
+    });
+  }
+}
+
+describe('readChatLimits', () => {
+  it('CHAT_STREAM_TIMEOUT_MS 默认 90000,可配置,非法值报错', () => {
+    expect(readChatLimits({}).streamTimeoutMs).toBe(90_000);
+    expect(readChatLimits({ CHAT_STREAM_TIMEOUT_MS: '5000' }).streamTimeoutMs).toBe(5000);
+    expect(() => readChatLimits({ CHAT_STREAM_TIMEOUT_MS: '0' })).toThrow();
+  });
+});
 
 describe('resolveRewrite', () => {
   it('默认就是 agent 的 rewriteQuery(rw-3)', () => {
@@ -416,6 +445,7 @@ describe.skipIf(!hasRedis)(
     it('真实 socket 断开:上游 signal 被 abort,计数释放,不再写 done', async () => {
       const { repoId } = await seed();
       const slow = new SlowLlm('x'.repeat(400), 20);
+      const rec = spyRows();
       const app = make({ gateway: gatewayOf(slow) });
       await app.listen({ port: 0, host: '127.0.0.1' });
       const { port } = app.server.address() as AddressInfo;
@@ -447,6 +477,8 @@ describe.skipIf(!hasRedis)(
       await vi.waitFor(() => expect(slow.aborted).toBe(true));
       await vi.waitFor(() => expect(metrics.activeStreams).toBe(0));
       expect(got).not.toContain('event: done');
+      expect(rec.roles).toEqual(['user']);
+      await vi.waitFor(() => expect(rec.usage).toEqual([{ purpose: 'chat', ok: false }]));
       await app.close();
     });
 
@@ -489,8 +521,52 @@ describe.skipIf(!hasRedis)(
       await app.close();
     });
 
+    const spyRows = () => {
+      const roles: string[] = [];
+      const usage: { purpose: string; ok: boolean }[] = [];
+      const im = store.insertChatMessage.bind(store);
+      vi.spyOn(store, 'insertChatMessage').mockImplementation(async (m) => {
+        roles.push(m.role);
+        return im(m);
+      });
+      const iu = store.insertLlmUsage.bind(store);
+      vi.spyOn(store, 'insertLlmUsage').mockImplementation(async (u) => {
+        usage.push({ purpose: u.purpose, ok: u.ok });
+        return iu(u);
+      });
+      return { roles, usage };
+    };
+
+    for (const honor of [true, false])
+      it(`总时限:永不结束的流(${honor ? '响应' : '不理'} signal)→ error 可重试,释放名额,不写 assistant`, async () => {
+        const { repoId } = await seed();
+        const rec = spyRows();
+        const app = make({
+          gateway: gatewayOf(new HangLlm('partial ', honor)),
+          streamTimeoutMs: 150,
+          maxStreams: 1,
+        });
+        const res = await post(app, repoId, { message: 'parseConfig' });
+        const evs = parseSse(res.body);
+        expect(evs.some((e) => e.event === 'token')).toBe(true);
+        expect(evs.at(-1)).toMatchObject({
+          event: 'error',
+          data: { code: 'LLM_UNAVAILABLE', retryable: true },
+        });
+        expect(evs.some((e) => e.event === 'done')).toBe(false);
+        expect(metrics.activeStreams).toBe(0);
+        expect(rec.roles).toEqual(['user']);
+        // 响应 signal 的上游:网关按现有口径记一条 ok=0 的 chat usage
+        if (honor)
+          await vi.waitFor(() => expect(rec.usage).toEqual([{ purpose: 'chat', ok: false }]));
+        // 名额已释放:同一 app 还能再开流
+        expect((await post(app, repoId, { message: 'parseConfig' })).statusCode).toBe(200);
+        await app.close();
+      });
+
     it('中途断流 → error{LLM_UNAVAILABLE, retryable}', async () => {
       const { repoId } = await seed();
+      const rec = spyRows();
       const app = make({
         gateway: gatewayOf(new FakeLlm({ streamText: () => 'a'.repeat(50), breakAfterChunks: 2 })),
       });
@@ -500,6 +576,8 @@ describe.skipIf(!hasRedis)(
         data: { code: 'LLM_UNAVAILABLE', retryable: true },
       });
       expect(evs.some((e) => e.event === 'done')).toBe(false);
+      expect(rec.roles).toEqual(['user']);
+      expect(rec.usage).toEqual([{ purpose: 'chat', ok: false }]);
       await app.close();
     });
 

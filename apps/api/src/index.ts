@@ -93,6 +93,7 @@ const app = buildApp({
     perHour: chatLimits.perHour,
     maxStreams: chatLimits.maxStreams,
     userKeySecret: chatLimits.userKeySecret,
+    streamTimeoutMs: chatLimits.streamTimeoutMs,
     rewriteCache: redisRewriteCache(redis),
   },
 });

@@ -55,6 +55,8 @@ export interface ChatDeps {
   rewrite?: typeof rewriteQuery;
   metrics?: ChatMetrics;
   pingIntervalMs?: number;
+  /** CHAT_STREAM_TIMEOUT_MS,默认 90000:整条流(改写 + 检索 + 终答)的总时限 */
+  streamTimeoutMs?: number;
 }
 
 /** 路由实际使用的改写函数(测试断言它就是 agent 导出的 rewriteQuery) */
@@ -173,6 +175,24 @@ export function registerChatRoute(
     const log = s.req.log;
     const started = Date.now();
     const ac = new AbortController();
+    // 总时限:与断开的 ac.signal 合并;send 仍只看 ac.signal(超时后还要能发 error)
+    const tc = new AbortController();
+    const timer = setTimeout(
+      () => tc.abort(new Error('chat stream timeout')),
+      chat.streamTimeoutMs ?? 90_000,
+    );
+    const signal = AbortSignal.any([ac.signal, tc.signal]);
+    // 永不结束且不理 signal 的上游也要能退出:每次等待都与 abort 赛跑
+    const aborted = new Promise<never>((_, rej) =>
+      signal.addEventListener('abort', () => rej(signal.reason), { once: true }),
+    );
+    aborted.catch(() => {});
+    const race = <T>(p: Promise<T>) => Promise.race([p, aborted]);
+    const sendTimeout = () =>
+      send({
+        event: 'error',
+        data: { code: 'LLM_UNAVAILABLE', message: '回答超时,请重试', retryable: true },
+      });
     // 断开检测:response 的 close 且未正常结束(不能用 req.raw close,见 PR 说明)
     raw.on('close', () => {
       if (!raw.writableEnded) ac.abort(new Error('client disconnected'));
@@ -242,36 +262,40 @@ export function registerChatRoute(
       let rewritten = question;
       if (HAS_CJK.test(question)) {
         send({ event: 'tool', data: { name: 'rewrite', args: {} } });
-        rewritten = await rewrite(question, {
-          gateway: chat.gateway,
-          model: chat.model,
-          repoId,
-          sessionId,
-          cache: chat.rewriteCache,
-          signal: ac.signal,
-          log: (e: RewriteLog) => logRewrite(log, repoId, sessionId, e),
-        });
+        rewritten = await race(
+          rewrite(question, {
+            gateway: chat.gateway,
+            model: chat.model,
+            repoId,
+            sessionId,
+            cache: chat.rewriteCache,
+            signal,
+            log: (e: RewriteLog) => logRewrite(log, repoId, sessionId, e),
+          }),
+        );
       }
-      if (ac.signal.aborted) return;
+      if (signal.aborted) throw signal.reason;
       // 检索:chunks 从 code_chunk 重读(hybridSearch 结果不带 content / content_hash)
       send({ event: 'tool', data: { name: 'retrieve', args: { k: CHAT_TOP_K } } });
-      const rows = await store.listCodeChunks(repoId, task.commitSha);
+      const rows = await race(store.listCodeChunks(repoId, task.commitSha));
       const st = task.stats;
-      const result = await hybridSearch({
-        repoId,
-        commitSha: task.commitSha,
-        question,
-        rewritten,
-        chunks: rows,
-        embeddingStatus: st.embeddingStatus,
-        embedder: chat.embedder,
-        vectorStore: chat.vectorStore,
-        // 三项都来自该 commit 的 done 任务 stats,不从环境变量推断;缺字段口径见 embeddingMismatch
-        indexedProvider: st.embeddingProvider,
-        indexedModel: st.embeddingModel,
-        indexedDim: st.embeddingDim,
-        limit: CHAT_TOP_K,
-      });
+      const result = await race(
+        hybridSearch({
+          repoId,
+          commitSha: task.commitSha,
+          question,
+          rewritten,
+          chunks: rows,
+          embeddingStatus: st.embeddingStatus,
+          embedder: chat.embedder,
+          vectorStore: chat.vectorStore,
+          // 三项都来自该 commit 的 done 任务 stats,不从环境变量推断;缺字段口径见 embeddingMismatch
+          indexedProvider: st.embeddingProvider,
+          indexedModel: st.embeddingModel,
+          indexedDim: st.embeddingDim,
+          limit: CHAT_TOP_K,
+        }),
+      );
       if (result.retrieval !== 'hybrid')
         log.info(
           { repoId, sessionId, degradedReason: result.degradedReason },
@@ -306,14 +330,14 @@ export function registerChatRoute(
           sessionId,
           maxTokens: ANSWER_MAX_TOKENS,
           temperature: 0,
-          signal: ac.signal,
+          signal,
           messages: [
             { role: 'system', content: prompt.system },
             { role: 'user', content: prompt.user },
           ],
         });
         for (;;) {
-          const r = await it.next();
+          const r = await race(it.next());
           if (r.done) {
             usage = { in: r.value.usage.tokensIn, out: r.value.usage.tokensOut };
             break;
@@ -323,17 +347,14 @@ export function registerChatRoute(
         }
         emit(cs.end(), prompt.snippets);
       } catch (err) {
-        if (ac.signal.aborted) {
-          await persistAssistant();
-          return;
-        }
+        // 断开 / 超时交给外层 catch;都不写半条 assistant(只保留 user 消息)
+        if (signal.aborted) throw err;
         const preToken =
           !gotToken &&
           err instanceof LlmError &&
           (err.code === 'BUDGET_EXCEEDED' ||
             (err.cause as { name?: string } | undefined)?.name === 'CircuitOpenError');
         if (!preToken) {
-          await persistAssistant();
           send({
             event: 'error',
             data: { code: 'LLM_UNAVAILABLE', message: '回答生成中断,请重试', retryable: true },
@@ -365,8 +386,10 @@ export function registerChatRoute(
       });
     } catch (err) {
       log.error({ repoId, sessionId, err: (err as Error)?.name ?? 'Error' }, 'chat stream failed');
-      if (!ac.signal.aborted) {
-        await persistAssistant();
+      // 断开:客户端已走,不发;超时 / 其它错误:发可重试 error。三者都不写 assistant
+      if (ac.signal.aborted) return;
+      if (tc.signal.aborted) sendTimeout();
+      else {
         send({
           event: 'error',
           data: { code: 'LLM_UNAVAILABLE', message: '问答服务出错,请重试', retryable: true },
@@ -374,6 +397,7 @@ export function registerChatRoute(
       }
     } finally {
       clearInterval(ping);
+      clearTimeout(timer);
       // 无条件 abort:网关只在 for-await 走完或抛错时记账,提前退出时靠它关上游
       ac.abort();
       if (!raw.writableEnded) raw.end();

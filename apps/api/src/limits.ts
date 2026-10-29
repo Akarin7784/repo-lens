@@ -29,6 +29,8 @@ export interface ChatLimits {
   maxStreams: number;
   /** CHAT_USER_KEY_SECRET(≥32 字节);未设置时为 null,user_key 存 null */
   userKeySecret: string | null;
+  /** CHAT_STREAM_TIMEOUT_MS,默认 90000;整条问答流的总时限(毫秒) */
+  streamTimeoutMs: number;
 }
 
 export function readChatLimits(env: Record<string, string | undefined>): ChatLimits {
@@ -39,5 +41,6 @@ export function readChatLimits(env: Record<string, string | undefined>): ChatLim
     perHour: int(env, 'RATE_LIMIT_CHAT_PER_HOUR', 30),
     maxStreams: int(env, 'CHAT_MAX_CONCURRENT_STREAMS', 8),
     userKeySecret: secret,
+    streamTimeoutMs: int(env, 'CHAT_STREAM_TIMEOUT_MS', 90_000),
   };
 }
