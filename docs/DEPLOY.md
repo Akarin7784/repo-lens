@@ -130,8 +130,16 @@ volumes: { repos: {}, mysql: {}, qdrant: {}, caddy_data: {} }
 :80 {
   @nosse not path /api/jobs/*/events /api/repos/*/chat
   encode @nosse gzip zstd          # 只压缩非 SSE 路径
-  handle /api/* { reverse_proxy api:4000 { flush_interval -1 header_up X-Forwarded-For {remote_host} } }  # 未验证:Caddy 默认丢弃不受信客户端的 XFF 并重写,这行可能多余,留着不影响;以第 61 次返回 429 的实测为准
-  handle { reverse_proxy web:3000 }
+  handle /api/* {
+    reverse_proxy api:4000 {
+      flush_interval -1
+      # 未验证:Caddy 默认丢弃不受信客户端的 XFF 并重写,下一行可能多余,留着不影响;以第 61 次返回 429 的实测为准
+      header_up X-Forwarded-For {remote_host}
+    }
+  }
+  handle {
+    reverse_proxy web:3000
+  }
 }
 ```
 - 路由核对(main 1381ce8,`apps/api/src/app.ts`):进度 SSE 为 `GET /api/jobs/:id/events`(第 200 行,已确认)。问答路由 `/api/repos/:id/chat` 在 main 上**尚不存在**(P4 未接),路径按 ARCHITECTURE/P4 设计写,P4 合并后再核对。
@@ -245,6 +253,7 @@ curl -so /dev/null -w "size=%{size_download} t=%{time_total}\n" -H 'Accept-Encod
 - [ ] 已知:mysql 健康检查 `mysqladmin -p"$$MYSQL_ROOT_PASSWORD"` 沿用仓库现有写法,口令会出现在容器内进程参数里(仅容器内可见,未改;可选后续改用 `MYSQL_PWD` 环境变量)
 - [ ] §5 测量命令跑完并记录(待实测项)
 - [ ] 镜像 TAG 已推送并可拉取
+- [ ] 校验 Caddyfile 语法(**未实测**;本片段尚未用 caddy validate 验证过):`docker run --rm -v $PWD/Caddyfile:/etc/caddy/Caddyfile:ro caddy:2 caddy validate --config /etc/caddy/Caddyfile`
 
 **部署后冒烟**
 
