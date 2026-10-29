@@ -25,7 +25,7 @@ import {
 } from '@repolens/db';
 import { buildApp, type AnalyzeJobData, type JobQueue } from './app.js';
 import { createGitHost, parseLsRemote, type GitHost } from './githost.js';
-import { onServiceUnavailable } from '@repolens/shared';
+import { probeService } from '@repolens/shared';
 
 describe('GET /health', () => {
   it('返回 ok', async () => {
@@ -66,24 +66,23 @@ describe('githost', () => {
 });
 
 const REDIS_URL = process.env.TEST_REDIS_URL ?? 'redis://127.0.0.1:6379/1'; // 库号占用表见 packages/agent/src/llm/llm.test.ts
-async function redisUp() {
-  const r = new Redis(REDIS_URL, {
-    lazyConnect: true,
-    connectTimeout: 1000,
-    maxRetriesPerRequest: 0,
-  });
-  try {
-    await r.connect();
-    return (await r.ping()) === 'PONG';
-  } catch {
-    return false;
-  } finally {
-    r.disconnect();
-  }
-}
-const hasRedis = await redisUp();
-if (!hasRedis)
-  onServiceUnavailable('Redis', `[api] Redis 不可达(${REDIS_URL}),跳过依赖 Redis 的路由测试`);
+const hasRedis = await probeService(
+  'Redis',
+  '[api] Redis 不可达,跳过依赖 Redis 的路由测试',
+  async () => {
+    const r = new Redis(REDIS_URL, {
+      lazyConnect: true,
+      connectTimeout: 5000,
+      maxRetriesPerRequest: 0,
+    });
+    try {
+      await r.connect();
+      if ((await r.ping()) !== 'PONG') throw new Error('ping 未返回 PONG');
+    } finally {
+      r.disconnect();
+    }
+  },
+);
 
 const SHA = '1'.repeat(40);
 // 限流 key(rl:ip:/rl:sub:{ip}:{hour})按 IP 计数,共享 Redis 上会跨次运行累积。

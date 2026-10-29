@@ -12,7 +12,7 @@ import {
   type PriceTable,
 } from './pricing.js';
 import { LlmError, type LlmRequest } from './types.js';
-import { onServiceUnavailable } from '@repolens/shared';
+import { probeService } from '@repolens/shared';
 
 /** 内存 KV(CI 无 Redis 时也能跑);TTL 只记录不过期 */
 class MemKv implements LlmKv {
@@ -52,24 +52,23 @@ const req = (content: string, extra: Partial<LlmRequest> = {}): LlmRequest => ({
 });
 
 const REDIS_URL = process.env.TEST_REDIS_URL ?? 'redis://127.0.0.1:6379/5'; // 测试 Redis 库号占用表:api app=1, agent llm=5, worker embed-lock=6, worker queue.int=7, worker test-utils=8;保留不用:0/9/10、11(#108 route.test)、13(本地全量)
-const redisOk = await (async () => {
-  const r = new Redis(REDIS_URL, {
-    lazyConnect: true,
-    maxRetriesPerRequest: 0,
-    connectTimeout: 1000,
-  });
-  try {
-    await r.connect();
-    await r.ping();
-    return true;
-  } catch {
-    return false;
-  } finally {
-    r.disconnect();
-  }
-})();
-if (!redisOk)
-  onServiceUnavailable('Redis', `[agent] Redis 不可达(${REDIS_URL}),跳过真实 Redis 网关测试`);
+const redisOk = await probeService(
+  'Redis',
+  '[agent] Redis 不可达,跳过真实 Redis 网关测试',
+  async () => {
+    const r = new Redis(REDIS_URL, {
+      lazyConnect: true,
+      connectTimeout: 5000,
+      maxRetriesPerRequest: 0,
+    });
+    try {
+      await r.connect();
+      if ((await r.ping()) !== 'PONG') throw new Error('ping 未返回 PONG');
+    } finally {
+      r.disconnect();
+    }
+  },
+);
 
 function suite(
   name: string,
