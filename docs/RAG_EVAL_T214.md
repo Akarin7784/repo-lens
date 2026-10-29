@@ -243,3 +243,16 @@ S1 已作为待修 bug 并入调参集记录(见 RAG_TUNING_QUESTIONS.md 末节)
 - **S1** rw-2 hit5=0 top1=0 → rw-3 hit5=1 top1=1。改写含 routing/router/matcher 等类别词形态,判定文件进入首位(S1 记为已知问题,本轮命中不代表已稳定)。
   - rw-3 改写:`routing route routes router Router match matching path matcher`
   - rw-3 top5: `src/router/reg-exp-router/matcher.ts`, `src/router.ts`, `src/router/pattern-router/router.ts`, `src/router.ts`, `src/helper/route/index.ts`
+
+## v2 运行方式
+
+只说明怎么跑,不含任何结果。v2 只许跑一次,结果原样另写进 docs。
+
+- 前置:`pnpm build`;zod 检出到 `b1f6ba06c5de0e600640917615e5df70fa73f060`(`ZOD_DIR`,不符即报错);`EMBEDDING_MODEL_DIR` 为固定修订的本地模型目录;`DEEPSEEK_API_KEY` 在环境变量里(v2 不允许 `--fake-llm`,也不会退回 FakeLlm)。
+- 命令:`ZOD_DIR=… EMBEDDING_MODEL_DIR=… node scripts/rag-eval.mjs v2`。
+- 题目:从 `RAG_HOLDOUT_V2.md` 的 `| V… |` 行机械解析,行数不是 10、编号不是 V1..V10、或参考文件不是 `packages/zod/src/v4/` 下的完整路径都直接报错;脚本里不含题目文字。
+- 判分:前 5 中任一结果的路径与参考文件完整相等即命中,首位单独统计,忽略符号,v3 同名文件不算。改写失败或检索降级(非 `hybrid`)的题记为失败。
+- 检索直接调用线上 `rewriteQuery`(rw-3,缓存键不变)与 `hybridSearch`,不在脚本里重写。
+- 向量缓存:`/tmp/rl-eval-vectors-v2.json`,与 hono 缓存分开,按 digest、块数、zod 提交、切块版本、拼接版本、模型修订核对。
+- 防误跑:输出同时写入 `V2_RESULT_FILE`(默认 `/tmp/rl-eval-v2-result.txt`);该文件存在时拒绝再跑,除非加 `--force`,此时输出首行带 `FORCE-RERUN` 标记。
+- 解析/判分纯函数测试(合成表格,不检索):`node --test scripts/rag-eval-v2-lib.test.mjs`。
