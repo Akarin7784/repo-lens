@@ -1,10 +1,12 @@
 import {
   CreateRepoResponseSchema,
+  FileContentSchema,
   GraphDataSchema,
   NodeDetailSchema,
   RepoStatusSchema,
   type CreateRepoRequest,
   type CreateRepoResponse,
+  type FileContent,
   type GraphData,
   type NodeDetail,
   type RepoStatus,
@@ -26,6 +28,8 @@ export type ApiClient = {
   getGraph(repoId: number, parentId: string | null): Promise<GraphData & { truncated: boolean }>;
   /** GET /api/repos/:id/nodes/:nodeId;nodeId 整体 encodeURIComponent(后端两种写法都接受)。signal 用于切换节点时取消过期请求 */
   getNodeDetail(repoId: number, nodeId: string, signal?: AbortSignal): Promise<NodeDetail>;
+  /** T-223:GET /api/repos/:id/files?path=;只传 path(不传 start/end,后端最多返回 FILE_MAX_LINES 行并以 hasMore 标记) */
+  getFile(repoId: number, path: string, signal?: AbortSignal): Promise<FileContent>;
   /** SSE 地址(EventSource 需要完整 URL) */
   jobEventsUrl(jobId: string): string;
 };
@@ -90,6 +94,10 @@ export function createApiClient(
     },
     getNodeDetail: (repoId, nodeId, signal) =>
       request(`/api/repos/${repoId}/nodes/${encodeURIComponent(nodeId)}`, NodeDetailSchema, {
+        signal,
+      }),
+    getFile: (repoId, path, signal) =>
+      request(`/api/repos/${repoId}/files?path=${encodeURIComponent(path)}`, FileContentSchema, {
         signal,
       }),
     jobEventsUrl: (jobId) => `${base}/api/jobs/${encodeURIComponent(jobId)}/events`,

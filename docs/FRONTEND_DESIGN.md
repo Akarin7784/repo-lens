@@ -573,6 +573,35 @@ zustand（秒出图）和 zod（默认 module 层、按需下钻）不在 3 分�
 
 **兜底方案**：演示只使用预解析仓库（进度页可用回放模式，重放录制好的 SSE 事件）；问答准备缓存答案；兜底录屏用 hono 录制完整主流程（示例仓库全部用预计算布局），本地和网盘各放一份；任何一个仓库出问题时换成 trpc；演示前清空浏览器扩展、预热 IndexedDB 布局缓存（key 为 commitSha + nodeId）。详见下文「风险与降级方案」R.2。
 
+## 9.1 代码预览(T-223)
+
+入口:节点详情面板里只有文件节点(`f:`)显示「查看代码」/「收起代码」按钮(`aria-expanded`、`aria-controls=node-code-preview`);目录、模块、外部依赖节点不显示。切换节点时预览收起、状态重置,未完成的请求用 AbortController 取消,旧响应会被丢弃。
+
+数据:`GET /api/repos/:id/files?path=`(`FileContentSchema`),前端目前只传 `path`,不传 `start/end`。
+
+| 状态 | 文案 | 说明 |
+|---|---|---|
+| 加载中 | 正在加载源码… | `aria-live=polite` |
+| 正常 | 带行号的高亮代码 | 行号从响应的 `start` 开始;长行横向滚动;行号列 sticky |
+| 已排除 | 已排除 + 原因(sensitive/too-large/binary);未知原因显示「该文件已被排除。」 | 暖色提示框,不按错误处理、不用红色 |
+| 404 FILE_NOT_FOUND | 文件在这个提交里不存在。 | 与 REPO_NOT_FOUND 分开,不提供重试 |
+| 409 | GRAPH_NOT_READY「分析还没完成,完成后可预览。」(可重试);SNAPSHOT_MISSING「源码快照已被清理,需要重新分析才能预览。」;REPOS_DIR_NOT_CONFIGURED「服务端未配置源码目录,暂时无法预览。」;缺 reason 或未知 reason 显示通用文案(可重试) | `details.reason` 不在 shared 枚举里时,严格解析会失败,前端用宽松解析兜底只读出 code/message/reason |
+| 网络等错误 | 错误文案 + 重试按钮 | NETWORK/INTERNAL/INVALID_RESPONSE/RATE_LIMITED 可重试 |
+| 空文件 | 空文件。 | |
+
+高亮:Shiki(`shiki/core` + JS 正则引擎,无 wasm),主题 github-light / github-dark(深色用 `--shiki-dark`),按需动态加载,只注册常用语言(ts/tsx/js/jsx/json/md/css/html/py/go/rs/java/yaml/sh)。未知后缀按纯文本显示。Shiki 加载或高亮失败时退回纯文本 `<pre>`,并提示「语法高亮加载失败,已按纯文本显示。」。生产构建中 Shiki core 与引擎在独立 chunk,`/a/[id]` 首屏不包含。
+
+安全渲染:内容只作为 React 文本节点渲染(Shiki 只取 token 文本和颜色,不用 `codeToHtml`),全程不使用 `dangerouslySetInnerHTML`。有 XSS 用例(`<script>`、`<img onerror>`、`</pre><script>`)和变异验证。
+
+限额:前端 `PREVIEW_MAX_LINES = 2000`(与 shared `FILE_MAX_LINES` 一致,有测试锁定),超出或服务端 `hasMore` 时合并提示「仅显示前 N 行(共 T 行)。」;单行超过 `PREVIEW_MAX_LINE_CHARS = 2000` 字符时截断显示,整份文件不做高亮,并提示。
+
+布局:预览区内部滚动,桌面 `max-h-[60vh]`,窄屏抽屉内 `max-h-[40dvh]`,不撑破 55dvh 的抽屉。
+
+未做 / 未验证:
+- 行号跳转(按行号定位、超出范围提示)尚未实现:UI 和 API 调用都没有行号参数,本期不做,列为后续。
+- 真实的 sensitive 排除、三种 409 都无法用现有数据复现,截图用 page.route 模拟;真实 hono 图里只有 TS 文件节点。
+- 屏幕阅读器实机朗读、投屏低亮度、Safari/Firefox 未验证。
+
 ## 10. 4 周前端任务拆分
 
 | 周 | 任务 | 交付物与验收标准 |
