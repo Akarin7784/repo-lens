@@ -360,6 +360,13 @@ describe('API DTO', () => {
     ).toBe(false);
     expect(ChatRequestSchema.safeParse({ message: '' }).success).toBe(false);
   });
+  it('done 事件的 sessionId 可选,须为正整数', () => {
+    const done = { messageId: 881, droppedCitations: 0, usage: { in: 1, out: 2 } };
+    const ok = (data: object) => ChatEventSchema.safeParse({ event: 'done', data }).success;
+    expect(ok(done)).toBe(true);
+    expect(ok({ ...done, sessionId: 7 })).toBe(true);
+    for (const sessionId of [0, -1, 1.5, '7']) expect(ok({ ...done, sessionId })).toBe(false);
+  });
   it('ChatRequest 收紧:未知字段、超长、空白字符串都拒绝', () => {
     // 未知字段(含旧草案里的 question)
     expect(ChatRequestSchema.safeParse({ message: 'q', question: 'q' }).success).toBe(false);
