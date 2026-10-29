@@ -97,7 +97,10 @@ describe.skipIf(!hasRedis)('路由(真实 Redis + 内存 Store)', () => {
   let jobs: AnalyzeJobData[];
   let git: GitHost & {
     sha: string | null;
-    info: { sizeKb: number | null; language: string | null; private?: boolean | null } | null;
+    info:
+      | { sizeKb: number | null; language: string | null; private?: boolean | null }
+      | 'not-found'
+      | null;
   };
   const queue: JobQueue = {
     enqueue: async (d) => void jobs.push(d),
@@ -122,7 +125,8 @@ describe.skipIf(!hasRedis)('路由(真实 Redis + 内存 Store)', () => {
       sha: SHA,
       info: { sizeKb: 100, language: 'TypeScript' },
       lsRemote: async () => git.sha,
-      repoInfo: async () => git.info && { private: null, ...git.info },
+      repoInfo: async () =>
+        git.info === 'not-found' ? 'not-found' : git.info && { private: null, ...git.info },
     };
   });
   afterAll(() => redis.disconnect());
@@ -259,6 +263,57 @@ describe.skipIf(!hasRedis)('路由(真实 Redis + 内存 Store)', () => {
     const r = await post(app, 'https://github.com/a/maybe-private');
     expect([r.statusCode, r.json().error.code]).toEqual([404, 'REPO_NOT_FOUND']);
     await app.close();
+  });
+
+  it('SHA ref + repoInfo 明确 404:REPO_NOT_FOUND,不建仓库/任务、不扣 rl:ip;403/5xx/网络错误(null)照常放行', async () => {
+    const app = make();
+    git.sha = SHA; // ref 是 40 位 SHA 时 lsRemote 原样返回,不联网
+    git.info = 'not-found';
+    const ip = nextIp();
+    const r = await app.inject({
+      method: 'POST',
+      url: '/api/repos',
+      payload: { repoUrl: 'https://github.com/a/private-or-missing', ref: SHA },
+      headers: { 'x-forwarded-for': ip },
+    });
+    expect([r.statusCode, r.json().error.code]).toEqual([404, 'REPO_NOT_FOUND']);
+    expect(jobs).toHaveLength(0);
+    expect(await store.getRepo(1)).toBeFalsy();
+    expect(await redis.get(redisKeys.rateLimitIp(ip))).toBeNull();
+    // 其他失败(githost 归一为 null)不拒绝
+    git.info = null;
+    const ok = await app.inject({
+      method: 'POST',
+      url: '/api/repos',
+      payload: { repoUrl: 'https://github.com/a/public', ref: SHA },
+      headers: { 'x-forwarded-for': ip },
+    });
+    expect(ok.statusCode).toBe(202);
+    expect(jobs).toHaveLength(1);
+    expect(await redis.get(redisKeys.rateLimitIp(ip))).toBe('1');
+    await app.close();
+  });
+
+  it('createGitHost.repoInfo:只有 404 归为 not-found;403、5xx、网络错误为 null', async () => {
+    const host = (f: () => Promise<Response>) =>
+      createGitHost({ fetch: f as unknown as typeof fetch });
+    const resp = (status: number, body: unknown = {}) =>
+      Promise.resolve(new Response(JSON.stringify(body), { status }));
+    expect(await host(() => resp(404)).repoInfo('a', 'b')).toBe('not-found');
+    expect(
+      await host(() => resp(403, { message: 'API rate limit exceeded' })).repoInfo('a', 'b'),
+    ).toBeNull();
+    expect(await host(() => resp(500)).repoInfo('a', 'b')).toBeNull();
+    expect(await host(() => resp(502)).repoInfo('a', 'b')).toBeNull();
+    expect(
+      await host(() => Promise.reject(new TypeError('fetch failed'))).repoInfo('a', 'b'),
+    ).toBeNull();
+    expect(
+      await host(() => resp(200, { size: 10, language: 'TypeScript', private: false })).repoInfo(
+        'a',
+        'b',
+      ),
+    ).toEqual({ sizeKb: 10, language: 'TypeScript', private: false });
   });
 
   it('404 / 413 / 422', async () => {
