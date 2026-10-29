@@ -4,14 +4,11 @@ import { DEFAULT_PRICES, LlmGateway, createLlmClient } from '@repolens/agent';
 import { MysqlStore, redisKeys, waitForSchema } from '@repolens/db';
 import {
   CachedEmbedder,
-  DashscopeEmbedder,
-  FakeEmbedder,
   MeteredEmbedder,
   qdrantCollectionFor,
-  OnnxEmbedder,
   QdrantVectorStore,
-  type Embedder,
 } from '@repolens/rag';
+import { selectEmbedder } from './embedder-select.js';
 import { loadConfig } from './config.js';
 import { RedisEventSink } from './events.js';
 import { ANALYZE_QUEUE, processAnalyzeJob, type AnalyzeJobData } from './queue.js';
@@ -40,14 +37,10 @@ const gateway = new LlmGateway({
 
 // embedding 只在 worker 里跑(本地 ONNX 峰值约 2.5 GB);未配置 QDRANT_URL 时跳过向量化阶段
 const emb = config.embedding;
-const baseEmbedder: Embedder =
-  emb.provider === 'onnx'
-    ? new OnnxEmbedder(emb.model, emb.modelDir, undefined, emb.threads, emb.revision)
-    : new FakeEmbedder();
 const ds = emb.dashscope;
-// T-214c:EMBEDDING_PROVIDER=dashscope 时用百炼;无 key → 向量化记 skipped 并告警(不打印 key)
-const dashscope = ds?.apiKey ? new DashscopeEmbedder({ ...ds, apiKey: ds.apiKey }) : null;
-const embedder = new CachedEmbedder(dashscope ?? baseEmbedder, redis);
+// EMBEDDING_PROVIDER=dashscope 时不构造 OnnxEmbedder、不读 /models;无 key → 向量化记 skipped 并告警(不打印 key)
+const { base: baseEmbedder, dashscope } = selectEmbedder(emb);
+const embedder = new CachedEmbedder(baseEmbedder, redis);
 // 每个提供方 / 维度一个集合,local 仍是 QDRANT_COLLECTION(默认 code_chunks)
 const collection = emb.qdrant ? qdrantCollectionFor(emb.qdrant.collection, ds) : null;
 const vectorStore = emb.qdrant
