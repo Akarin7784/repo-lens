@@ -163,6 +163,8 @@ export interface Store {
   llmUsageByTask(taskId: number): Promise<LlmUsageRow[]>;
   /** 最近一个已完成(stage = done)的任务 */
   latestDoneTask(repoId: number): Promise<TaskRow | null>;
+  /** 同 (repo, commit) 最近一个已完成的任务(向量化跨任务复用读 embeddingDigest) */
+  latestDoneTaskForCommit(repoId: number, commitSha: string): Promise<TaskRow | null>;
   /** 最近一个图已入库(stage ≥ graph_ready 且未失败,或 done)的任务 */
   latestGraphTask(repoId: number): Promise<TaskRow | null>;
   updateTask(jobId: string, patch: TaskPatch): Promise<void>;

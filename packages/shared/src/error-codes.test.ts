@@ -38,6 +38,16 @@ describe('错误码与子原因(FILE_NOT_FOUND / REPO_NOT_READY details.reason)'
       }).success,
     ).toBe(false);
   });
+  it('details 可附加其他字段(放宽,只增不改)', () => {
+    const r = ApiErrorSchema.parse({
+      error: {
+        code: 'REPO_NOT_READY',
+        message: 'x',
+        details: { reason: 'SNAPSHOT_MISSING', hint: 'h' },
+      },
+    });
+    expect(r.error.details).toEqual({ reason: 'SNAPSHOT_MISSING', hint: 'h' });
+  });
 });
 
 describe('excluded.reason 枚举', () => {

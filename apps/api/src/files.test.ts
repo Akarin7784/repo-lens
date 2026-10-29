@@ -16,7 +16,7 @@ const code = async (p: Promise<unknown>) => {
     await p;
   } catch (e) {
     if (e instanceof HttpError)
-      return `${e.status} ${e.code}${e.details ? ' ' + e.details.reason : ''}`;
+      return `${e.status} ${e.code}${e.details?.reason ? ' ' + e.details.reason : ''}`;
     throw e;
   }
   return 'ok';

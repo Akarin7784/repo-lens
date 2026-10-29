@@ -51,8 +51,11 @@ export const ApiErrorSchema = z.object({
   error: z.object({
     code: z.enum(API_ERROR_CODES),
     message: z.string(),
-    /** 可选细节;目前仅 REPO_NOT_READY 带 reason */
-    details: z.object({ reason: z.enum(REPO_NOT_READY_REASONS) }).optional(),
+    /** 可选细节;目前仅 REPO_NOT_READY 带 reason。允许附加其他字段(只增不改),reason 若出现必须是枚举值 */
+    details: z
+      .object({ reason: z.enum(REPO_NOT_READY_REASONS).optional() })
+      .passthrough()
+      .optional(),
   }),
 });
 

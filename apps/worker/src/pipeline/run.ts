@@ -74,6 +74,7 @@ export interface PipelineDeps {
   /** 锁 key 前缀(测试隔离用) */
   lockPrefix?: string;
   lockPollMs?: number;
+  lockRenewMs?: number;
   /** 仅测试:允许 file:// 克隆源 */
   allowFileProtocol?: boolean;
 }
@@ -196,6 +197,9 @@ export async function runPipeline(
       data: { jobId, stage: s, progress: Math.round(pct), ...(message ? { message } : {}) },
     });
   };
+
+  // 本任务行在本次运行覆盖 stats 之前记录的内容 digest(MySQL 上 (repo, commit) 唯一,重跑即同一行)
+  const priorDigest = (await store.getTask(jobId))?.stats.embeddingDigest ?? null;
 
   try {
     await store.updateTask(jobId, {
@@ -340,7 +344,7 @@ export async function runPipeline(
           deps,
           root,
           progress,
-          typeof stats.embeddingDigest === 'string' ? stats.embeddingDigest : null,
+          typeof stats.embeddingDigest === 'string' ? stats.embeddingDigest : priorDigest,
         );
         embeddingStatus = r.reused ? 'reused' : 'ready';
         stats = { ...stats, embeddingChunks: r.chunks };
@@ -554,28 +558,43 @@ export async function runEmbedding(
     }
   };
   const { chunks, excluded } = await buildChunks(files, readSource);
-  const index = () =>
+  // 跨任务复用:优先取同 (repo, commit) 最近一个成功任务记录的 digest,其次本任务上次的 digest
+  const doneDigest = (await store.latestDoneTaskForCommit(repoId, commitSha))?.stats
+    .embeddingDigest;
+  const baseline = typeof doneDigest === 'string' ? doneDigest : prevDigest;
+  const digest = chunksDigest(deps.embedder!.model, chunks);
+  const index = (beforeWrite?: () => Promise<void>) =>
     indexChunks(
-      { repoId, commitSha, chunks, batchSize: config.embedding.batchSize, prevDigest },
+      { repoId, commitSha, chunks, batchSize: config.embedding.batchSize, prevDigest: baseline },
       deps.embedder!,
       deps.vectorStore!,
       (done, total) =>
         progress('embedding', 85 + Math.floor((done / total) * 14), `向量化 ${done}/${total} 块`),
+      beforeWrite,
     );
   let r: { chunks: number; reused: boolean; digest?: string };
   if (deps.lockKv) {
     // 同 commit 并发任务:拿到锁的写,拿不到的不写、等持有者完成后记 reused;持有者失败则接手
-    const locked = await withEmbedLock(deps.lockKv, embedLockKey(repoId, commitSha), index, {
-      ttlSec: config.embedding.lockTtlSec,
-      pollMs: deps.lockPollMs,
-      prefix: deps.lockPrefix,
-    });
+    const locked = await withEmbedLock(
+      deps.lockKv,
+      embedLockKey(repoId, commitSha),
+      (guard) => index(() => guard.assertHeld()),
+      {
+        ttlSec: config.embedding.lockTtlSec,
+        maxWaitMs: config.embedding.lockMaxWaitSec * 1000,
+        pollMs: deps.lockPollMs,
+        renewMs: deps.lockRenewMs,
+        prefix: deps.lockPrefix,
+        digest,
+        onWait: () => progress('embedding', 85, '等待同 commit 的另一任务完成向量化'),
+      },
+    );
     r = locked.ran
       ? locked.result
       : {
           chunks: await deps.vectorStore!.count(repoId, commitSha),
           reused: true,
-          digest: chunksDigest(deps.embedder!.model, chunks),
+          digest,
         };
   } else r = await index();
   const skip = excluded.length ? `,排除 ${excluded.length} 个文件` : '';

@@ -35,6 +35,8 @@ export async function indexChunks(
   embedder: Embedder,
   store: VectorStore,
   onProgress?: (done: number, total: number) => Promise<void> | void,
+  /** 持锁时传入:删除与每批写入前校验仍持锁,失锁抛错中止,不再写 */
+  beforeWrite?: () => Promise<void>,
 ): Promise<IndexResult> {
   const { repoId, commitSha, chunks, batchSize } = o;
   const digest = chunksDigest(embedder.model, chunks);
@@ -42,10 +44,14 @@ export async function indexChunks(
   const have = await store.count(repoId, commitSha);
   if (have === chunks.length && have > 0 && o.prevDigest === digest)
     return { chunks: have, reused: true, digest };
-  if (have > 0) await store.deleteCommit(repoId, commitSha);
+  if (have > 0) {
+    await beforeWrite?.();
+    await store.deleteCommit(repoId, commitSha);
+  }
   for (let i = 0; i < chunks.length; i += batchSize) {
     const batch = chunks.slice(i, i + batchSize);
     const vecs = await embedder.embedDocuments(batch.map((c) => c.text));
+    await beforeWrite?.();
     await store.upsert(
       batch.map((c, j) => {
         const payload = {
