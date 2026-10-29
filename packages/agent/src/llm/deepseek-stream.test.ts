@@ -129,8 +129,7 @@ describe('DeepSeekClient.stream(本地假 SSE 服务)', () => {
     handler = script([delta('a'), usageChunk(), DONE, delta('不该出现')], { end: false });
     const evs = await collect(client().stream(call()));
     expect(texts(evs)).toBe('a');
-    await sleep(50);
-    expect(last.closedEarly).toBe(true);
+    await vi.waitFor(() => expect(last.closedEarly).toBe(true));
   });
 
   it('reasoning_content 不当作 token 发出', async () => {
@@ -206,6 +205,48 @@ describe('DeepSeekClient.stream(本地假 SSE 服务)', () => {
     expect(err.message).not.toContain(KEY);
   });
 
+  it('通用 sk-… 形态(别的 key、部分打码回显 sk-ab****xyz)也替换成 ***', async () => {
+    handler = script([
+      chunk({ error: { message: 'key sk-ab****xyz rejected; also sk-Other_key.9 and done' } }),
+    ]);
+    const err = await failure(collect(client().stream(call())));
+    expect((err as LlmStreamError).reason).toBe('upstream-error');
+    expect(err.message).toContain('key *** rejected; also *** and done');
+    expect(err.message).not.toMatch(/sk-/);
+  });
+
+  it('非 2xx 的部分打码 key 回显也被抹掉', async () => {
+    handler = (_rq, rs) => {
+      rs.writeHead(401, { 'content-type': 'application/json' });
+      rs.end(JSON.stringify({ error: { message: 'Incorrect API key provided: sk-ab****xyz' } }));
+    };
+    const err = await failure(collect(client().stream(call())));
+    expect(err.message).toContain('***');
+    expect(err.message).not.toMatch(/sk-/);
+  });
+
+  it('空的 data: 事件按 SSE 规范不派发(不当坏行),前后事件照常', async () => {
+    handler = script([delta('a'), 'data:\n\n', 'data: \n\n', delta('b'), usageChunk(), DONE]);
+    const evs = await collect(client().stream(call()));
+    expect(texts(evs)).toBe('ab');
+    expect(evs.at(-1)?.type).toBe('usage');
+  });
+
+  it('背压:调用方停在 yield 超过空闲时限,不误报 idle-timeout', async () => {
+    // gapMs 让每个事件单独到达,恢复后必须再 read()
+    handler = script([delta('a'), delta('b'), delta('c'), usageChunk(), DONE], { gapMs: 20 });
+    const it = client({ idleTimeoutMs: 100 }).stream(call());
+    const got: LlmStreamEvent[] = [];
+    for (;;) {
+      const r = await it.next();
+      if (r.done) break;
+      got.push(r.value);
+      await sleep(300); // 调用方慢消费,远超 idleTimeoutMs
+    }
+    expect(texts(got)).toBe('abc');
+    expect(got.at(-1)?.type).toBe('usage');
+  });
+
   it('非 2xx:LlmHttpError 带状态码,不含 key', async () => {
     handler = (_rq, rs) => {
       rs.writeHead(401, { 'content-type': 'application/json' });
@@ -247,8 +288,7 @@ describe('DeepSeekClient.stream(本地假 SSE 服务)', () => {
     const err = await failure(collect(client({ firstChunkTimeoutMs: 150 }).stream(call())));
     expect((err as LlmStreamError).reason).toBe('first-chunk-timeout');
     expect(Date.now() - t0).toBeLessThan(400);
-    await sleep(50);
-    expect(last.closedEarly).toBe(true);
+    await vi.waitFor(() => expect(last.closedEarly).toBe(true));
   });
 
   it('响应头都不来也按首包超时', async () => {
@@ -270,8 +310,7 @@ describe('DeepSeekClient.stream(本地假 SSE 服务)', () => {
     );
     expect((err as LlmStreamError).reason).toBe('idle-timeout');
     expect(got).toEqual(['a']);
-    await sleep(50);
-    expect(last.closedEarly).toBe(true);
+    await vi.waitFor(() => expect(last.closedEarly).toBe(true));
   });
 
   it('总时限 timeoutMs:持续有 data 也会在总时限到达时中止', async () => {
@@ -300,8 +339,7 @@ describe('DeepSeekClient.stream(本地假 SSE 服务)', () => {
       })(),
     );
     expect(err).toBe(reason);
-    await sleep(50);
-    expect(last.closedEarly).toBe(true);
+    await vi.waitFor(() => expect(last.closedEarly).toBe(true));
   });
 
   it('调用方 it.return()(route 的 finally):cancel reader,上游连接被关闭', async () => {
@@ -312,8 +350,7 @@ describe('DeepSeekClient.stream(本地假 SSE 服务)', () => {
     const it = client().stream(call());
     expect((await it.next()).value).toEqual({ type: 'text', text: '.' });
     await it.return(undefined);
-    await sleep(50);
-    expect(last.closedEarly).toBe(true);
+    await vi.waitFor(() => expect(last.closedEarly).toBe(true));
   });
 
   it('错误信息与客户端序列化里都没有 key', async () => {

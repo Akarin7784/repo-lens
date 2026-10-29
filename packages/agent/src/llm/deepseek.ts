@@ -26,6 +26,9 @@ export class LlmStreamError extends Error {
 }
 
 /** 首包 / 相邻 chunk 空闲超时默认值 */
+/** 通用 OpenAI 风格 key 形态,含部分打码回显(`sk-ab****xyz`) */
+const SK_PATTERN = /sk-[A-Za-z0-9*._-]+/g;
+
 export const DEEPSEEK_STREAM_IDLE_DEFAULT_MS = 20_000;
 const TOTAL_DEFAULT_MS = 60_000;
 
@@ -114,9 +117,12 @@ export class DeepSeekClient implements LlmClient {
     });
   }
 
-  /** 服务端报错文案可能回显请求头;先抹掉 key 再截断,原始响应体不进错误信息 */
+  /**
+   * 服务端报错文案可能回显请求头;先抹掉 key 再截断,原始响应体不进错误信息。
+   * 除本 key 原文外,通用 `sk-…` 形态(含部分打码的回显如 `sk-ab****xyz`)也一律替换成 `***`。
+   */
   private redact(msg: string) {
-    return msg.split(this.#apiKey).join('***').slice(0, 200);
+    return msg.split(this.#apiKey).join('***').replace(SK_PATTERN, '***').slice(0, 200);
   }
 
   private httpError(status: number, raw: string) {
@@ -243,6 +249,8 @@ export class DeepSeekClient implements LlmClient {
         payload: string,
       ): Generator<LlmStreamEvent, boolean> {
         if (payload === '[DONE]') {
+          // 之后直接 return 进 finally,不需要重新计时
+          clearTimeout(timer);
           if (usage) yield { type: 'usage', usage, ...(truncated ? { truncated: true } : {}) };
           else if (stopped)
             yield { type: 'usage', usage: estimateUsage(req.messages, full), estimated: true };
@@ -264,7 +272,10 @@ export class DeepSeekClient implements LlmClient {
         const t = ch?.delta?.content;
         if (typeof t === 'string' && t) {
           full += t;
+          // 停在 yield 时是调用方在消费(背压),不是上游空闲:暂停空闲计时,恢复后重新计时
+          clearTimeout(timer);
           yield { type: 'text', text: t };
+          arm();
         }
         if (ch?.finish_reason === 'length') truncated = true;
         if (ch?.finish_reason === 'stop') stopped = true;
@@ -290,6 +301,8 @@ export class DeepSeekClient implements LlmClient {
             if (data.length === 0) continue;
             const payload = data.join('\n');
             data = [];
+            // SSE 规范:data 缓冲为空串(只有一个空的 `data:` 行)时不派发事件;也不算 data 事件、不重置计时
+            if (payload === '') continue;
             gotData = true;
             arm();
             if (yield* onEvent.call(this, payload)) return;
@@ -309,6 +322,8 @@ export class DeepSeekClient implements LlmClient {
       }
     } finally {
       clearTimeout(timer);
+      // reader.cancel 与 own.abort 有重叠:cancel 只释放本地读端(且 fetch 被 abort 后它本身会失败);
+      // 真正关闭上游连接的是 own.abort()(abort 掉 fetch)。两者都保留,任一路径都能收尾。
       if (reader) void reader.cancel().catch(() => {});
       own.abort();
     }
