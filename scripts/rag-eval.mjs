@@ -496,7 +496,10 @@ for (const [id, q, want, syms] of SETS[setName]) {
 for (const [k, [n, a, b, c, d]] of Object.entries(per))
   if (n)
     out(
-      `EVAL group ${k}: top5 ${a}/${n} top1 ${b}/${n} | 仅向量(原问题,无改写)基线 top5 ${c}/${n} top1 ${d}/${n}`,
+      // v2 分支不累加仅向量基线栏,V 分组不打印该栏(避免输出非实测的 0)
+      k === 'V'
+        ? `EVAL group ${k}: top5 ${a}/${n} top1 ${b}/${n}`
+        : `EVAL group ${k}: top5 ${a}/${n} top1 ${b}/${n} | 仅向量(原问题,无改写)基线 top5 ${c}/${n} top1 ${d}/${n}`,
     );
 if (V2)
   out(
