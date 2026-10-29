@@ -15,6 +15,11 @@ export interface LlmCall {
   temperature?: number;
   /** 要求返回 JSON 对象(OpenAI 兼容的 response_format) */
   json?: boolean;
+  /**
+   * 取消信号(调用方超时 / 外部取消)。不参与缓存 key。客户端应把它传给底层请求,
+   * 被取消时请求真正中止,不会再收到迟到的响应,也就不会为它计费。
+   */
+  signal?: AbortSignal;
 }
 
 export interface LlmUsage {

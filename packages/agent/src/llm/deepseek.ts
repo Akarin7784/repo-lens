@@ -57,7 +57,10 @@ export class DeepSeekClient implements LlmClient {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${this.#apiKey}` },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(this.o.timeoutMs ?? 60_000),
+      // 客户端自身超时 + 调用方取消(摘要单文件超时等),任一触发即中止请求
+      signal: req.signal
+        ? AbortSignal.any([req.signal, AbortSignal.timeout(this.o.timeoutMs ?? 60_000)])
+        : AbortSignal.timeout(this.o.timeoutMs ?? 60_000),
     });
     const raw = await res.text();
     if (!res.ok) {

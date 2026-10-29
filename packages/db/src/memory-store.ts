@@ -34,6 +34,20 @@ export class MemoryStore implements Store {
       .get(repoId)!
       .set(`${commitSha}|${row.level}|${row.targetId}`, { ...row, commitSha });
   }
+  async findSummaryByInput(
+    repoId: number,
+    level: SummaryLevel,
+    targetId: string,
+    inputHash: string,
+    preferCommit: string,
+  ) {
+    const all = [...(this.summaries.get(repoId)?.values() ?? [])].filter(
+      (r) => r.level === level && r.targetId === targetId && r.inputHash === inputHash,
+    );
+    // Map 保持插入顺序;最后一个即最新写入
+    const r = all.find((x) => x.commitSha === preferCommit) ?? all[all.length - 1];
+    return r ? { ...r } : null;
+  }
   async getSummary(repoId: number, commitSha: string, level: SummaryLevel, targetId: string) {
     const r = this.summaries.get(repoId)?.get(`${commitSha}|${level}|${targetId}`);
     return r ? { content: r.content, source: r.source } : null;

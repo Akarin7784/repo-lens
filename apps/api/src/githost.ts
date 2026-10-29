@@ -14,8 +14,11 @@ export interface RepoInfo {
 export interface GitHost {
   /** 解析 ref(缺省 HEAD)到 40 位 commit;不存在返回 null */
   lsRemote(url: string, ref?: string): Promise<string | null>;
-  /** 尽力而为的仓库元信息(GitHub API),失败返回 null,不阻塞提交 */
-  repoInfo(owner: string, name: string): Promise<RepoInfo | null>;
+  /**
+   * 尽力而为的仓库元信息(GitHub API)。GitHub 明确返回 404 时为 'not-found'
+   * (无 token 时私有仓库也是 404);403 限流、5xx、网络错误、超时等一律返回 null,不阻塞提交。
+   */
+  repoInfo(owner: string, name: string): Promise<RepoInfo | 'not-found' | null>;
 }
 
 const SHA = /^[0-9a-f]{40}$/;
@@ -32,7 +35,9 @@ export function parseLsRemote(out: string, ref?: string): string | null {
   return null;
 }
 
-export function createGitHost(opts: { timeoutMs?: number; githubToken?: string } = {}): GitHost {
+export function createGitHost(
+  opts: { timeoutMs?: number; githubToken?: string; fetch?: typeof fetch } = {},
+): GitHost {
   const timeout = opts.timeoutMs ?? 15_000;
   return {
     async lsRemote(url, ref) {
@@ -57,7 +62,7 @@ export function createGitHost(opts: { timeoutMs?: number; githubToken?: string }
     },
     async repoInfo(owner, name) {
       try {
-        const res = await fetch(`https://api.github.com/repos/${owner}/${name}`, {
+        const res = await (opts.fetch ?? fetch)(`https://api.github.com/repos/${owner}/${name}`, {
           headers: {
             accept: 'application/vnd.github+json',
             'user-agent': 'repo-lens',
@@ -65,6 +70,7 @@ export function createGitHost(opts: { timeoutMs?: number; githubToken?: string }
           },
           signal: AbortSignal.timeout(5000),
         });
+        if (res.status === 404) return 'not-found';
         if (!res.ok) return null;
         const j = (await res.json()) as {
           size?: number;

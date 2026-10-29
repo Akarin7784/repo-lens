@@ -129,6 +129,25 @@ describe('DeepSeekClient(本地假 HTTP 服务)', () => {
     slow.closeAllConnections();
     await new Promise<void>((ok) => slow.close(() => ok()));
   });
+  it('调用方 signal(AbortSignal.any 合并)取消即中止请求', async () => {
+    const slow = createServer(() => {
+      /* 永不响应 */
+    });
+    await new Promise<void>((ok) => slow.listen(0, '127.0.0.1', ok));
+    const url = `http://127.0.0.1:${(slow.address() as AddressInfo).port}`;
+    const ctl = new AbortController();
+    const t0 = Date.now();
+    setTimeout(() => ctl.abort(new Error('caller timeout')), 50);
+    await expect(
+      new DeepSeekClient(KEY, { baseUrl: url, timeoutMs: 10_000 }).call({
+        ...call,
+        signal: ctl.signal,
+      }),
+    ).rejects.toThrow();
+    expect(Date.now() - t0).toBeLessThan(2000);
+    slow.closeAllConnections();
+    await new Promise<void>((ok) => slow.close(() => ok()));
+  });
   it('key 不出现在客户端对象的序列化里', () => {
     const c = new DeepSeekClient(KEY, { baseUrl: base });
     expect(JSON.stringify(c)).not.toContain(KEY);

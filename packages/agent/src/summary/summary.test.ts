@@ -302,6 +302,90 @@ describe('summarizeRepo', () => {
   });
 });
 
+describe('超时真正取消请求(LlmCall.signal)', () => {
+  it('超时会 abort 传给客户端的 signal;被取消的调用记 ok=0、花费 0,不产生计费', async () => {
+    let aborted = 0;
+    let lateResolves = 0;
+    const client: LlmClient = {
+      provider: 'fake',
+      async call(req: LlmCall): Promise<LlmCallResult> {
+        const text = req.messages.map((m) => m.content).join('\n');
+        if (!text.includes('路径:src/middleware/b.ts'))
+          return { text: '{"summary":"ok"}', usage: { tokensIn: 1, tokensOut: 1 } };
+        expect(req.signal).toBeDefined();
+        // 模拟真实 HTTP:收到 abort 就中止;否则 200ms 后迟到返回
+        return new Promise((ok, fail) => {
+          const t = setTimeout(() => {
+            lateResolves++;
+            ok({ text: '{"summary":"late"}', usage: { tokensIn: 1000, tokensOut: 1000 } });
+          }, 200);
+          req.signal!.addEventListener('abort', () => {
+            aborted++;
+            clearTimeout(t);
+            fail(req.signal!.reason);
+          });
+        });
+      },
+    } as LlmClient;
+    const { run, db, usage } = setup({ client, fileTimeoutMs: 30 });
+    const r = await run();
+    await new Promise((ok) => setTimeout(ok, 300)); // 等过迟到时间点
+    expect(r.timedOut).toBe(2);
+    expect(aborted).toBe(2);
+    expect(lateResolves).toBe(0);
+    expect(db.get(summaryKey('file', 'f:src/middleware/b.ts'))?.source).toBe('rule');
+    const rows = await usage.llmUsageByTask(7);
+    const big = rows.filter((u) => u.tokensIn === 1000);
+    expect(big).toHaveLength(0);
+    const failed = rows.filter((u) => !u.ok);
+    expect(failed).toHaveLength(2);
+    for (const u of failed) expect(u.costMicroUsd).toBe(0);
+  });
+
+  it('客户端无视 signal 迟到返回:每次底层调用最多记账一次', async () => {
+    const client: LlmClient = {
+      provider: 'fake',
+      async call(req: LlmCall): Promise<LlmCallResult> {
+        const text = req.messages.map((m) => m.content).join('\n');
+        if (!text.includes('路径:src/middleware/b.ts'))
+          return { text: '{"summary":"ok"}', usage: { tokensIn: 1, tokensOut: 1 } };
+        await new Promise((ok) => setTimeout(ok, 80));
+        return { text: '{"summary":"late"}', usage: { tokensIn: 1000, tokensOut: 1000 } };
+      },
+    } as LlmClient;
+    const { run, usage } = setup({ client, fileTimeoutMs: 30 });
+    await run();
+    await new Promise((ok) => setTimeout(ok, 200));
+    const late = (await usage.llmUsageByTask(7)).filter((u) => u.tokensIn === 1000);
+    expect(late).toHaveLength(2); // 两次尝试各记一次,没有重复
+  });
+
+  it('外部 signal 已取消:不发请求、不写 llm_usage', async () => {
+    const usage = new MemoryStore();
+    const client = new FakeLlm();
+    const gateway = new LlmGateway({
+      client,
+      kv: new MemKv(),
+      usage,
+      prices: DEFAULT_PRICES,
+      dailyBudgetCents: 500,
+    });
+    const ctl = new AbortController();
+    ctl.abort();
+    await expect(
+      gateway.complete({
+        model: 'fake',
+        messages: [{ role: 'user', content: 'x' }],
+        purpose: 'summary',
+        taskId: 9,
+        signal: ctl.signal,
+      }),
+    ).rejects.toThrow(/取消/);
+    expect(client.calls).toBe(0);
+    expect(await usage.llmUsageByTask(9)).toHaveLength(0);
+  });
+});
+
 describe('dir/module 子项总长度上限', () => {
   const kid = (i: number) => ({ id: `f:src/d/f${i}.ts`, summary: '摘'.repeat(600) });
   it('超过上限的子项不进提示词,只注明省略个数;总长度不超过上限', () => {
