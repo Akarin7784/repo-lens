@@ -188,6 +188,7 @@
 - 2026-10-29:合并 #106(eab8dd0,P4-d):chat 纯函数 `prepareSnippet`(先校 hash,再剥标题行并核对,截断片段丢最后一行)、`numberLines`、`assemblePrompt`;提交限流 IPv6 按 /64 归并(键形如 `rl:sub:2001:0db8:0000:0001::/64:<小时桶>`,DEPLOY 加一行)。架构师指出的标题行与 4000 字符截断问题已修,测试用 buildChunks 真实输出。执行者复核无阻塞;CI 与 smoke 绿。已知保守处理:恰好 4000 字符的片段也按截断处理。未验证:尚未接路由(P4-e 需用 listCodeChunks 重读行再过 prepareSnippet,并从 task.stats 传 embedding 三项)。
 - 2026-10-29:v3 一次性评测完成(后端机器,main 559bf08,h3 f0e17808,dashscope qwen3.7-text-embedding@1024,改写 rw-3):top-5 10/10、top-1 8/10,高于事先定的线(top-5≥7/10 且 top-1≥4/10);10 题全为 hybrid,无降级;DashScope 117026 tokens(约 0.059 元,估算)。我的口径:「检索在 v3 十题上过线」,限定:仅 10 题、检索不含 test/docs/examples、非演示机证据,演示机上须重跑演示题;未写成笼统的「已验收」。结果记录(命令与 usage/total 行)由后端另开文档 PR 并入 EMBEDDING_TUNING.md。
 - 2026-10-29:v3 结论补充(架构师认可):v3 已用掉,不再作盲测集,W4/W6 排第 2 不得分析后调参;之后任何检索改动须换新题集(v4,由绿色三角形出)。「问答可用」要等 P4-e 合并并在演示机验证后才能说;README 与界面文案不写「检索已验收」。
+- 2026-10-29:合并 #107(c5a22b6):仅文档,`docs/EMBEDDING_TUNING.md` 并入 v3 记录(命令、start/usage/total 行、逐题名次、费用、限定)与四仓库预分析记录;规则节 hash 不变(e2c1a8d7…0920);无 key/IP。CI 绿。
 
 ## 演示检查清单(第 4 周前逐项勾选)
 - [ ] 演示前抽查 hono 的 `embeddingStatus` 为 `ready`(或 `reused`)。
