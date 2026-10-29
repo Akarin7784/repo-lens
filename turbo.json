@@ -3,7 +3,7 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
-      "env": ["API_PROXY_TARGET", "NEXT_PUBLIC_API_BASE_URL"],
+      "env": ["API_PROXY_TARGET", "NEXT_PUBLIC_API_BASE_URL", "NEXT_PUBLIC_AGG_EDGE_OPACITY"],
       "outputs": ["dist/**", ".next/**", "!.next/cache/**"]
     },
     "typecheck": { "dependsOn": ["^build"] },

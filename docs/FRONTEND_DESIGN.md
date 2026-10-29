@@ -614,7 +614,7 @@ zustand（秒出图）和 zod（默认 module 层、按需下钻）不在 3 分�
 - 聚合边默认透明度 0.3(`AGG_EDGE_OPACITY`,投影仪验收不清楚时调到 0.35–0.4),线宽上限从 8 降到 5(`AGG_WIDTH_MAX`);环边、选中相关边不调淡,其它节点被选中时的 dim 仍为 0.15。
 - ×N 标签:zoom < 0.9(`WEIGHT_LABEL_MIN_ZOOM`)时隐藏,选中相关边和环边例外;用布尔 selector 读 zoom,跨阈值才重渲染。不隐藏任何边。
 - 系数依据:hono@ed1d5f7 `d:src`/`d:src/middleware`/`d:src/jsx` 三层共 196 条聚合边,weight=1 占 63%,中位数 1,p90 6,最大 29;截图见 `docs/assets/T-220/`。
-- 透明度切换:`AGG_EDGE_OPACITY` 默认 0.3(`AGG_EDGE_OPACITY_DEFAULT`);投影仪验收时启动/构建前设 `NEXT_PUBLIC_AGG_EDGE_OPACITY=0.4` 即可切换,不改代码,非 (0,1] 的值回落到 0.3。0.3/0.4 对比截图见 `docs/assets/T-221/opacity-0.3.png`、`opacity-0.4.png`。
+- 透明度切换:`AGG_EDGE_OPACITY` 默认 0.3(`AGG_EDGE_OPACITY_DEFAULT`);投影仪验收时设 `NEXT_PUBLIC_AGG_EDGE_OPACITY=0.4` 即可切换,不改代码,非 (0,1] 的值回落到 0.3。它是**构建期变量**:`next build` 时内联进客户端包,只在 `next start` 启动时设置无效,改值必须重新构建。本地:`NEXT_PUBLIC_AGG_EDGE_OPACITY=0.4 pnpm build` 后 `next start`,或 `NEXT_PUBLIC_AGG_EDGE_OPACITY=0.4 pnpm dev`(dev 每次启动重新编译);根 `turbo.json` 的 build 任务已在 `env` 里声明该变量,值变化会使 turbo 缓存失效。compose:Dockerfile 以 `ARG/ENV` 接收,`docker-compose.yml` 的 web `build.args` 默认 `${NEXT_PUBLIC_AGG_EDGE_OPACITY:-0.3}`,用 `NEXT_PUBLIC_AGG_EDGE_OPACITY=0.4 docker compose up -d --build web` 传入。对比截图(生产构建截取)见 `docs/assets/T-221/opacity-0.3.png`、`opacity-0.4.png`、`opacity-0.5.png` 及对应 `-zoom.png` 局部放大图。
 
 ### 悬停预览(T-221)
 - 悬停节点 120ms(`HOVER_DELAY_MS`)防抖后,与它相连的边按选中样式高亮:`--accent-strong`、透明度 0.9(被调淡的聚合边也恢复)、线宽 +0.75px,×N 标签不受 zoom 阈值限制直接显示;不相连的边与 ×N/↻ 标签整体略压暗到 0.6 倍(纯 CSS,`[data-hovering]`),节点不淡出。鼠标移开立即恢复;快速划过(<120ms)不触发。
