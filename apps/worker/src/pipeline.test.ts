@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { UnrecoverableError } from 'bullmq';
+import { DEFAULT_PRICES, FakeLlm, LlmGateway, MemoryLlmKv } from '@repolens/agent';
 import { MemoryStore, publicJobId } from '@repolens/db';
 import { MemoryEventSink } from './events.js';
 import { processAnalyzeJob } from './queue.js';
@@ -40,6 +41,14 @@ describe('runPipeline', () => {
       'graph_ready:50',
       'graph_ready',
       'summarizing:50',
+      'summarizing:54',
+      'summarizing:59',
+      'summarizing:64',
+      'summarizing:69',
+      'summarizing:74',
+      'summarizing:79',
+      'summarizing:84',
+      'summarizing:85',
       'embedding:85',
       'done:100',
       'done',
@@ -152,6 +161,69 @@ describe('runPipeline', () => {
       }),
     ).rejects.toBeInstanceOf(UnrecoverableError);
     expect((await store.getTask(data.jobId))?.errorCode).toBe('UNSUPPORTED_LANGUAGE');
+  });
+});
+
+describe('summarizing(T-211)', () => {
+  const gw = (store: MemoryStore, o: { price?: number; task?: number } = {}) => {
+    const client = new FakeLlm();
+    const gateway = new LlmGateway({
+      client,
+      kv: new MemoryLlmKv(),
+      usage: store,
+      prices: o.price ? { fake: { inputPerMTok: o.price, outputPerMTok: 0 } } : DEFAULT_PRICES,
+      dailyBudgetCents: 1_000_000,
+      taskBudgetCents: o.task ?? 30,
+    });
+    return { client, gateway };
+  };
+
+  it('done 后 module 摘要非空;同 commit 重跑不新增 llm_usage、不调模型', async () => {
+    const { store, data } = await setup();
+    const { client, gateway } = gw(store);
+    const config = testConfig();
+    const events = new MemoryEventSink();
+    await runPipeline(data, { store, events, config, gateway, allowFileProtocol: true });
+    expect(events.events.some((e) => e.event === 'stage_error')).toBe(false);
+    const rows = await store.listSummaries(data.repoId);
+    const mod = rows.find((r) => r.targetId.startsWith('m:'));
+    expect(mod?.level).toBe('dir');
+    expect(mod?.content).toMatch(/fake summary/);
+    expect(rows.find((r) => r.level === 'repo')?.content.length).toBeGreaterThan(0);
+    const task = (await store.getTask(data.jobId))!;
+    const usage1 = (await store.llmUsageByTask(task.id)).length;
+    expect(usage1).toBe(rows.length);
+    const calls = client.calls;
+
+    await runPipeline(data, {
+      store,
+      events: new MemoryEventSink(),
+      config,
+      gateway,
+      allowFileProtocol: true,
+    });
+    expect((await store.llmUsageByTask(task.id)).length).toBe(usage1);
+    expect(client.calls).toBe(calls);
+  });
+
+  it('预算熔断:改用规则摘要,只发一次 stage_error(summarizing),任务仍 done', async () => {
+    const { store, data } = await setup();
+    const { gateway } = gw(store, { price: 1_000_000 });
+    const events = new MemoryEventSink();
+    await runPipeline(data, {
+      store,
+      events,
+      config: testConfig(),
+      gateway,
+      allowFileProtocol: true,
+    });
+    const errs = events.events.filter((e) => e.event === 'stage_error');
+    expect(errs).toHaveLength(1);
+    expect(errs[0]!.data).toMatchObject({ stage: 'summarizing' });
+    expect(events.events.at(-1)).toMatchObject({ event: 'done', data: { status: 'done' } });
+    const rows = await store.listSummaries(data.repoId);
+    expect(rows.some((r) => r.model === 'rule')).toBe(true);
+    for (const r of rows) expect(r.content.length).toBeGreaterThan(0);
   });
 });
 

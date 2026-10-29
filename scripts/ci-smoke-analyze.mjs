@@ -155,4 +155,10 @@ console.log(
   `SMOKE aggregated[${P}] nodes=${ag.nodes.length} boundary=${boundary} edges=${ag.edges.length} aggregated=${aggEdges.length} weight_sum=${aggWeight} truncated=${truncated}`,
 );
 if (aggEdges.length < 1) fail(`${P} 没有聚合边(#16 实测 13 条)`);
+// T-211:done 后 module 节点详情带非空 summary(CI 用 FakeLlm)
+const nd = await fetch(`${BASE}/api/repos/${graphReady.repoId}/nodes/${encodeURIComponent(P)}`);
+if (!nd.ok) fail(`GET nodes/${P} → ${nd.status}`);
+const detail = await nd.json();
+if (typeof detail.summary !== 'string' || !detail.summary.trim()) fail(`${P} summary 为空`, detail);
+console.log(`SMOKE summary[${P}] chars=${detail.summary.length}`);
 console.log('SMOKE ANALYZE PASS');

@@ -65,6 +65,30 @@ function suite(name: string, make: () => Promise<Store>, enabled = true) {
     });
     afterAll(async () => s?.close());
 
+    it('summary 按 (repo, level, targetId) upsert 与读回(T-211)', async () => {
+      const r = await s.upsertRepo({ url: 'https://github.com/o/sum', owner: 'o', name: 'sum' });
+      const row = {
+        level: 'dir' as const,
+        targetId: 'm:src',
+        inputHash: 'a'.repeat(64),
+        model: 'fake',
+        content: '第一版',
+        tokensIn: 3,
+        tokensOut: 2,
+      };
+      await s.upsertSummary(r.id, row);
+      await s.upsertSummary(r.id, { ...row, inputHash: 'b'.repeat(64), content: '第二版' });
+      await s.upsertSummary(r.id, { ...row, level: 'file', targetId: 'f:src/a.ts', content: 'f' });
+      expect(await s.getSummary(r.id, 'dir', 'm:src')).toBe('第二版');
+      expect(await s.getSummary(r.id, 'dir', 'm:none')).toBeNull();
+      const all = await s.listSummaries(r.id);
+      expect(all).toHaveLength(2);
+      expect(all.find((x) => x.targetId === 'm:src')).toMatchObject({
+        inputHash: 'b'.repeat(64),
+        model: 'fake',
+      });
+    });
+
     it('llm_usage 写入与按任务读回(T-210)', async () => {
       const r = await s.upsertRepo({ url: 'https://github.com/o/llm', owner: 'o', name: 'llm' });
       const { task } = await s.createTask({
