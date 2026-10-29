@@ -47,7 +47,7 @@ export function createFakeTransport(
 /** dev 预览/截图用的示例回答(假数据):流式 token + 两条引用 + keyword-only 降级 */
 export const DEMO_SCRIPT: FakeStep[] = [
   { event: 'tool', data: { name: 'read_file', args: { path: 'src/db/index.ts' } } },
-  { event: 'token', data: { text: '【假数据】连接池在 ' } },
+  { event: 'token', data: { text: '【假数据】这是假流生成的示例回答,第一处引用 [[S1:10-48]]' } },
   {
     event: 'citation',
     data: {
@@ -58,9 +58,9 @@ export const DEMO_SCRIPT: FakeStep[] = [
       nodeId: 'f:src/db/index.ts',
     },
   },
-  { event: 'token', data: { text: ' 中创建,由 ' } },
-  { event: 'token', data: { text: '`createPool()` 读取环境变量里的连接串;' } },
-  { event: 'token', data: { text: '请求处理时通过 ' } },
+  { event: 'token', data: { text: ',模型原始标记不会显示;' } },
+  { event: 'token', data: { text: '路径与行号只以 citation 事件为准,' } },
+  { event: 'token', data: { text: '第二处引用 [[S2:22-31]]' } },
   {
     event: 'citation',
     data: {
@@ -71,7 +71,7 @@ export const DEMO_SCRIPT: FakeStep[] = [
       nodeId: 'f:src/server/app.ts',
     },
   },
-  { event: 'token', data: { text: ' 注入到路由上下文。' } },
+  { event: 'token', data: { text: '。仅用于界面预览,不代表任何真实回答。' } },
   {
     event: 'done',
     data: {

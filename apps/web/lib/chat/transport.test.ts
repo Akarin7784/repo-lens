@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ChatTransportError, createFetchTransport, type ChatItem } from './transport';
+import {
+  buildChatRequest,
+  ChatTransportError,
+  createFetchTransport,
+  stripCitationMarkers,
+  type ChatItem,
+} from './transport';
 
 function sseResponse(body: string, status = 200) {
   return new Response(body, { status, headers: { 'content-type': 'text/event-stream' } });
@@ -69,5 +75,26 @@ describe('createFetchTransport', () => {
       throw new DOMException('aborted', 'AbortError');
     });
     expect(await drain(t(1, { message: 'q' }, ac.signal))).toEqual([]);
+  });
+});
+
+describe('buildChatRequest(请求体唯一构造点)', () => {
+  it('字段名 message;trim;空或超过 2000 字返回 null;contextNodeIds 最多 20 个', () => {
+    expect(buildChatRequest('  问  ')).toEqual({ message: '问' });
+    expect(buildChatRequest('   ')).toBeNull();
+    expect(buildChatRequest('x'.repeat(2000))?.message).toHaveLength(2000);
+    expect(buildChatRequest('x'.repeat(2001))).toBeNull();
+    const ids = Array.from({ length: 25 }, (_, i) => `f:src/a${i}.ts`);
+    expect(buildChatRequest('q', ids)?.contextNodeIds).toHaveLength(20);
+    expect(buildChatRequest('q', [])).toEqual({ message: 'q' });
+  });
+});
+
+describe('stripCitationMarkers', () => {
+  it('去掉 [[Sn:a-b]] 原始标记;流式时隐藏未闭合尾巴,结束后保留普通方括号', () => {
+    expect(stripCitationMarkers('见 [[S1:10-20]] 与[[S12:3-3]]。', false)).toBe('见  与。');
+    expect(stripCitationMarkers('见 [[S1:1', true)).toBe('见 ');
+    expect(stripCitationMarkers('数组 a[0]', true)).toBe('数组 a[0]');
+    expect(stripCitationMarkers('末尾 [', false)).toBe('末尾 [');
   });
 });

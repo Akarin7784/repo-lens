@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createFakeTransport, DEMO_SCRIPT, type FakeStep } from '../../dev/fakeChatStream';
 import { ChatPanel, CLIENT_TIMEOUT_MS } from './ChatPanel';
 
-function ask(q = '连接池在哪里创建?') {
+function ask(q = '【假数据】示例问题') {
   fireEvent.change(screen.getByRole('textbox', { name: '提问' }), { target: { value: q } });
   fireEvent.click(screen.getByRole('button', { name: '发送' }));
 }
@@ -23,7 +23,7 @@ describe('<ChatPanel>(假流,未接真实后端)', () => {
     ask();
     await waitFor(() => expect(lastAnswer().dataset.status).toBe('done'));
     const a = lastAnswer();
-    expect(a).toHaveTextContent('连接池在 [1] 中创建');
+    expect(a).toHaveTextContent('第一处引用 [1],模型原始标记不会显示');
     expect(within(a).getByRole('list', { name: '引用' })).toHaveTextContent(
       'src/db/index.ts:10–48',
     );
@@ -32,7 +32,7 @@ describe('<ChatPanel>(假流,未接真实后端)', () => {
     expect(a.className).toContain('font-sans');
   });
 
-  it('retrieval=hybrid 或缺省时不显示降级提示;fallback=retrieval 显示「引用来自检索结果」', async () => {
+  it('retrieval=hybrid 或缺省时不显示降级提示;fallback=retrieval 显示「未生成回答」', async () => {
     render(
       <ChatPanel
         repoId={1}
@@ -53,7 +53,7 @@ describe('<ChatPanel>(假流,未接真实后端)', () => {
     ask();
     await waitFor(() => expect(lastAnswer().dataset.status).toBe('done'));
     expect(lastAnswer()).not.toHaveTextContent('已降级为关键词检索');
-    expect(lastAnswer()).toHaveTextContent('引用来自检索结果');
+    expect(lastAnswer()).toHaveTextContent('未生成回答');
   });
 
   it('点击角标或引用卡片回调该引用(由工作区跳到文件预览/图节点)', async () => {
@@ -141,11 +141,11 @@ describe('<ChatPanel>(假流,未接真实后端)', () => {
     expect(screen.getByRole('button', { name: '重试' })).toBeEnabled();
   });
 
-  it('流在 done 前结束 → 「回答中断」,保留已输出 token 与可点引用', async () => {
+  it('流在 done 前结束 → 「回答中途断开」可重试,保留已输出 token 与可点引用', async () => {
     render(<ChatPanel repoId={1} transport={createFakeTransport(DEMO_SCRIPT.slice(0, 4))} />);
     ask();
-    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('回答中断'));
-    expect(lastAnswer()).toHaveTextContent('连接池在');
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('回答中途断开'));
+    expect(lastAnswer()).toHaveTextContent('假流生成的示例回答');
     expect(screen.getByRole('button', { name: /src\/db\/index\.ts:10–48/ })).toBeTruthy();
   });
 

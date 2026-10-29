@@ -9,7 +9,13 @@ import {
   type AnswerAction,
 } from '../../lib/chat/answer';
 import { chatErrorText, RATE_LIMIT_COOLDOWN_S } from '../../lib/chat/errors';
-import { ChatTransportError, type ChatTransport } from '../../lib/chat/transport';
+import {
+  buildChatRequest,
+  CHAT_MESSAGE_MAX,
+  ChatTransportError,
+  stripCitationMarkers,
+  type ChatTransport,
+} from '../../lib/chat/transport';
 
 /** FRONTEND_DESIGN §6.1:20 秒内既没有 token 也没有 done/error,前端主动 abort */
 export const CLIENT_TIMEOUT_MS = 20_000;
@@ -70,10 +76,8 @@ export function ChatPanel({ repoId, transport, onCitationClick, contextNodeIds }
         timer = undefined;
       };
       try {
-        const req = {
-          message: question,
-          ...(contextNodeIds?.length ? { contextNodeIds } : {}),
-        };
+        const req = buildChatRequest(question, contextNodeIds);
+        if (!req) return;
         for await (const item of transport(repoId, req, ctrl.signal)) {
           if (!mine()) return;
           if (!item.ok) {
@@ -105,7 +109,7 @@ export function ChatPanel({ repoId, transport, onCitationClick, contextNodeIds }
 
   const ask = (question: string) => {
     const q = question.trim();
-    if (!q) return;
+    if (!q || q.length > CHAT_MESSAGE_MAX) return;
     const id = nextId.current++;
     setMsgs((ms) => [...ms, { id, question: q, answer: initialAnswer }]);
     void run(id, q);
@@ -157,14 +161,14 @@ export function ChatPanel({ repoId, transport, onCitationClick, contextNodeIds }
               }
             }}
             rows={2}
-            maxLength={4000}
-            placeholder="例如:连接池在哪里创建?"
+            maxLength={CHAT_MESSAGE_MAX}
+            placeholder="输入关于这个仓库的问题"
             className="min-w-0 flex-1 resize-none rounded-control border border-line bg-bg px-3 py-2 font-sans text-[14px] text-fg disabled:opacity-60"
           />
           <div className="flex flex-col gap-1">
             <button
               type="submit"
-              disabled={budgetOut || !input.trim()}
+              disabled={budgetOut || !input.trim() || input.trim().length > CHAT_MESSAGE_MAX}
               className="rounded-control bg-accent-strong px-3 py-2 text-[13px] text-on-accent disabled:opacity-50"
             >
               发送
@@ -211,7 +215,15 @@ function AnswerView({
       {a.segments.length > 0 && (
         <p className="whitespace-pre-wrap text-[15px] leading-[1.7] text-fg">
           {a.segments.map((s, i) => {
-            if (s.kind === 'text') return <span key={i}>{s.text}</span>;
+            if (s.kind === 'text')
+              return (
+                <span key={i}>
+                  {stripCitationMarkers(
+                    s.text,
+                    a.status === 'streaming' && i === a.segments.length - 1,
+                  )}
+                </span>
+              );
             const c = byId.get(s.id);
             return (
               <sup key={i}>
@@ -258,10 +270,10 @@ function AnswerNotes({ a, onRetry }: { a: Answer; onRetry: () => void }) {
       notes.push(
         <span
           key="fb"
-          title="模型给出的引用未通过校验,改用检索得到的片段"
+          title="问答额度已用完或生成服务暂不可用,本次未生成回答"
           className="rounded-full bg-panel px-2 py-0.5"
         >
-          引用来自检索结果
+          未生成回答:问答服务暂不可用或额度已用完,以下仅列出检索到的相关代码位置
         </span>,
       );
     if (a.done.retrieval === 'keyword-only')
@@ -279,7 +291,8 @@ function AnswerNotes({ a, onRetry }: { a: Answer; onRetry: () => void }) {
       cooldown: a.error.code === 'RATE_LIMITED',
     };
   else if (a.status === 'timeout') problem = { text: '回答超时,请重试', retry: true };
-  else if (a.status === 'interrupted') problem = { text: '回答中断', retry: true };
+  else if (a.status === 'interrupted')
+    problem = { text: '回答中途断开,已保留已输出内容,可重试', retry: true };
   else if (a.status === 'aborted') problem = { text: '已停止', retry: true };
   if (notes.length === 0 && !problem) return null;
   return (

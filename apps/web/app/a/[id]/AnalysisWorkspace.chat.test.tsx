@@ -59,6 +59,7 @@ describe('<AnalysisWorkspace> 问答联动(T-230,假流)', () => {
     );
     // 切回问答,对话仍在(面板常驻挂载)
     fireEvent.click(screen.getByRole('tab', { name: '问答' }));
-    expect(screen.getByText(/连接池在/)).toBeTruthy();
+    expect(screen.getByText(/假流生成的示例回答/)).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/\[\[S\d/);
   });
 });

@@ -4,6 +4,38 @@ import { ERROR_TEXT, looseError } from '../api/errors';
 import type { ChatErrorInfo } from './answer';
 import { parseSse } from './sse';
 
+/** 输入框上限(trim 后非空);架构师裁定可能收紧 shared 到 ≤2000,前端先按 2000 */
+export const CHAT_MESSAGE_MAX = 2000;
+/** W3 后端只做格式校验、不影响检索;前端最多传 20 个 */
+export const CHAT_CONTEXT_MAX = 20;
+
+/**
+ * 请求体唯一构造点:字段名只在这里出现。当前按 main 上 shared ChatRequestSchema 用 `message`;
+ * 若裁定改名(如 `question`)或 P1 收紧 schema,只改这一处。
+ * 返回 null 表示问题为空或超长,不发请求。
+ */
+export function buildChatRequest(
+  question: string,
+  contextNodeIds?: readonly string[],
+): ChatRequest | null {
+  const q = question.trim();
+  if (!q || q.length > CHAT_MESSAGE_MAX) return null;
+  const ctx = contextNodeIds?.slice(0, CHAT_CONTEXT_MAX);
+  return {
+    message: q,
+    ...(ctx?.length ? { contextNodeIds: ctx as ChatRequest['contextNodeIds'] } : {}),
+  };
+}
+
+/** 回答文本里模型输出的 [[Sn:a-b]] 标记:路径/行号一律以 citation 事件为准,原始标记不显示 */
+const MARKER = /\[\[S\d+:\d+-\d+\]\]/g;
+/** 流式中未闭合的标记尾巴(如 "[[S2:1"),先隐藏,等后续 token 补齐 */
+const PARTIAL = /\[(?:\[(?:S\d*(?::\d*(?:-\d*(?:\])?)?)?)?)?$/;
+export function stripCitationMarkers(text: string, streaming: boolean): string {
+  const t = text.replace(MARKER, '');
+  return streaming ? t.replace(PARTIAL, '') : t;
+}
+
 /** 传输层产出:通过 shared ChatEventSchema 的事件,或一个「不合法事件」标记 */
 export type ChatItem = { ok: true; event: ChatEvent } | { ok: false };
 
