@@ -1008,6 +1008,7 @@ describe.skipIf(!hasRedis)('路由(真实 Redis + 内存 Store)', () => {
       srcPath: f.path,
     }));
     await store.saveGraph(repo.id, SHA, { files, symbols: [], edges });
+    await store.updateRepo(repo.id, { langMain: 'typescript' });
     await store.updateTask(jobId, { stage: 'graph_ready', progress: 50 });
     for (const k of await redis.keys(redisKeys.graphPattern(repo.id, SHA))) await redis.del(k);
     const g = GraphDataSchema.parse(
