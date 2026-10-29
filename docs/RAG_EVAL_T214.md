@@ -103,7 +103,7 @@ S1 已作为待修 bug 并入调参集记录(见 RAG_TUNING_QUESTIONS.md 末节)
 | 英3 | (英文不改写) | 5 / 5 / 11 / — / 9 | 同左 | C | 向量第 5,BM25 被各 adapter 的 `serveStatic` 占满前列,融合后掉到第 9 |
 | H2 | `Context object purpose class Context context.ts usage` | 147 / 49 / 45 / 27 / 21 | 4 / 2 / 31 / 1 / 2 | C | `Context` 类块在 BM25、精确两路的前 50 里,但大类整块向量分数低;文件本身 RRF 第 2(命中的是同文件的类型块) |
 | H4 | `middleware pass data between middleware context next ctx` | 27 / 878 / 23 / — / 16 | 27 / 2 / 6 / — / 16 | C | 目标块在向量和 BM25 前 50,融合后第 16。改写让文件级向量名次从 2 变 27,但目标块从 878 变 27,整体是改写有帮助,不归 A |
-| H7 | `CSRF protection csrf token verifyCsrfToken middleware anti-CSRF` | 17 / 38 / 20 / — / 12 | 3 / 1 / 2 / 1 | C | 文件 RRF 第 1(`CSRFOptions`),`csrf` 函数块在各路前 20,融合后第 12 |
+| H7 | `CSRF protection csrf token verifyCsrfToken middleware anti-CSRF` | 17 / 38 / 20 / — / 12 | 3 / 1 / 2 / — / 1 | C | 文件 RRF 第 1(`CSRFOptions`),`csrf` 函数块在各路前 20,融合后第 12 |
 | H8 | `reusable typed middleware write custom middleware type generics middleware.ts` | 无 / 无 / 无 / — / 无 | 945 / 311 / 580 / — / — | B | **没有任何 `createMiddleware` 切块**:analyzer 对 `src/helper/factory/index.ts` 只切出 `InitApp`(18 行)、`CreateHandlersInterface`(20–25 行)两块,368 行的 `export const createMiddleware` 和 `Factory` 类没进切块;文件级也不在任何路前 50 |
 | S1 | `route matching router match routes file router.ts` | 5 / 2 / 12 / 23 / 6 | 同左 | C | 见上节 S1 诊断:进了候选,被 `src/router.ts` 和 `helper/route` 压下去 |
 

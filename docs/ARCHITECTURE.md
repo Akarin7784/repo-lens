@@ -365,6 +365,8 @@ CREATE TABLE llm_usage (
 ```
 > `code_chunk` 由迁移 0003 落地(T-214 PR-2,可重复执行,CI smoke 连跑两遍断言列与索引)。与最初草案的偏差:**不建 FULLTEXT**(MariaDB 没有 ngram 解析器,默认解析器对中文和 camelCase 无效),关键词打分改为按 (repo, commit) 读出全部切块后在进程内做 BM25(路径/符号权重 ×3)+ 符号精确匹配;索引由 `idx_repo_path` 改为 `idx_repo_commit`(读写都按 repo+commit)。worker 在向量化之前写入,**向量化被跳过或失败时仍写**,所以关键词检索不依赖 embedding;敏感/超大/二进制文件在 chunk 层同样被排除(与向量库同一套 `exclusionRule`)。
 
+> **现状(T-214 PR-2)**:检索库(hybridSearch、rewriteQuery)与评测脚本已完成,问答链路未接入;API 目前不发 done.retrieval,仅 shared schema 有该字段。
+
 Qdrant collection `code_chunks`:命名向量 `dense`,384 维(multilingual-e5-small),cosine;point id = `code_chunk.qdrant_point_id`;payload `{repo_id, commit_sha, path, symbol, start_line, end_line, content_hash}`,**`repo_id` 作为 filter 字段**并建 payload index(`path` 同建)。重新分析时按 `repo_id`+`commit_sha` 过滤删除旧 points。规划中、尚未写入的 payload 字段:`node_id`、`kind`、`lang`、`chunk_type`(code|summary)与稀疏向量 `bm25`(T-214 第二部分定,只增不改;BACKEND_AI_DESIGN §5 同步此清单)。
 
 **向量化状态与降级(T-214)**:worker 把结果写入 `analysis_task.stats.embeddingStatus`(JSON 字段,无迁移),`GET /api/repos/:id` 以 `embeddingStatus` 透出(与 `commitSha` 同源,取最近已完成任务;旧任务为 `null`):
@@ -519,7 +521,7 @@ volumes: { repos: {}, mysql: {}, qdrant: {} }
 |---|---|---|---|
 | **W1:TS 解析 + 基础图(仅 TypeScript)** | monorepo 脚手架、docker-compose(含 mysql/redis/qdrant);clone + 文件树;`LanguageAnalyzer` 接口 + `TypeScriptAnalyzer`(Tree-sitter 符号/切分 + ts-morph import 路径);依赖图 JSON;React Flow + elkjs(前端布局)渲染文件/目录图;BullMQ 任务 + SSE 进度 | zustand 60s 内、hono 3 分钟内出图;zod 能出图且默认只展示 module 层、单次 ≤300 节点;内部依赖解析准确率人工抽查 ≥ 90%(含 paths 别名);**非 TS 仓库返回 422 `UNSUPPORTED_LANGUAGE`** | ts-morph 慢/内存高/失败 → 降级纯 Tree-sitter;elk 布局慢 → dagre |
 | **W2:聚类 + 摘要 + 可视化打磨** | 模块聚类;LLM 自底向上摘要;模块视图↔文件视图下钻;节点详情面板、搜索、高亮、循环依赖标红;MySQL 持久化与缓存复用 | zustand/hono/zod 模块划分合理(人工评审);zod 大图默认折叠、下钻流畅;重复分析同 commit < 1s 返回 | 聚类结果难看 → 回退纯目录分组;LLM 慢 → 摘要异步补齐,图先出 |
-| **W3:RAG + Agent 问答** | 按符号分块 + embedding 写 Qdrant;BM25(MySQL FULLTEXT)+ Qdrant 向量 RRF 混合检索;Agent 5 工具;SSE 流式回答;引用校验(仅下发通过项,`done.droppedCitations` 计数)与图节点高亮联动 | 自建 20 题评测集,引用文件命中率 ≥ 80%;首 token < 3s;下发的引用点击 100% 能定位节点;droppedCitations 占比 ≤ 20% | 工具调用不稳 → 降级为单轮 RAG(检索后直接回答);embedding 成本 → 本地 bge-m3 |
+| **W3:RAG + Agent 问答** | 按符号分块 + embedding 写 Qdrant;进程内 BM25(按 repo+commit 读切块,不用 MySQL FULLTEXT)+ Qdrant 向量 RRF 混合检索;Agent 5 工具;SSE 流式回答;引用校验(仅下发通过项,`done.droppedCitations` 计数)与图节点高亮联动 | 自建 20 题评测集,引用文件命中率 ≥ 80%;首 token < 3s;下发的引用点击 100% 能定位节点;droppedCitations 占比 ≤ 20% | 工具调用不稳 → 降级为单轮 RAG(检索后直接回答);embedding 成本 → 本地 bge-m3 |
 | **W4:MCP + 部署 + Demo** | MCP server(5 tools);线上部署;限流/预算熔断/安全加固;README(GIF、架构图)、预缓存 zustand/hono/zod(trpc 备选)、**录制 hono 兜底视频**;**加分:JS 支持**(复用 TS analyzer 开 `allowJs`) | Cursor/Claude Desktop 能调用 `ask_repo`;公网 URL 可用;3 分钟 demo 彩排 3 次无故障 | 时间不足 → 砍 MCP HTTP 只保留 stdio,砍多语言;线上不稳 → 打开预解析缓存 → 播放 hono 兜底视频 |
 
 后续(第 5 周+):Python/Go analyzer(Tree-sitter)、影响面分析、私有仓库 OAuth、增量分析。
