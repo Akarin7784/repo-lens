@@ -525,15 +525,21 @@ describe('网关 → DeepSeekClient.stream → llm_usage', () => {
     return boom;
   }
 
-  it('成功路径 insert 抛错:抛 LlmError(LLM_UNAVAILABLE,cause 为原错误),finally 补一行 ok=0', async () => {
+  it('成功路径 insert 抛错:抛 LlmError(LLM_UNAVAILABLE,cause 为原错误),finally 补一行 ok=0 带真实 cost', async () => {
     handler = script([delta('ok'), usageChunk(), DONE]);
-    const { g, rows, usage } = gw();
+    const { g, rows, usage, warns } = gw();
     const boom = failInsert(usage, (r) => r.ok);
     const err = (await failure(drain(g.stream(greq)))) as LlmError;
     expect(err).toBeInstanceOf(LlmError);
     expect(err.code).toBe('LLM_UNAVAILABLE');
     expect(err.cause).toBe(boom);
-    expect(rows()).toEqual([ok0]);
+    // addSpend 已成功:补行带真实 token 与 cost,warn 也带 cost
+    const cost = costMicroUsd(DEFAULT_PRICES['deepseek-flash']!, 1000, 200, 600);
+    expect(rows()).toEqual([
+      expect.objectContaining({ ok: false, tokensIn: 1000, tokensOut: 200, costMicroUsd: cost }),
+    ]);
+    expect(warns.map((w) => w.msg)).toEqual(['llm usage insert failed after spend counted']);
+    expect(warns[0]!.obj).toMatchObject({ costMicroUsd: cost });
   });
 
   it('catch 里 failRow 抛错:只打 warn,原错误(cause 为流错误)不被掩盖', async () => {
