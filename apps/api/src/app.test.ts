@@ -196,6 +196,43 @@ describe.skipIf(!hasRedis)('路由(真实 Redis + 内存 Store)', () => {
     await app.close();
   });
 
+  it('限流只计真正入队:复用已有任务不计数,新任务与 failed 重试计数,超限 429', async () => {
+    const app = make();
+    const ip = nextIp();
+    await redis.del(redisKeys.rateLimitIp(ip));
+    const k = redisKeys.rateLimitIp(ip);
+    // 新任务:计数 1
+    const first = await post(app, 'https://github.com/a/reuse', ip);
+    expect(first.statusCode).toBe(202);
+    expect(await redis.get(k)).toBe('1');
+    // 已分析完成的同仓库同 commit:重复提交 10 次都复用,不计数
+    await store.updateTask(first.json().jobId, { stage: 'done', progress: 100 });
+    for (let i = 0; i < 10; i++) {
+      const r = await post(app, 'https://github.com/a/reuse', ip);
+      expect(r.statusCode).toBe(200);
+      expect(r.json().jobId).toBe(first.json().jobId);
+    }
+    expect(await redis.get(k)).toBe('1');
+    // 排队中的任务也复用、不计数
+    const q = await post(app, 'https://github.com/a/queued', ip);
+    expect(q.statusCode).toBe(202);
+    expect((await post(app, 'https://github.com/a/queued', ip)).statusCode).toBe(200);
+    expect(await redis.get(k)).toBe('2');
+    // failed 重试会重新入队:计数
+    await store.updateTask(q.json().jobId, { stage: 'failed' });
+    expect((await post(app, 'https://github.com/a/queued', ip)).statusCode).toBe(202);
+    expect(await redis.get(k)).toBe('3');
+    // 再来两个新任务到 5,第 6 个新任务 429,且不建任务、不入队
+    for (const n of ['n4', 'n5'])
+      expect((await post(app, `https://github.com/a/${n}`, ip)).statusCode).toBe(202);
+    const over = await post(app, 'https://github.com/a/n6', ip);
+    expect(over.statusCode).toBe(429);
+    expect(over.json().error.code).toBe('RATE_LIMITED');
+    // 超限后,复用已完成任务仍然 200
+    expect((await post(app, 'https://github.com/a/reuse', ip)).statusCode).toBe(200);
+    await app.close();
+  });
+
   async function seedGraph() {
     const repo = await store.upsertRepo({ url: 'https://github.com/o/g', owner: 'o', name: 'g' });
     const jobId = publicJobId(repo.id, SHA);

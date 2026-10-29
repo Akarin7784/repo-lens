@@ -114,7 +114,7 @@ Query 示例（TS，字段名需要对照语法的 `node-types.json` 核实，**
   - **`x-graph-truncated` 的含义**:**只表示 P 的直接子节点(不带 parentId 时为根层 module)因 300 上限被截断**。边界节点因名额不足被丢弃、`x:` 外部包只取前 50 个,都**不**算截断,此时仍为 `false`。前端据此提示"子节点未显示完整",不能用它判断边界节点是否完整。
   - 例:从 `m:packages/core` 展开,`packages/core/src/index.ts` → `packages/utils/src/a.ts` 的 LCA 为根,外端取 `m:packages/utils`,返回 `d:packages/core/src → m:packages/utils`(`aggregated:true`,`weight`=合并的 import 数);反方向 `utils → core` 另成一条。
 - `includeExternal=true` 时由 `file.external_deps` 派生 `x:<包名>` 节点(按引用文件数取前 50,占用 300 名额)及 `x:<src>->x:<pkg>` 边。
-- `meta.cycles` 为分析器检测到的环投影到本层可见节点后的结果。结果 gzip 后缓存在 `graph:v{N}:{repoId}:{commit}:{parentId|root}[:ext]`,TTL 7d;图重新入库时 SCAN 删除该 commit 当前版本的缓存。`N` = `GRAPH_PROJECTION_VERSION`(packages/db `redis-keys.ts`,当前为 2):**改投影逻辑时递增版本**,旧版本 key 不再命中、随 TTL 过期,不依赖部署后手动清缓存。
+- **`meta.cycles` 语义**:分析器用 Tarjan 求 file 层**强连通分量(SCC)**,每一项是一个 SCC 的**成员集合**(按 id 排序,**无序、不是环路径**,首尾不重复;单文件自引用也算一项)。API 投影时把每个成员映射到本次返回的节点(可见子节点,或子树外成员对应的边界节点),去重后按 id 排序;**至少一个成员位于本层子树内**(只落在边界节点上的环与本层无关,不返回)且映射后不同节点 ≥2 才返回(全部落进同一节点表示环在该节点内部);本层没有环时省略 `cycles` 字段;相同集合只返回一次。前端应把它当作"这些节点互相在同一个环里"高亮,不能按顺序连线。**环边标记的已知限制**:前端把"两端都在同一分量集合内的边"标为环边只是近似。投影后的边是聚合边(例如 `d:dom → f:base.ts` 由 dom 下多个文件聚合而来),其中不一定有 SCC 成员之间的 file 边,所以可能多标。精确标记需要额外数据(见 T-003d PR 的方案),当前 shared 未提供。结果 gzip 后缓存在 `graph:v{N}:{repoId}:{commit}:{parentId|root}[:ext]`,TTL 7d;图重新入库时 SCAN 删除该 commit 当前版本的缓存。`N` = `GRAPH_PROJECTION_VERSION`(packages/db `redis-keys.ts`,当前为 3):**改投影逻辑时递增版本**,旧版本 key 不再命中、随 TTL 过期,不依赖部署后手动清缓存。
 
 **增量解析**
 - 文件级增量：`file.content_hash = sha256(内容)`。重新分析时先 `git diff --name-only old..new`，只重新解析变化的文件；相关的边按 `src_file_id` 删掉再重建。
@@ -222,7 +222,7 @@ CREATE TABLE llm_usage (
 | 图缓存 | `graph:v{N}:{repoId}:{commitSha}:{parentId|root}`(N=投影版本,改投影逻辑时递增) | String(JSON, gzip)，TTL 7d |
 | LLM 响应缓存 | `llm:{sha256(model+prompt)}` | String，TTL 30d |
 | Embedding 缓存 | `emb:{model}:{contentHash}` | String(base64 float32)，TTL 30d |
-| 限流 | `rl:ip:{ip}:{yyyyMMddHH}` | INCR，TTL 1h |
+| 限流 | `rl:ip:{ip}:{yyyyMMddHH}` | INCR，TTL 1h;**只计真正入队的提交**(新任务或 failed 重试);同仓库同 commit 已有 done/queued/running 任务时直接复用,不计数(T-003d)。超限返回 429 `RATE_LIMITED`,不建任务 |
 | 预算 | `budget:day:{yyyyMMdd}`、`budget:repo:{repoId}` | INCRBY(微美元) |
 | 熔断状态 | `cb:llm:{provider}` | Hash {state, failCount, openedAt} |
 
@@ -260,7 +260,8 @@ sequenceDiagram
   participant W as Worker
   participant R as Redis Stream
   C->>A: POST /api/repos {url}
-  A->>A: 校验URL / 限流 / ls-remote 取 commit
+  A->>A: 校验URL / ls-remote 取 commit / 查已有任务
+  A->>A: 仅当需要入队(新任务或 failed 重试)时限流计数
   A->>Q: add('analyze', {repoId, commit}, {jobId: repoId+':'+commit})
   A-->>C: {repoId, jobId}
   C->>A: GET /api/jobs/:id/events (SSE)
