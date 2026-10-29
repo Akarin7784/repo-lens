@@ -16,18 +16,30 @@ export type GitExec = (
  */
 export class GitUnavailableError extends Error {
   constructor(
-    readonly reason: 'GIT_MISSING' | 'GIT_TIMEOUT',
+    readonly reason: 'GIT_MISSING' | 'GIT_TIMEOUT' | 'GIT_OUTPUT_TOO_LARGE',
     readonly errno?: string,
   ) {
-    super(reason === 'GIT_MISSING' ? 'git 未安装或不在 PATH 中' : 'git ls-remote 超时');
+    super(
+      reason === 'GIT_MISSING'
+        ? 'git 未安装或不在 PATH 中'
+        : reason === 'GIT_TIMEOUT'
+          ? 'git ls-remote 超时'
+          : 'git ls-remote 输出超过上限',
+    );
     this.name = 'GitUnavailableError';
   }
 }
 
-/** child_process 错误分类:ENOENT → GIT_MISSING;超时(被 timeout 杀掉 / ETIMEDOUT)→ GIT_TIMEOUT;其他(退出码非 0 等)→ null */
+/** child_process 错误分类:ENOENT → GIT_MISSING;超 maxBuffer → GIT_OUTPUT_TOO_LARGE;超时(被 timeout 杀掉 / ETIMEDOUT)→ GIT_TIMEOUT;其他(退出码非 0 等)→ null */
 export function classifyGitError(err: unknown): GitUnavailableError | null {
   const e = (err ?? {}) as { code?: unknown; killed?: boolean; signal?: string | null };
   if (e.code === 'ENOENT') return new GitUnavailableError('GIT_MISSING', 'ENOENT');
+  // 超 maxBuffer 时 Node 也会以 killed+SIGTERM 杀掉子进程,必须先于超时判断,否则被误报为 GIT_TIMEOUT
+  if (
+    e.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' ||
+    (typeof e.code === 'string' && /MAXBUFFER/i.test(e.code))
+  )
+    return new GitUnavailableError('GIT_OUTPUT_TOO_LARGE', e.code);
   if (e.code === 'ETIMEDOUT' || (e.killed === true && e.signal))
     return new GitUnavailableError('GIT_TIMEOUT', typeof e.code === 'string' ? e.code : e.signal!);
   return null;

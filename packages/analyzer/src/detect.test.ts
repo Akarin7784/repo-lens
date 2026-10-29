@@ -63,6 +63,31 @@ describe('TS/JS 仓库识别(detect.ts)', () => {
     expect((err as AnalyzerError).message).toBe('目前仅支持 TypeScript/JavaScript 仓库');
   });
 
+  it('Vue 应用:有 tsconfig、50 个 .vue、8 个 .ts → 支持(.vue 不计入其他语言)', async () => {
+    const r = repo({
+      'tsconfig.json': '{}',
+      ...many('src/components', '.vue', 50, '<template><div/></template>\n'),
+      ...many('src/lib', '.ts', 8, 'export const x = 1;\n'),
+    });
+    expect(surveyRepo(r.root).otherSourceFiles).toBe(0);
+    expect(isTsJsRepo(r.root, r.files)).toBe(true);
+    const a = await createRegistry(new Set(r.files)).detect(r);
+    expect(a.id).toBe('typescript');
+    a.dispose();
+  });
+
+  it('无 tsconfig 的 Vue/Svelte JS 应用:30 个 .vue + 5 个 .svelte + 4 个 .js → 支持(share=4/4=100% ≥ 50%)', () => {
+    // 旧规则(根 tsconfig.json + TS ≥ 50%)对无 tsconfig 仓库一律拒绝,这里是放宽而非倒退
+    const r = repo({
+      'package.json': '{}',
+      ...many('src/components', '.vue', 30),
+      ...many('src/widgets', '.svelte', 5),
+      ...many('src', '.js', 4),
+    });
+    expect(surveyRepo(r.root).otherSourceFiles).toBe(0);
+    expect(isTsJsRepo(r.root, r.files)).toBe(true);
+  });
+
   it('误判防护:Java 仓库只有文档站子目录带 tsconfig,TS 占比 < 20% → 不支持', () => {
     const r = repo({
       'pom.xml': '<project/>',

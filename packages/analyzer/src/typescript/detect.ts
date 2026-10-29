@@ -53,8 +53,7 @@ export const OTHER_SOURCE_EXTS: ReadonlySet<string> = new Set([
   '.r',
   '.jl',
   '.zig',
-  '.vue',
-  '.svelte',
+  // 注意:.vue/.svelte 不计入 —— 这类单文件组件通常就是 TS/JS 前端项目的一部分,算作「其他语言」会把 Vue/Svelte 应用误拒
 ]);
 
 export interface RepoSurvey {

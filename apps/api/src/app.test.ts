@@ -90,6 +90,32 @@ describe('githost', () => {
     expect(err).toBeInstanceOf(GitUnavailableError);
     expect((err as GitUnavailableError).reason).toBe('GIT_TIMEOUT');
   });
+  it('超 maxBuffer 被杀(killed+SIGTERM)→ GIT_OUTPUT_TOO_LARGE,不是 GIT_TIMEOUT', async () => {
+    const host = createGitHost({
+      exec: failWith({
+        code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER',
+        killed: true,
+        signal: 'SIGTERM',
+      }),
+    });
+    const err = await host.lsRemote('https://github.com/a/b').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(GitUnavailableError);
+    expect((err as GitUnavailableError).reason).toBe('GIT_OUTPUT_TOO_LARGE');
+  });
+  it('真实超 maxBuffer:spawn 一个大量输出的进程 → GIT_OUTPUT_TOO_LARGE', async () => {
+    const { execFile } = await import('node:child_process');
+    const { promisify } = await import('node:util');
+    const real = promisify(execFile);
+    const host = createGitHost({
+      exec: (_f, _a, o) =>
+        real(process.execPath, ['-e', 'process.stdout.write("x".repeat(1e6))'], {
+          ...o,
+          maxBuffer: 1024,
+        }),
+    });
+    const err = await host.lsRemote('https://github.com/a/b').catch((e: unknown) => e);
+    expect((err as GitUnavailableError).reason).toBe('GIT_OUTPUT_TOO_LARGE');
+  });
   it('真实超时:spawn 一个睡眠进程被 timeout 杀掉 → GIT_TIMEOUT', async () => {
     const { execFile } = await import('node:child_process');
     const { promisify } = await import('node:util');
@@ -312,7 +338,7 @@ describe.skipIf(!hasRedis)('路由(真实 Redis + 内存 Store)', () => {
     await app.close();
   });
 
-  it.each([['GIT_MISSING' as const], ['GIT_TIMEOUT' as const]])(
+  it.each([['GIT_MISSING' as const], ['GIT_TIMEOUT' as const], ['GIT_OUTPUT_TOO_LARGE' as const]])(
     'ls-remote 抛 GitUnavailableError(%s):503 GIT_UNAVAILABLE + error 日志,不是 404',
     async (reason) => {
       const lines: string[] = [];
@@ -950,17 +976,25 @@ describe.skipIf(!hasRedis)('路由(真实 Redis + 内存 Store)', () => {
     await app.close();
   });
 
-  it('meta.language 读 repos.lang_main;缺失/未知时 500 INTERNAL 并记日志,不静默写死 typescript', async () => {
+  it('meta.language 读 repos.lang_main;NULL/空串 warn 并回退 typescript,未知值 500 INTERNAL', async () => {
     const app = make();
     const { repoId } = await seedGraph();
     const ok = GraphDataSchema.parse((await app.inject(`/api/repos/${repoId}/graph`)).json());
     expect(ok.meta.language).toBe('typescript');
-    for (const langMain of [null, 'java']) {
-      await store.updateRepo(repoId, { langMain });
+    const clear = async () => {
       for (const k of await redis.keys(redisKeys.graphPattern(repoId, SHA))) await redis.del(k);
+    };
+    for (const langMain of [null, '']) {
+      await store.updateRepo(repoId, { langMain });
+      await clear();
       const r = await app.inject(`/api/repos/${repoId}/graph`);
-      expect([r.statusCode, r.json().error.code], String(langMain)).toEqual([500, 'INTERNAL']);
+      expect(r.statusCode, JSON.stringify(langMain)).toBe(200);
+      expect(GraphDataSchema.parse(r.json()).meta.language).toBe('typescript');
     }
+    await store.updateRepo(repoId, { langMain: 'java' });
+    await clear();
+    const bad = await app.inject(`/api/repos/${repoId}/graph`);
+    expect([bad.statusCode, bad.json().error.code]).toEqual([500, 'INTERNAL']);
     await app.close();
   });
 

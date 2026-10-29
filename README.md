@@ -2,7 +2,7 @@
 
 输入一个 GitHub 仓库地址,生成可交互的架构图,并用自然语言提问,答案附带经过校验的文件与行号引用,同时在图上高亮对应位置。
 
-> 状态:开发中(第 1 周:TypeScript 仓库的解析与基础图)。
+> 状态:开发中。目前支持 TypeScript/JavaScript 仓库的解析与交互式依赖图,问答功能仍在完善中。
 
 - 架构与接口约定:[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - 后端与 AI 设计:[docs/BACKEND_AI_DESIGN.md](docs/BACKEND_AI_DESIGN.md)

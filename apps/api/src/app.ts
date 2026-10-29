@@ -281,8 +281,16 @@ export function buildApp(deps?: AppDeps): FastifyInstance {
     return res;
   });
 
-  /** 图的语言来自 repos.lang_main(worker 按 detect() 选中的分析器写入);空或未知值属于数据不一致,按 500 处理 */
+  /**
+   * 图的语言来自 repos.lang_main(worker 按 detect() 选中的分析器写入)。
+   * NULL/空串(旧版本 worker 崩溃留下的历史数据)记 warn 并回退 'typescript'(目前枚举唯一值);
+   * 有值但不在枚举内属于数据不一致,按 500 处理。
+   */
   function graphLanguageOf(repo: { id: number; langMain: string | null }): GraphLanguage {
+    if (repo.langMain == null || repo.langMain === '') {
+      app.log.warn({ repoId: repo.id }, 'repos.lang_main 为空,回退 typescript');
+      return 'typescript';
+    }
     const l = GraphLanguageSchema.safeParse(repo.langMain);
     if (l.success) return l.data;
     app.log.error(

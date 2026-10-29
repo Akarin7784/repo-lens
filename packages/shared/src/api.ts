@@ -33,7 +33,7 @@ export const API_ERROR_CODES = [
   'REPO_NOT_READY',
   'RATE_LIMITED',
   'INTERNAL',
-  /** HTTP 503:服务端 git 不可用(未安装)或 ls-remote 超时;details.gitReason 为 GIT_MISSING / GIT_TIMEOUT(不占用 reason 枚举) */
+  /** HTTP 503:服务端 git 不可用(未安装)或 ls-remote 超时;details.gitReason 为 GIT_MISSING / GIT_TIMEOUT / GIT_OUTPUT_TOO_LARGE(不占用 reason 枚举) */
   'GIT_UNAVAILABLE',
 ] as const;
 /** BAD_REQUEST(HTTP 400):查询参数格式非法(如 parentId 不合法、start>end);格式合法但资源不存在用 404。*/
