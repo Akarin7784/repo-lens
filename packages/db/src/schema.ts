@@ -175,6 +175,25 @@ export const summary = mysqlTable(
   ],
 );
 
+/** T-214:切块元数据(关键词检索、引用校验的数据源;向量在 Qdrant)。迁移 0003 */
+export const codeChunk = mysqlTable(
+  'code_chunk',
+  {
+    id: id(),
+    repoId: ref('repo_id').notNull(),
+    commitSha: char('commit_sha', { length: 40 }).notNull(),
+    path: varchar('path', { length: 1024 }).notNull(),
+    symbol: varchar('symbol', { length: 255 }),
+    startLine: int('start_line').notNull(),
+    endLine: int('end_line').notNull(),
+    content: mediumtext('content').notNull(),
+    contentHash: char('content_hash', { length: 64 }).notNull(),
+    qdrantPointId: char('qdrant_point_id', { length: 36 }).notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [index('idx_repo_commit').on(t.repoId, t.commitSha)],
+);
+
 export const chatSession = mysqlTable(
   'chat_session',
   {

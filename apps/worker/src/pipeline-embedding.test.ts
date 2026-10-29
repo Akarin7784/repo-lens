@@ -2,7 +2,13 @@ import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { MemoryStore, publicJobId } from '@repolens/db';
-import { FakeEmbedder, MemoryVectorStore, type VectorStore } from '@repolens/rag';
+import {
+  FakeEmbedder,
+  MemoryVectorStore,
+  embedLockKey,
+  type LockKv,
+  type VectorStore,
+} from '@repolens/rag';
 import { MemoryEventSink } from './events.js';
 import { runPipeline } from './pipeline/run.js';
 import { makeGitRepo, SAMPLE_REPO, testConfig } from './test-utils.js';
@@ -22,6 +28,38 @@ const errs = (ev: MemoryEventSink) =>
   ev.events
     .filter((e) => e.event === 'stage_error')
     .map((e) => e.data as { stage: string; message: string });
+
+/**
+ * 进程内 LockKv:按脚本内容模拟 lock.ts 的几个 Lua 脚本(不连 Redis),只用于 pipeline 层测试。
+ * renewOk=false 模拟续期/持锁校验失败(丢锁)。
+ */
+class MemLockKv implements LockKv {
+  m = new Map<string, string>();
+  constructor(public renewOk = true) {}
+  async set(k: string, v: string) {
+    if (this.m.has(k)) return null;
+    this.m.set(k, v);
+    return 'OK' as const;
+  }
+  async get(k: string) {
+    return this.m.get(k) ?? null;
+  }
+  async del(k: string) {
+    return this.m.delete(k) ? 1 : 0;
+  }
+  async eval(script: string, n: number, ...args: string[]) {
+    const keys = args.slice(0, n);
+    const argv = args.slice(n);
+    const mine = this.m.get(keys[0]!) === argv[0];
+    if (script.includes('pexpire')) return mine && this.renewOk ? 1 : 0;
+    if (script.includes("'del'")) return mine ? (this.m.delete(keys[0]!), 1) : 0;
+    if (mine && this.renewOk) {
+      this.m.set(keys[1]!, argv[1]!);
+      return 1;
+    }
+    return 0;
+  }
+}
 
 describe('embedding 阶段(T-214)', () => {
   it('写入向量库(按批)、超大文件不进;同 commit 重跑复用不再 embedding', async () => {
@@ -129,5 +167,106 @@ describe('embedding 阶段(T-214)', () => {
     expect(JSON.stringify(events.events)).toContain('未配置向量库,跳过向量化');
     expect((await store.getTask(data.jobId))?.stats.embeddingStatus).toBe('skipped');
     expect((await store.getTask(data.jobId))?.stage).toBe('done');
+  });
+
+  it('未配置向量库时仍写 code_chunk(关键词检索数据源),超大文件不进', async () => {
+    const { store, data } = await setup();
+    await runPipeline(data, {
+      store,
+      events: new MemoryEventSink(),
+      config: testConfig(),
+      allowFileProtocol: true,
+    });
+    const rows = await store.listCodeChunks(data.repoId, data.commitSha);
+    expect(rows.map((r) => r.path)).toContain('src/index.ts');
+    expect(rows.map((r) => r.path)).not.toContain('src/big.ts');
+    expect((await store.getTask(data.jobId))?.stats.codeChunks).toBe(rows.length);
+  });
+
+  it('锁等待超时:embeddingStatus=failed,只有一个 stage_error,任务仍 done', async () => {
+    const { store, data } = await setup();
+    const kv = new MemLockKv();
+    kv.m.set(embedLockKey(data.repoId, data.commitSha), 'other');
+    const events = new MemoryEventSink();
+    const config = testConfig({ embedding: { ...testConfig().embedding, lockMaxWaitSec: 1 } });
+    await runPipeline(data, {
+      store,
+      events,
+      config,
+      embedder: new FakeEmbedder(),
+      vectorStore: new MemoryVectorStore(),
+      lockKv: kv,
+      lockPollMs: 20,
+      allowFileProtocol: true,
+    });
+    const t = await store.getTask(data.jobId);
+    expect(t?.stage).toBe('done');
+    expect(t?.stats.embeddingStatus).toBe('failed');
+    expect(errs(events)).toEqual([
+      { jobId: data.jobId, stage: 'embedding', message: expect.stringContaining('等待同 commit') },
+    ]);
+  });
+
+  it('丢锁:embeddingStatus=failed,只有一个 stage_error,不写完成标记', async () => {
+    const { store, data } = await setup();
+    const kv = new MemLockKv(false);
+    const events = new MemoryEventSink();
+    const vectorStore = new MemoryVectorStore();
+    await runPipeline(data, {
+      store,
+      events,
+      config: testConfig(),
+      embedder: new FakeEmbedder(),
+      vectorStore,
+      lockKv: kv,
+      lockPollMs: 20,
+      allowFileProtocol: true,
+    });
+    const t = await store.getTask(data.jobId);
+    expect(t?.stage).toBe('done');
+    expect(t?.stats.embeddingStatus).toBe('failed');
+    expect(errs(events)).toEqual([
+      { jobId: data.jobId, stage: 'embedding', message: expect.stringContaining('已丢失') },
+    ]);
+    expect(vectorStore.points.size).toBe(0);
+    expect(kv.m.has(`${embedLockKey(data.repoId, data.commitSha)}:done`)).toBe(false);
+  });
+
+  it('等待者复用前核对点数:完成标记 digest 一致但点数不符 → failed', async () => {
+    const { store, data } = await setup();
+    const vectorStore = new MemoryVectorStore();
+    const deps = {
+      store,
+      config: testConfig(),
+      embedder: new FakeEmbedder(),
+      vectorStore,
+      allowFileProtocol: true,
+    };
+    await runPipeline(data, { ...deps, events: new MemoryEventSink() });
+    const digest = (await store.getTask(data.jobId))?.stats.embeddingDigest as string;
+    // 另一任务"持锁"并写好与本次相同 digest 的完成标记后释放,但向量库被清掉一个点
+    const kv = new MemLockKv();
+    const key = embedLockKey(data.repoId, data.commitSha);
+    kv.m.set(key, 'other');
+    kv.m.set(`${key}:done`, digest);
+    vectorStore.points.delete([...vectorStore.points.keys()][0]!);
+    setTimeout(() => kv.m.delete(key), 50);
+    await store.createTask({
+      jobId: `${data.jobId}-w`,
+      repoId: data.repoId,
+      commitSha: data.commitSha,
+    });
+    const events = new MemoryEventSink();
+    await runPipeline(
+      { ...data, jobId: `${data.jobId}-w` },
+      { ...deps, events, lockKv: kv, lockPollMs: 20 },
+    );
+    expect(errs(events)).toEqual([
+      {
+        jobId: `${data.jobId}-w`,
+        stage: 'embedding',
+        message: expect.stringContaining('复用校验失败'),
+      },
+    ]);
   });
 });

@@ -38,6 +38,7 @@ import {
   chunksDigest,
   embedLockKey,
   indexChunks,
+  pointId,
   withEmbedLock,
   type ChunkSourceFile,
   type LockKv,
@@ -198,10 +199,11 @@ export async function runPipeline(
     });
   };
 
-  // 本任务行在本次运行覆盖 stats 之前记录的内容 digest(MySQL 上 (repo, commit) 唯一,重跑即同一行)
-  const priorDigest = (await store.getTask(jobId))?.stats.embeddingDigest ?? null;
-
+  let priorDigest: unknown = null;
   try {
+    // 本任务行在本次运行覆盖 stats 之前记录的内容 digest(MySQL 上 (repo, commit) 唯一,重跑即同一行);
+    // 放在 try 内:读库失败与其它阶段一样走任务失败处理
+    priorDigest = (await store.getTask(jobId))?.stats.embeddingDigest ?? null;
     await store.updateTask(jobId, {
       attempts: attempt.attemptsMade + 1,
       startedAt: new Date(),
@@ -334,6 +336,39 @@ export async function runPipeline(
     stage = 'embedding';
     // embeddingStatus 写进 task.stats,GET /api/repos/:id 透出;检索侧据此决定是否降级(见 ARCHITECTURE §4)
     let embeddingStatus: EmbeddingStatus = 'skipped';
+    // T-214:切块元数据先写 code_chunk(关键词检索数据源),与是否配置向量库无关;失败只发 stage_error
+    let prepared: PreparedChunks | null = null;
+    try {
+      prepared = await prepareChunks(data, deps, root);
+      await store.replaceCodeChunks(
+        data.repoId,
+        data.commitSha,
+        prepared.chunks.map((c) => ({
+          path: c.path,
+          symbol: c.symbol,
+          startLine: c.startLine,
+          endLine: c.endLine,
+          content: c.text,
+          contentHash: c.contentHash,
+          qdrantPointId: pointId(data.repoId, data.commitSha, {
+            path: c.path,
+            symbol: c.symbol,
+            start_line: c.startLine,
+            end_line: c.endLine,
+          }),
+        })),
+      );
+      stats = { ...stats, codeChunks: prepared.chunks.length };
+    } catch (err) {
+      await events.emit({
+        event: 'stage_error',
+        data: {
+          jobId,
+          stage: 'embedding',
+          message: `切块入库失败,关键词检索不可用:${err instanceof Error ? err.message : String(err)}`,
+        },
+      });
+    }
     if (!deps.embedder || !deps.vectorStore) {
       await progress('embedding', 85, '未配置向量库,跳过向量化');
     } else {
@@ -344,7 +379,12 @@ export async function runPipeline(
           deps,
           root,
           progress,
-          typeof stats.embeddingDigest === 'string' ? stats.embeddingDigest : priorDigest,
+          typeof stats.embeddingDigest === 'string'
+            ? stats.embeddingDigest
+            : typeof priorDigest === 'string'
+              ? priorDigest
+              : null,
+          prepared,
         );
         embeddingStatus = r.reused ? 'reused' : 'ready';
         stats = { ...stats, embeddingChunks: r.chunks };
@@ -519,20 +559,18 @@ export async function runSummaries(
   return { text, warn };
 }
 
+export type PreparedChunks = Awaited<ReturnType<typeof buildChunks>>;
+
 /**
- * 切块 + 向量化(T-214 第一部分)。切块来源优先用解析断点 `${root}.analysis.json` 里的
- * 顶层声明块;断点不在(图已入库、跳过解析的重跑)时按图里的文件整文件一块。
- * 所有文件先过共享排除规则(敏感 / 超大 / 二进制),命中的不产出切块、不送 embedding、不进向量库。
+ * 切块:来源优先用解析断点 `${root}.analysis.json` 里的顶层声明块;断点不在(图已入库、跳过解析的重跑)
+ * 时按图里的文件整文件一块。所有文件先过共享排除规则(敏感 / 超大 / 二进制),命中的不产出切块。
  */
-export async function runEmbedding(
+export async function prepareChunks(
   data: AnalyzeJobData,
   deps: PipelineDeps,
   root: string,
-  progress: (s: ProgressStage, pct: number, message?: string) => Promise<void>,
-  /** 本任务(同 repo+commit)上次记录在 stats 里的内容 hash 汇总;与本次一致且点数相符才复用 */
-  prevDigest: string | null = null,
-): Promise<{ chunks: number; reused: boolean; message: string; digest?: string }> {
-  const { store, config } = deps;
+): Promise<PreparedChunks> {
+  const { store } = deps;
   const { repoId, commitSha } = data;
   const ana = readJson<AnalyzeResult>(`${root}.analysis.json`);
   let files: ChunkSourceFile[];
@@ -557,7 +595,27 @@ export async function runEmbedding(
       return null;
     }
   };
-  const { chunks, excluded } = await buildChunks(files, readSource);
+  return buildChunks(files, readSource);
+}
+
+/**
+ * 切块 + 向量化(T-214 第一部分)。切块来源优先用解析断点 `${root}.analysis.json` 里的
+ * 顶层声明块;断点不在(图已入库、跳过解析的重跑)时按图里的文件整文件一块。
+ * 所有文件先过共享排除规则(敏感 / 超大 / 二进制),命中的不产出切块、不送 embedding、不进向量库。
+ */
+export async function runEmbedding(
+  data: AnalyzeJobData,
+  deps: PipelineDeps,
+  root: string,
+  progress: (s: ProgressStage, pct: number, message?: string) => Promise<void>,
+  /** 本任务(同 repo+commit)上次记录在 stats 里的内容 hash 汇总;与本次一致且点数相符才复用 */
+  prevDigest: string | null = null,
+  /** 已切好的块(runPipeline 写 code_chunk 时切过一次,这里复用) */
+  prepared: PreparedChunks | null = null,
+): Promise<{ chunks: number; reused: boolean; message: string; digest?: string }> {
+  const { store, config } = deps;
+  const { repoId, commitSha } = data;
+  const { chunks, excluded } = prepared ?? (await prepareChunks(data, deps, root));
   // 跨任务复用:优先取同 (repo, commit) 最近一个成功任务记录的 digest,其次本任务上次的 digest
   const doneDigest = (await store.latestDoneTaskForCommit(repoId, commitSha))?.stats
     .embeddingDigest;
@@ -589,13 +647,14 @@ export async function runEmbedding(
         onWait: () => progress('embedding', 85, '等待同 commit 的另一任务完成向量化'),
       },
     );
-    r = locked.ran
-      ? locked.result
-      : {
-          chunks: await deps.vectorStore!.count(repoId, commitSha),
-          reused: true,
-          digest,
-        };
+    if (locked.ran) r = locked.result;
+    else {
+      // 等待者复用:完成标记 digest 一致之外,再核对向量库点数与本次切块数一致,不一致按失败处理
+      const have = await deps.vectorStore!.count(repoId, commitSha);
+      if (have !== chunks.length)
+        throw new Error(`复用校验失败:向量库有 ${have} 个点,本次切块 ${chunks.length} 块`);
+      r = { chunks: have, reused: true, digest };
+    }
   } else r = await index();
   const skip = excluded.length ? `,排除 ${excluded.length} 个文件` : '';
   return {

@@ -4,6 +4,7 @@ import { drizzle, type MySql2Database } from 'drizzle-orm/mysql2';
 import mysql from 'mysql2/promise';
 import * as schema from './schema.js';
 import type {
+  CodeChunkRow,
   GraphInput,
   LlmUsageInput,
   LlmUsageRow,
@@ -239,6 +240,31 @@ export class MysqlStore implements Store {
       .orderBy(desc(schema.analysisTask.id))
       .limit(1);
     return r ? toTask(r) : null;
+  }
+  async replaceCodeChunks(repoId: number, commitSha: string, rows: CodeChunkRow[]) {
+    await this.db.transaction(async (tx) => {
+      await tx
+        .delete(schema.codeChunk)
+        .where(and(eq(schema.codeChunk.repoId, repoId), eq(schema.codeChunk.commitSha, commitSha)));
+      for (const part of chunks(rows, 200))
+        await tx.insert(schema.codeChunk).values(part.map((r) => ({ ...r, repoId, commitSha })));
+    });
+  }
+  async listCodeChunks(repoId: number, commitSha: string): Promise<CodeChunkRow[]> {
+    const rows = await this.db
+      .select()
+      .from(schema.codeChunk)
+      .where(and(eq(schema.codeChunk.repoId, repoId), eq(schema.codeChunk.commitSha, commitSha)))
+      .orderBy(schema.codeChunk.id);
+    return rows.map((r) => ({
+      path: r.path,
+      symbol: r.symbol,
+      startLine: r.startLine,
+      endLine: r.endLine,
+      content: r.content,
+      contentHash: r.contentHash,
+      qdrantPointId: r.qdrantPointId,
+    }));
   }
   async latestDoneTaskForCommit(repoId: number, commitSha: string) {
     const [r] = await this.db
