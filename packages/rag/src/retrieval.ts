@@ -62,12 +62,27 @@ export function tokenize(text: string): string[] {
   return out;
 }
 
-/** 轻量词干:去掉常见英文后缀,让 routes/routing/router 对上 */
+/**
+ * 轻量词干:只做复数、-ing/-ed 与词尾 e 归一(route/routes/routing/routed → rout),
+ * 不去 -er,因此 router 与 route 是不同词。≤3 字符的词不动(避免 ts → t)。
+ */
 export function stem(w: string): string {
-  return w.replace(/(ings?|ers?|ed|es|s)$/, '') || w;
+  if (w.length <= 3) return w;
+  let s = w;
+  if (s.endsWith('ies') && s.length > 4) s = s.slice(0, -1);
+  else if (/(?:ch|sh|x|z|ss)es$/.test(s)) s = s.slice(0, -2);
+  else if (s.endsWith('ing') && s.length > 5) s = s.slice(0, -3);
+  else if (s.endsWith('ed') && s.length > 4) s = s.slice(0, -2);
+  else if (s.endsWith('s') && !s.endsWith('ss') && !s.endsWith('us')) s = s.slice(0, -1);
+  if (s.endsWith('e') && s.length > 3) s = s.slice(0, -1);
+  return s;
 }
 
-const terms = (text: string) => tokenize(text).map(stem);
+/** 词干后仍丢弃单字符词 */
+const terms = (text: string) =>
+  tokenize(text)
+    .map(stem)
+    .filter((t) => t.length >= 2);
 
 export interface KeywordIndex {
   docs: { tf: Map<string, number>; len: number }[];
@@ -110,7 +125,13 @@ export function bm25(idx: KeywordIndex, query: string, limit: number): [number, 
   return scored.sort((a, b) => b[1] - a[1]).slice(0, limit);
 }
 
-/** 精确匹配:问题里出现的标识符等于块符号,或像路径/文件名的词出现在块路径里 */
+/** 精确匹配列表上限(同一文件只计一次) */
+export const EXACT_MAX = 10;
+
+/**
+ * 精确匹配:问题里的标识符等于块符号(或 Class.method 的方法名),或像路径/文件名的词出现在块路径里。
+ * 符号命中排在路径命中前;按文件去重(每个文件只保留第一个命中块),最多 min(limit, EXACT_MAX) 条。
+ */
 export function exactMatches(chunks: RetrievableChunk[], query: string, limit: number): number[] {
   const idents = new Set(
     (query.match(/[A-Za-z_$][A-Za-z0-9_$]{2,}/g) ?? []).filter(
@@ -120,13 +141,19 @@ export function exactMatches(chunks: RetrievableChunk[], query: string, limit: n
   const pathish = (
     query.match(/[\w./-]+\.(?:[jt]sx?|mjs|cjs|json|md)\b|[\w-]+\/[\w./-]+/g) ?? []
   ).map((p) => p.toLowerCase());
+  const symHit = (sym: string) => !!sym && (idents.has(sym) || idents.has(sym.split('.').pop()!));
+  const max = Math.min(limit, EXACT_MAX);
+  const seen = new Set<string>();
   const out: number[] = [];
-  chunks.forEach((c, i) => {
-    const sym = c.symbol ?? '';
-    if ((sym && idents.has(sym)) || pathish.some((p) => c.path.toLowerCase().includes(p)))
+  const take = (pred: (c: RetrievableChunk) => boolean) =>
+    chunks.forEach((c, i) => {
+      if (out.length >= max || seen.has(c.path) || !pred(c)) return;
+      seen.add(c.path);
       out.push(i);
-  });
-  return out.slice(0, limit);
+    });
+  take((c) => symHit(c.symbol ?? ''));
+  take((c) => pathish.some((p) => c.path.toLowerCase().includes(p)));
+  return out;
 }
 
 /** RRF:每个列表贡献 1/(k + rank),rank 从 1 起 */

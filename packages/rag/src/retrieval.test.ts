@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { FakeEmbedder } from './embedder.js';
-import { hybridSearch, rrf, tokenize, type RetrievableChunk } from './retrieval.js';
+import {
+  EXACT_MAX,
+  bm25,
+  buildKeywordIndex,
+  exactMatches,
+  hybridSearch,
+  rrf,
+  stem,
+  tokenize,
+  type RetrievableChunk,
+} from './retrieval.js';
 import { MemoryVectorStore, pointId } from './vector-store.js';
 
 const mk = (path: string, symbol: string | null, content: string): RetrievableChunk => ({
@@ -110,5 +120,42 @@ describe('混合检索 hybridSearch(T-214)', () => {
       embeddingStatus: 'ready',
     });
     expect(r).toEqual({ retrieval: 'keyword-only', hits: [], degradedReason: 'no-vector-store' });
+  });
+
+  it('stem:router 不并入 route;复数/-ing/-ed 归一;短词不动', () => {
+    expect(stem('router')).toBe('router');
+    expect(stem('routers')).toBe('router');
+    expect(new Set(['route', 'routes', 'routing', 'routed'].map(stem))).toEqual(new Set(['rout']));
+    expect(stem('cookie')).toBe(stem('cookies'));
+    expect(stem('match')).toBe(stem('matches'));
+    expect(['ts', 'js', 'bus', 'class'].map(stem)).toEqual(['ts', 'js', 'bus', 'class']);
+  });
+
+  it('BM25:查询 route 不命中只含 router 的块;单字符词不入索引', () => {
+    const cs = [
+      mk('src/a/router.ts', 'Router', 'class Router {}'),
+      mk('src/b/route.ts', 'route', 'function route() {}'),
+    ];
+    const idx = buildKeywordIndex(cs);
+    expect(bm25(idx, 'route', 5).map(([i]) => i)).toEqual([1]);
+    expect([...idx.df.keys()].every((t) => t.length >= 2)).toBe(true);
+    expect(bm25(idx, 'x y z', 5)).toEqual([]);
+  });
+
+  it('精确匹配按文件去重并封顶,符号命中排在路径命中前', () => {
+    const cs = [
+      mk('src/store.ts', 'Store.get', 'get() {}'),
+      mk('src/store.ts', 'Store.put', 'put() {}'),
+      mk('src/other/store.ts', 'helper', ''),
+      ...Array.from({ length: 30 }, (_, i) => mk(`src/m${i}.ts`, 'makeStore', '')),
+    ];
+    const r = exactMatches(cs, 'other/store.ts makeStore put', 50);
+    expect(r.length).toBe(EXACT_MAX);
+    expect(new Set(r.map((i) => cs[i]!.path)).size).toBe(r.length);
+    expect(r[0]).toBe(3); // 第一个 makeStore 符号命中
+    expect(r).not.toContain(2); // 路径命中排在符号命中之后,已被上限截掉
+    const few = exactMatches(cs.slice(0, 3), 'other/store.ts Store.put getStore', 50);
+    expect(few).toEqual([2]);
+    expect(exactMatches(cs.slice(0, 3), 'src/store.ts', 50)).toEqual([0]);
   });
 });
