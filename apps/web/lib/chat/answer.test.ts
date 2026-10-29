@@ -28,6 +28,15 @@ describe('answerReducer', () => {
     expect(a.done).toMatchObject({ messageId: 9, retrieval: 'hybrid' });
   });
 
+  it('done.messageId 在 Answer 类型上可选(T-232,shared 放宽前置;只有类型层覆盖,见 PR)', () => {
+    // 类型断言:messageId 改回必填时,这行在 `tsc --noEmit` 下编译失败
+    const d: NonNullable<Answer['done']> = { droppedCitations: 0 };
+    const a: Answer = { ...initialAnswer, status: 'done', done: d };
+    expect(a.done).not.toBeNull();
+    expect(a.done?.messageId).toBeUndefined();
+    expect('messageId' in d).toBe(false);
+  });
+
   it('citation 先于第一个 token 到达(定位类问题缓冲下发):仍是 thinking,角标在开头', () => {
     const a = run([cite(1)]);
     expect(a.status).toBe('thinking');

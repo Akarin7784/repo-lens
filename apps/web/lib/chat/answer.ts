@@ -34,7 +34,8 @@ export type Answer = {
   citations: Citation[];
   toolHint: string | null;
   done: {
-    messageId: number;
+    /** 可选:后端写 assistant 消息失败时 done 不带 messageId(shared 放宽的前置,T-232);缺失时保持 undefined,不兜底 */
+    messageId?: number;
     droppedCitations: number;
     fallback?: 'retrieval';
     retrieval?: 'hybrid' | 'keyword-only';
