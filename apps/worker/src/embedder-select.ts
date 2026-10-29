@@ -78,9 +78,9 @@ export function buildEmbeddingDeps(
   const ds = emb.dashscope;
   return {
     embeddingSkipReason: ds && !ds.apiKey ? 'no-key' : undefined,
-    taskEmbedder:
-      ds && dashscope
-        ? (meter) => new CachedEmbedder(new MeteredEmbedder(dashscope, meter), kv)
-        : undefined,
+    // dashscope 非 null 已保证有 apiKey(见 selectEmbedder);不必再写 ds &&
+    taskEmbedder: dashscope
+      ? (meter) => new CachedEmbedder(new MeteredEmbedder(dashscope, meter), kv)
+      : undefined,
   };
 }

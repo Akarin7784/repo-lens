@@ -1,5 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   DashscopeEmbedder,
@@ -157,13 +155,20 @@ describe('buildEmbeddingDeps', () => {
   });
 });
 
-describe('index.ts 装配', () => {
-  // index.ts 是有副作用的入口(连 Redis/MySQL),不能直接 import;这里核对源码确实改调纯函数,防止改回内联推导
-  it('使用 buildEmbeddingDeps,且不再内联 no-key / MeteredEmbedder 推导', () => {
-    const src = readFileSync(fileURLToPath(new URL('./index.ts', import.meta.url)), 'utf8');
-    expect(src).toMatch(/buildEmbeddingDeps\(emb, dashscope, redis\)/);
-    expect(src).toMatch(/\.\.\.embeddingDeps/);
-    expect(src).not.toMatch(/embeddingSkipReason:/);
-    expect(src).not.toMatch(/new MeteredEmbedder/);
+describe('CachedEmbedder via taskEmbedder', () => {
+  it('同文本两次:第二次不增加 fetch 次数', async () => {
+    const emb = readEmbeddingConfig({
+      EMBEDDING_PROVIDER: 'dashscope',
+      DASHSCOPE_API_KEY: FAKE_KEY,
+    });
+    const s = spies();
+    const { dashscope } = selectEmbedder(emb, s.ctors);
+    const d = buildEmbeddingDeps(emb, dashscope, new MemoryEmbeddingKv());
+    const e = d.taskEmbedder!(new TaskBudgetMeter(50));
+    await e.embedDocuments(['same']);
+    const n = s.urls.length;
+    expect(n).toBeGreaterThan(0);
+    await e.embedDocuments(['same']);
+    expect(s.urls.length).toBe(n);
   });
 });

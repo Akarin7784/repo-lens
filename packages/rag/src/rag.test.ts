@@ -67,6 +67,14 @@ describe('Embedder 前缀与缓存', () => {
     expect(inner.encoded).toBe(4); // 同文本的 query 角色不复用 passage 缓存
     expect([...kv.m.keys()].filter((k) => k.includes(':query:'))).toHaveLength(1);
   });
+  it('同文本两次:第二次不增加编码次数', async () => {
+    const inner = new FakeEmbedder();
+    const e = new CachedEmbedder(inner, new MemoryEmbeddingKv());
+    await e.embedDocuments(['same']);
+    expect(inner.encoded).toBe(1);
+    await e.embedDocuments(['same']);
+    expect(inner.encoded).toBe(1);
+  });
 });
 
 describe('buildChunks 排除规则', () => {
