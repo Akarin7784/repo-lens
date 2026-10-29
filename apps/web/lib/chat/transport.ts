@@ -109,6 +109,8 @@ export function createFetchTransport(
         code: err?.code ?? 'HTTP',
         message: err?.message ? err.message.slice(0, 200) : '',
         retryable: res.status >= 500 || res.status === 429 || err?.code === 'REPO_NOT_READY',
+        ...(err?.reason !== undefined && { reason: err.reason }),
+        ...(err?.retryAfterSec !== undefined && { retryAfterSec: err.retryAfterSec }),
       });
     }
     // 2xx 也要确认是 SSE:JSON/HTML(如网关错误页、被代理改写)不能按流解析

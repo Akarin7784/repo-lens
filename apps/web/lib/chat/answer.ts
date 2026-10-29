@@ -21,6 +21,10 @@ export type ChatErrorInfo = {
   code: string;
   message: string;
   retryable: boolean;
+  /** 契约 v2:开流前 429 的 error.details.reason(宽松读取,可能是前端不认识的值) */
+  reason?: string;
+  /** 契约 v2:429 rate_limit 的 details.retryAfterSec(正整数秒);concurrency 不带 */
+  retryAfterSec?: number;
 };
 
 export type Segment = { kind: 'text'; text: string } | { kind: 'cite'; id: number };
@@ -41,6 +45,8 @@ export type Answer = {
     droppedCitations: number;
     fallback?: 'retrieval';
     retrieval?: 'hybrid' | 'keyword-only';
+    /** 契约 v2:仅上游 finish_reason=length 时为 true;回答照常落库,只提示不给重试 */
+    truncated?: boolean;
   } | null;
   error: ChatErrorInfo | null;
   /** 不符合 shared schema 而被丢弃的事件数(只计数,不展示给用户) */
@@ -111,12 +117,12 @@ export function answerReducer(a: Answer, act: AnswerAction): Answer {
             segments: [...a.segments, { kind: 'cite', id: e.data.id }],
           };
         case 'done': {
-          const { messageId, sessionId, droppedCitations, fallback, retrieval } = e.data;
+          const { messageId, sessionId, droppedCitations, fallback, retrieval, truncated } = e.data;
           return {
             ...a,
             status: 'done',
             toolHint: null,
-            done: { messageId, sessionId, droppedCitations, fallback, retrieval },
+            done: { messageId, sessionId, droppedCitations, fallback, retrieval, truncated },
           };
         }
         case 'error':
