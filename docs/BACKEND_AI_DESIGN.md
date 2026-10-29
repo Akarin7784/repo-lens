@@ -492,6 +492,7 @@ T-210 已实现的部分（不依赖 D1）：
 - `FakeLlm`：确定性输出、不联网、不需要 key；`LLM_PROVIDER` 默认 `fake`。
 
 T-210b（DeepSeek，D1）：
+- 流式(P2,问答终答用):`LlmClient.stream?` 为可选接口,事件为 `text` 增量 + 结尾一次 `usage`;`LlmGateway.stream` 只做预算检查 → 流式调用 → 按服务商返回的 usage 记账(`purpose: chat`),不读写缓存。熔断计数:建连失败、超时、5xx、上游中途断流(含没给 usage 就结束)计失败;用户主动中止(`signal.aborted`)不计。`FakeLlm.stream` 按长度估算 usage;DeepSeek 流式尚未实现(P7),不支持流式的客户端调用 `stream` 得到 `LLM_UNAVAILABLE`。
 - `DeepSeekClient`：OpenAI 兼容，`POST {DEEPSEEK_BASE_URL}/chat/completions`，`Authorization: Bearer`，非流式，`reasoning_effort: "none"`（关闭思考模式），`json=true` 时发 `response_format: {type: "json_object"}`（prompt 里也必须要求 JSON），默认超时 60s。只在 `LLM_PROVIDER=deepseek` 时启用，缺 `DEEPSEEK_API_KEY` 启动报错；key 只在客户端私有字段和请求头里，不进配置对象、错误信息和日志。
 - 模型变量：保留 `LLM_SUMMARY_MODEL`（file/dir/module 摘要）与 `LLM_CHAT_MODEL`（repo 摘要、问答），默认都为 `deepseek-flash`；fake 下忽略。
 - usage：`tokensIn = prompt_tokens`（= `prompt_cache_hit_tokens + prompt_cache_miss_tokens`），`tokensOut = completion_tokens`，`cachedTokensIn = prompt_cache_hit_tokens`。来源 https://api-docs.deepseek.com/api/create-chat-completion 。

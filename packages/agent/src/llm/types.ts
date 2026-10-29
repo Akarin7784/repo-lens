@@ -36,10 +36,21 @@ export interface LlmCallResult {
   usage: LlmUsage;
 }
 
+/**
+ * 流式输出的一个事件:`text` 为正文增量;`usage` 为服务商返回的用量,只在流正常结束时出现一次(最后一个事件)。
+ * 没有 `usage` 就结束的流视为上游中途断流。
+ */
+export type LlmStreamEvent = { type: 'text'; text: string } | { type: 'usage'; usage: LlmUsage };
+
 /** 底层模型客户端:FakeLlm(默认)与 DeepSeekClient(OpenAI 兼容) */
 export interface LlmClient {
   readonly provider: string;
   call(req: LlmCall): Promise<LlmCallResult>;
+  /**
+   * 可选:流式调用。被 `req.signal` 取消时应中止底层请求并抛出(调用方据 signal.aborted 判定为用户中止)。
+   * 未实现的客户端(目前 DeepSeekClient,见 P7)不提供此方法。
+   */
+  stream?(req: LlmCall): AsyncIterable<LlmStreamEvent>;
 }
 
 /** 网关请求:LlmCall + 记账归属 */
@@ -55,6 +66,11 @@ export interface LlmResult extends LlmCallResult {
   /** 本次实际花费;缓存命中为 0 */
   costMicroUsd: number;
   cacheHit: boolean;
+}
+
+/** LlmGateway.stream 的正文增量 */
+export interface LlmStreamChunk {
+  text: string;
 }
 
 export type LlmErrorCode = 'BUDGET_EXCEEDED' | 'LLM_UNAVAILABLE';
