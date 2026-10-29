@@ -3,7 +3,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { GraphDataSchema, GraphEdgeSchema, GraphNodeSchema } from '@repolens/shared';
+import {
+  GraphDataSchema,
+  GraphEdgeSchema,
+  GraphLanguageSchema,
+  GraphNodeSchema,
+} from '@repolens/shared';
 import {
   AnalyzerError,
   analyzeRepo,
@@ -119,7 +124,11 @@ describe('三层图结构', () => {
 
   it('通过 packages/shared 的 zod GraphDataSchema 校验', async () => {
     const r = await run();
-    const data = toGraphData(r.graph, { repoId: 1, commitSha: SHA });
+    const data = toGraphData(r.graph, {
+      repoId: 1,
+      commitSha: SHA,
+      language: GraphLanguageSchema.parse(r.language),
+    });
     const parsed = GraphDataSchema.safeParse(data);
     expect(parsed.success, JSON.stringify(parsed.error?.issues)).toBe(true);
     for (const n of r.graph.nodes) GraphNodeSchema.parse(n);

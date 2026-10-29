@@ -6,6 +6,8 @@ import {
   FileContentSchema,
   FileQuerySchema,
   GraphDataSchema,
+  GraphLanguageSchema,
+  type GraphLanguage,
   GraphQuerySchema,
   NodeIdSchema,
   type CreateRepoResponse,
@@ -26,7 +28,7 @@ import {
 } from '@repolens/db';
 import { HttpError } from './errors.js';
 import { readRepoFile } from './files.js';
-import type { GitHost } from './githost.js';
+import { GitUnavailableError, type GitHost } from './githost.js';
 import { GraphIndex, nodeDetail, projectGraphWithInfo } from './projection.js';
 import { streamJobEvents } from './sse.js';
 import { ipKey } from './ip-key.js';
@@ -133,7 +135,17 @@ export function buildApp(deps?: AppDeps): FastifyInstance {
       throw new HttpError('INVALID_REPO_URL', '仓库路径无效');
     const url = `https://github.com/${owner}/${name}`;
 
-    const commitSha = await git.lsRemote(url, body.data.ref);
+    let commitSha: string | null;
+    try {
+      commitSha = await git.lsRemote(url, body.data.ref);
+    } catch (err) {
+      // git 缺失/超时是服务端问题,不是仓库不存在:503 + 日志(只记原因与 errno,不记 URL)
+      if (err instanceof GitUnavailableError) {
+        req.log.error({ reason: err.reason, errno: err.errno }, 'git ls-remote 不可用');
+        throw new HttpError('GIT_UNAVAILABLE', err.message, { gitReason: err.reason });
+      }
+      throw err;
+    }
     if (!commitSha) throw new HttpError('REPO_NOT_FOUND', '仓库不存在、不可访问或 ref 无效');
     const meta = await git.repoInfo(owner!, name!);
     // ref 为 40 位 SHA 时 lsRemote 不联网,仓库是否存在只能靠 repoInfo:GitHub 明确 404(不存在,或无 token 时的私有仓库)
@@ -148,7 +160,7 @@ export function buildApp(deps?: AppDeps): FastifyInstance {
     if (info?.language && !SUPPORTED_LANGS.has(info.language))
       throw new HttpError(
         'UNSUPPORTED_LANGUAGE',
-        `第 1 周仅支持 TypeScript 仓库(检测到 ${info.language})`,
+        `目前仅支持 TypeScript/JavaScript 仓库(检测到 ${info.language})`,
       );
 
     const repo = await store.upsertRepo({ url, owner: owner!, name: name! });
@@ -269,6 +281,25 @@ export function buildApp(deps?: AppDeps): FastifyInstance {
     return res;
   });
 
+  /**
+   * 图的语言来自 repos.lang_main(worker 按 detect() 选中的分析器写入)。
+   * NULL/空串(旧版本 worker 崩溃留下的历史数据)记 warn 并回退 'typescript'(目前枚举唯一值);
+   * 有值但不在枚举内属于数据不一致,按 500 处理。
+   */
+  function graphLanguageOf(repo: { id: number; langMain: string | null }): GraphLanguage {
+    if (repo.langMain == null || repo.langMain === '') {
+      app.log.warn({ repoId: repo.id }, 'repos.lang_main 为空,回退 typescript');
+      return 'typescript';
+    }
+    const l = GraphLanguageSchema.safeParse(repo.langMain);
+    if (l.success) return l.data;
+    app.log.error(
+      { repoId: repo.id, langMain: repo.langMain },
+      'repos.lang_main 缺失或未知,无法确定图语言',
+    );
+    throw new HttpError('INTERNAL', '仓库语言信息缺失');
+  }
+
   /** 加载最近一个已出图的任务对应的全量图索引 */
   async function loadIndex(repoId: number) {
     const repo = await store.getRepo(repoId);
@@ -306,6 +337,7 @@ export function buildApp(deps?: AppDeps): FastifyInstance {
       repoId,
       commitSha: task.commitSha,
       parentId,
+      language: graphLanguageOf(repo),
       includeExternal: ext,
       cycles: ix.cycles,
     });

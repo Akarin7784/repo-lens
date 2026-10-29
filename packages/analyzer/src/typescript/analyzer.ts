@@ -9,7 +9,8 @@ import type {
   ResolverMode,
   SourceFile,
 } from '../types.js';
-import { isTsFile, isSourceFile, isRelative } from './lang.js';
+import { isRelative } from './lang.js';
+import { isTsJsRepo } from './detect.js';
 import { FallbackResolver } from './resolve-fallback.js';
 import { defaultProjectFactory, TsMorphResolver, type ProjectFactory } from './resolve-tsmorph.js';
 import { parseWithTreeSitter } from './treesitter.js';
@@ -53,12 +54,9 @@ export class TypeScriptAnalyzer implements LanguageAnalyzer {
     return this.mode;
   }
 
-  /** 识别规则(ARCHITECTURE §4.1):根目录有 tsconfig.json 且 TS 文件占源码 ≥ 50% */
+  /** 识别规则见 ./detect.ts:根或任一 workspace 包有 tsconfig*.json 且 TS/JS 占比 ≥ 20%,或 TS/JS 占比 ≥ 50% */
   async supports(repo: RepoSnapshot): Promise<boolean> {
-    if (!existsSync(join(repo.root, 'tsconfig.json'))) return false;
-    const src = repo.files.filter(isSourceFile);
-    if (src.length === 0) return false;
-    return src.filter(isTsFile).length / src.length >= 0.5;
+    return isTsJsRepo(repo.root, repo.files);
   }
 
   async init(ctx: AnalyzerInitContext): Promise<void> {

@@ -24,7 +24,13 @@ import {
   type GraphInput,
 } from '@repolens/db';
 import { buildApp, type AnalyzeJobData, type JobQueue } from './app.js';
-import { createGitHost, parseLsRemote, type GitHost } from './githost.js';
+import {
+  GitUnavailableError,
+  createGitHost,
+  parseLsRemote,
+  type GitExec,
+  type GitHost,
+} from './githost.js';
 import { probeService } from '@repolens/shared';
 
 describe('GET /health', () => {
@@ -62,6 +68,71 @@ describe('githost', () => {
     expect(await host.lsRemote(dir)).toBe(sha);
     expect(await host.lsRemote(dir, 'main')).toBe(sha);
     expect(await host.lsRemote(join(dir, 'missing'))).toBeNull();
+  });
+
+  // 假 spawn:按 child_process.execFile 的失败语义构造错误
+  const failWith =
+    (props: Record<string, unknown>): GitExec =>
+    async () => {
+      throw Object.assign(new Error('fake'), props);
+    };
+  it('git 不存在(ENOENT)→ 抛 GitUnavailableError(GIT_MISSING),不吞成 null', async () => {
+    const host = createGitHost({ exec: failWith({ code: 'ENOENT', errno: -2 }) });
+    const err = await host.lsRemote('https://github.com/a/b').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(GitUnavailableError);
+    expect((err as GitUnavailableError).reason).toBe('GIT_MISSING');
+  });
+  it('ls-remote 超时(被 timeout 杀掉)→ 抛 GitUnavailableError(GIT_TIMEOUT)', async () => {
+    const host = createGitHost({
+      exec: failWith({ killed: true, signal: 'SIGTERM', code: null }),
+    });
+    const err = await host.lsRemote('https://github.com/a/b', 'main').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(GitUnavailableError);
+    expect((err as GitUnavailableError).reason).toBe('GIT_TIMEOUT');
+  });
+  it('超 maxBuffer 被杀(killed+SIGTERM)→ GIT_OUTPUT_TOO_LARGE,不是 GIT_TIMEOUT', async () => {
+    const host = createGitHost({
+      exec: failWith({
+        code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER',
+        killed: true,
+        signal: 'SIGTERM',
+      }),
+    });
+    const err = await host.lsRemote('https://github.com/a/b').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(GitUnavailableError);
+    expect((err as GitUnavailableError).reason).toBe('GIT_OUTPUT_TOO_LARGE');
+  });
+  it('真实超 maxBuffer:spawn 一个大量输出的进程 → GIT_OUTPUT_TOO_LARGE', async () => {
+    const { execFile } = await import('node:child_process');
+    const { promisify } = await import('node:util');
+    const real = promisify(execFile);
+    const host = createGitHost({
+      exec: (_f, _a, o) =>
+        real(process.execPath, ['-e', 'process.stdout.write("x".repeat(1e6))'], {
+          ...o,
+          maxBuffer: 1024,
+        }),
+    });
+    const err = await host.lsRemote('https://github.com/a/b').catch((e: unknown) => e);
+    expect((err as GitUnavailableError).reason).toBe('GIT_OUTPUT_TOO_LARGE');
+  });
+  it('真实超时:spawn 一个睡眠进程被 timeout 杀掉 → GIT_TIMEOUT', async () => {
+    const { execFile } = await import('node:child_process');
+    const { promisify } = await import('node:util');
+    const real = promisify(execFile);
+    const host = createGitHost({
+      timeoutMs: 50,
+      exec: (_f, _a, o) => real(process.execPath, ['-e', 'setTimeout(()=>{},5000)'], o),
+    });
+    const err = await host.lsRemote('https://github.com/a/b').catch((e: unknown) => e);
+    expect((err as GitUnavailableError).reason).toBe('GIT_TIMEOUT');
+  });
+  it('真正的不存在(git 非 0 退出 / ref 无匹配)仍返回 null(→ 404)', async () => {
+    const exit128 = createGitHost({ exec: failWith({ code: 128, killed: false, signal: null }) });
+    expect(await exit128.lsRemote('https://github.com/a/missing')).toBeNull();
+    const noRef = createGitHost({ exec: async () => ({ stdout: `${'a'.repeat(40)}\tHEAD\n` }) });
+    expect(await noRef.lsRemote('https://github.com/a/b', 'nope')).toBeNull();
+    expect(await noRef.lsRemote('https://github.com/a/b')).toBe('a'.repeat(40));
   });
 });
 
@@ -266,6 +337,38 @@ describe.skipIf(!hasRedis)('路由(真实 Redis + 内存 Store)', () => {
     expect((await post(app, 'https://github.com/a/pub2')).statusCode).toBe(202);
     await app.close();
   });
+
+  it.each([['GIT_MISSING' as const], ['GIT_TIMEOUT' as const], ['GIT_OUTPUT_TOO_LARGE' as const]])(
+    'ls-remote 抛 GitUnavailableError(%s):503 GIT_UNAVAILABLE + error 日志,不是 404',
+    async (reason) => {
+      const lines: string[] = [];
+      const app = buildApp({
+        store,
+        redis,
+        queue,
+        git: { ...git, lsRemote: async () => Promise.reject(new GitUnavailableError(reason, 'X')) },
+        logger: { level: 'error', stream: { write: (m: string) => void lines.push(m) } },
+        pingIntervalMs: 50,
+      });
+      const r = await app.inject({
+        method: 'POST',
+        url: '/api/repos',
+        payload: { repoUrl: 'https://github.com/a/b' },
+        headers: { 'x-forwarded-for': nextIp() },
+      });
+      expect(r.statusCode).toBe(503);
+      expect(r.json().error).toMatchObject({
+        code: 'GIT_UNAVAILABLE',
+        details: { gitReason: reason },
+      });
+      ApiErrorSchema.parse(r.json());
+      const logged = lines.map((l) => JSON.parse(l) as Record<string, unknown>);
+      expect(logged.some((l) => l.reason === reason && l.level === 50)).toBe(true);
+      expect(lines.join('\n')).not.toContain('github.com/a/b');
+      expect(jobs).toHaveLength(0);
+      await app.close();
+    },
+  );
 
   it('repoInfo 拿不到(404 → null)且 ls-remote 也失败:仍是 REPO_NOT_FOUND,不区分私有与不存在', async () => {
     const app = make();
@@ -555,6 +658,7 @@ describe.skipIf(!hasRedis)('路由(真实 Redis + 内存 Store)', () => {
       ],
     };
     await store.saveGraph(repo.id, SHA, input);
+    await store.updateRepo(repo.id, { langMain: 'typescript' }); // worker 在 graph_ready 前写入
     await store.updateTask(jobId, {
       stage: 'done',
       progress: 100,
@@ -872,6 +976,28 @@ describe.skipIf(!hasRedis)('路由(真实 Redis + 内存 Store)', () => {
     await app.close();
   });
 
+  it('meta.language 读 repos.lang_main;NULL/空串 warn 并回退 typescript,未知值 500 INTERNAL', async () => {
+    const app = make();
+    const { repoId } = await seedGraph();
+    const ok = GraphDataSchema.parse((await app.inject(`/api/repos/${repoId}/graph`)).json());
+    expect(ok.meta.language).toBe('typescript');
+    const clear = async () => {
+      for (const k of await redis.keys(redisKeys.graphPattern(repoId, SHA))) await redis.del(k);
+    };
+    for (const langMain of [null, '']) {
+      await store.updateRepo(repoId, { langMain });
+      await clear();
+      const r = await app.inject(`/api/repos/${repoId}/graph`);
+      expect(r.statusCode, JSON.stringify(langMain)).toBe(200);
+      expect(GraphDataSchema.parse(r.json()).meta.language).toBe('typescript');
+    }
+    await store.updateRepo(repoId, { langMain: 'java' });
+    await clear();
+    const bad = await app.inject(`/api/repos/${repoId}/graph`);
+    expect([bad.statusCode, bad.json().error.code]).toEqual([500, 'INTERNAL']);
+    await app.close();
+  });
+
   it('图缓存 key 带投影版本号:旧版本/无版本的缓存不会被命中', async () => {
     const app = make();
     const { repoId } = await seedGraph();
@@ -916,6 +1042,7 @@ describe.skipIf(!hasRedis)('路由(真实 Redis + 内存 Store)', () => {
       srcPath: f.path,
     }));
     await store.saveGraph(repo.id, SHA, { files, symbols: [], edges });
+    await store.updateRepo(repo.id, { langMain: 'typescript' });
     await store.updateTask(jobId, { stage: 'graph_ready', progress: 50 });
     for (const k of await redis.keys(redisKeys.graphPattern(repo.id, SHA))) await redis.del(k);
     const g = GraphDataSchema.parse(

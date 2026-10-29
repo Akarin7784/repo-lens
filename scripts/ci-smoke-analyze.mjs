@@ -86,6 +86,7 @@ function checkGraph(g, label) {
   if (!g || !Array.isArray(g.nodes) || !Array.isArray(g.edges) || typeof g.meta !== 'object')
     fail(`${label} 结构不对`, g);
   if (g.meta.commitSha !== REF) fail(`${label} meta.commitSha=${g.meta.commitSha}`);
+  if (g.meta.language !== 'typescript') fail(`${label} meta.language=${g.meta.language}`);
   const ids = new Set();
   for (const n of g.nodes) {
     if (!/^(m|d|f):/.test(n.id)) fail(`${label} 节点 id 前缀非法:${n.id}`);
@@ -187,4 +188,27 @@ if (missRes.status !== 404 || miss?.error?.code !== 'FILE_NOT_FOUND')
 console.log(
   `SMOKE files[src/vanilla.ts] lines=${nLines} total=${file.totalLines} commit=${file.commitSha.slice(0, 7)} traversal=${trav.status} missing=${missRes.status} ${miss.error.code}`,
 );
+// P0:不带 ref 提交 → api 容器内 git ls-remote 解析 HEAD(api 镜像缺 git 时这里会 503 GIT_MISSING)。
+// 只断言提交成功且解析出 40 位 commitSha,不等这次分析跑完。GitHub 偶发超时(GIT_TIMEOUT)重试 3 次;
+// GIT_MISSING 是镜像问题,立即失败,不容忍。
+let noRef = null;
+for (let i = 1; i <= 3; i++) {
+  const r = await fetch(`${BASE}/api/repos`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ repoUrl: REPO_URL }),
+  });
+  const b = await r.json().catch(() => null);
+  console.log(`SMOKE no_ref attempt=${i} status=${r.status} body=${JSON.stringify(b)}`);
+  if (b?.error?.details?.gitReason === 'GIT_MISSING') fail('api 镜像内没有 git(GIT_MISSING)', b);
+  if ([200, 202].includes(r.status)) {
+    noRef = b;
+    break;
+  }
+  if (i < 3) await new Promise((ok) => setTimeout(ok, 5000));
+}
+if (!noRef) fail('不带 ref 提交 3 次均失败');
+if (!/^[0-9a-f]{40}$/.test(noRef.commitSha ?? '') || !noRef.jobId)
+  fail('不带 ref 提交未解析出 40 位 commitSha', noRef);
+console.log(`SMOKE no_ref commit=${noRef.commitSha.slice(0, 7)}`);
 console.log('SMOKE ANALYZE PASS');

@@ -2,7 +2,7 @@
 
 输入一个 GitHub 仓库地址,生成可交互的架构图,并用自然语言提问,答案附带经过校验的文件与行号引用,同时在图上高亮对应位置。
 
-> 状态:开发中(第 1 周:TypeScript 仓库的解析与基础图)。
+> 状态:开发中。目前支持 TypeScript/JavaScript 仓库的解析与交互式依赖图,问答功能仍在完善中。
 
 - 架构与接口约定:[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - 后端与 AI 设计:[docs/BACKEND_AI_DESIGN.md](docs/BACKEND_AI_DESIGN.md)
@@ -13,7 +13,7 @@
 
 ## 支持范围
 
-**第 1 周仅支持 TypeScript 仓库**(`.ts`/`.tsx`);其他语言提交时 `POST /api/repos` 返回 422 `UNSUPPORTED_LANGUAGE`。多语言通过 `packages/analyzer` 的 `LanguageAnalyzer` registry 在后续扩展。
+**目前仅支持 TypeScript/JavaScript 仓库**(`.ts`/`.tsx`/`.js`/`.jsx` 等;识别规则见 `packages/analyzer/src/typescript/detect.ts`);其他语言提交时 `POST /api/repos` 返回 422 `UNSUPPORTED_LANGUAGE`。多语言通过 `packages/analyzer` 的 `LanguageAnalyzer` registry 在后续扩展。
 
 ## 本地开发
 

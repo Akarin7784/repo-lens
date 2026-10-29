@@ -13,6 +13,7 @@ const STATUS: Record<Code, number> = {
   REPO_NOT_PUBLIC: 422,
   RATE_LIMITED: 429,
   INTERNAL: 500,
+  GIT_UNAVAILABLE: 503,
 };
 
 export class HttpError extends Error {
