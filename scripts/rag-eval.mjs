@@ -52,6 +52,8 @@ import {
   evalEmbeddingLine,
   evalVectorCacheFile,
   makeEvalEmbedder,
+  trackEvalIndexUsage,
+  evalUsageLine,
 } from '../packages/rag/dist/index.js';
 import {
   DEFAULT_PRICES,
@@ -256,11 +258,14 @@ const cacheKeyOk =
 if (cacheKeyOk && cached?.digest === digest && cached.points?.length === chunks.length) {
   for (const p of cached.points) vs.points.set(p.id, p);
   out(`EVAL vectors reused (digest match)`);
+  out(evalUsageLine(EMB, null));
 } else {
   const t0 = Date.now();
   // local 沿用 16;dashscope 用配置批量(≤10 且 ≤ 模型文档上限)
   const batchSize = EMB.dashscope ? EMB.dashscope.batchSize : 16;
-  await indexChunks({ repoId: 1, commitSha: SHA, chunks, batchSize }, emb, vs);
+  // 只统计索引阶段用量;包装器原样透传 model/revision/dim,不影响 digest 与向量
+  const tracked = trackEvalIndexUsage(emb);
+  await indexChunks({ repoId: 1, commitSha: SHA, chunks, batchSize }, tracked.embedder, vs);
   writeFileSync(
     cache,
     JSON.stringify({
@@ -275,6 +280,7 @@ if (cacheKeyOk && cached?.digest === digest && cached.points?.length === chunks.
     }),
   );
   out(`EVAL embedded ${chunks.length} chunks in ${((Date.now() - t0) / 1000).toFixed(0)}s`);
+  out(evalUsageLine(EMB, tracked.usage));
 }
 
 const byId = new Map(rows.map((c) => [c.qdrantPointId, c]));

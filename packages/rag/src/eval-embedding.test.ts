@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { FakeEmbedder } from './embedder.js';
 import { DashscopeEmbedder } from './dashscope.js';
+import { chunksDigest, indexChunks } from './indexer.js';
+import { MemoryVectorStore } from './vector-store.js';
 import {
+  evalUsageLine,
+  trackEvalIndexUsage,
   evalEmbeddingLine,
   evalVectorCacheFile,
   makeEvalEmbedder,
@@ -117,5 +121,96 @@ describe('评测 embedding 选择(scripts/rag-eval.mjs)', () => {
     expect(() =>
       makeEvalEmbedder(c, { local: () => new FakeEmbedder(), dashscope: () => new FakeEmbedder() }),
     ).toThrow(/维度 384 != 请求维度 64/);
+  });
+});
+
+describe('评测索引用量行(EVAL embedding usage)', () => {
+  const c = selectEvalEmbedding({
+    EMBEDDING_PROVIDER: 'dashscope',
+    DASHSCOPE_API_KEY: FAKE_KEY,
+    DASHSCOPE_EMBEDDING_DIM: '64',
+    EMBEDDING_BATCH_SIZE: '2',
+  });
+  // usageFor(批序号) 返回 total_tokens;undefined 表示响应不带 usage
+  const mkFetch = (usageFor: (call: number) => number | undefined) => {
+    let call = 0;
+    return (async (_url: string, init: RequestInit) => {
+      const n = (JSON.parse(String(init.body)).input as string[]).length;
+      const u = usageFor(call++);
+      return new Response(
+        JSON.stringify({
+          data: Array.from({ length: n }, (_, index) => ({
+            index,
+            embedding: Array(64).fill(0.125),
+          })),
+          ...(u === undefined ? {} : { usage: { total_tokens: u } }),
+        }),
+        { status: 200 },
+      );
+    }) as unknown as typeof fetch;
+  };
+  const chunks = ['aaa', 'bbbbbb', 'c'].map((text, i) => ({
+    path: `f${i}.ts`,
+    symbol: null,
+    startLine: 1,
+    endLine: 1,
+    text,
+    contentHash: `h${i}`,
+  }));
+  const run = async (usageFor: (call: number) => number | undefined) => {
+    const inner = new DashscopeEmbedder(c.dashscope!, { fetch: mkFetch(usageFor) });
+    const t = trackEvalIndexUsage(inner);
+    const store = new MemoryVectorStore();
+    await indexChunks(
+      { repoId: 1, commitSha: 'c1', chunks: chunks as never, batchSize: 2 },
+      t.embedder,
+      store,
+    );
+    return { inner, t, store };
+  };
+
+  it('实测:累计每批 usage.total_tokens,不估算;包装器不改 digest', async () => {
+    const { inner, t } = await run((i) => [7, 5][i]);
+    expect(t.usage).toEqual({
+      batches: 2,
+      measuredTokens: 12,
+      estimatedBatches: 0,
+      estimatedTokens: 0,
+    });
+    expect(evalUsageLine(c, t.usage)).toBe(
+      'EVAL embedding usage reused=0 totalTokens=12 batches=2',
+    );
+    expect(chunksDigest(t.embedder, chunks as never)).toBe(chunksDigest(inner, chunks as never));
+  });
+
+  it('无 usage:按估算单列并标明,不混进 totalTokens', async () => {
+    const { t } = await run((i) => (i === 0 ? 7 : undefined));
+    // 第 2 批只有 'c' → estimateTokens=1
+    expect(t.usage).toEqual({
+      batches: 2,
+      measuredTokens: 7,
+      estimatedBatches: 1,
+      estimatedTokens: 1,
+    });
+    expect(evalUsageLine(c, t.usage)).toBe(
+      'EVAL embedding usage reused=0 totalTokens=7 batches=2 estimatedTokens=1(估算,未计入totalTokens) estimatedBatches=1',
+    );
+  });
+
+  it('复用向量缓存:写 reused=1 totalTokens=未测,不写 0', () => {
+    const line = evalUsageLine(c, null);
+    expect(line).toBe('EVAL embedding usage reused=1 totalTokens=未测');
+    expect(line).not.toMatch(/totalTokens=0/);
+    expect(evalUsageLine(selectEvalEmbedding({}), null)).toBe(line);
+  });
+
+  it('local:不计 token,透传 embedDocuments;行内不含密钥', async () => {
+    const t = trackEvalIndexUsage(new FakeEmbedder());
+    expect((await t.embedder.embedDocuments(['x'])).length).toBe(1);
+    expect(t.usage.batches).toBe(0);
+    expect(evalUsageLine(selectEvalEmbedding({}), t.usage)).toBe(
+      'EVAL embedding usage reused=0 totalTokens=不适用(local)',
+    );
+    expect(evalUsageLine(c, t.usage)).not.toContain(FAKE_KEY);
   });
 });
