@@ -24,6 +24,7 @@ import { graphReducer, initialGraphState } from '../../lib/graph/state';
 import type { GraphSource } from '../../lib/graph/source';
 import { toFlow, type RepoFlowEdge, type RepoFlowNode } from '../../lib/graph/toFlow';
 import { highlightSelection } from '../../lib/graph/selection';
+import { nextFocusStep } from '../../lib/graph/focus';
 import {
   createDefaultEngine,
   readLayout,
@@ -62,6 +63,10 @@ function Inner({ source, owner, repo, engine, onRootLoaded }: GraphViewProps) {
   const layoutFile = useRef<LayoutFile | null>(null);
   const { fitView } = useReactFlow();
 
+  // meta.suggestedFocus:首次加载时自动逐层展开;用户手动展开/折叠后置空,不再自动展开
+  const autoFocus = useRef<string | null>(null);
+  const autoBusy = useRef(false);
+  const [autoTick, setAutoTick] = useState(0);
   const onRootRef = useRef(onRootLoaded);
   onRootRef.current = onRootLoaded;
 
@@ -75,6 +80,7 @@ function Inner({ source, owner, repo, engine, onRootLoaded }: GraphViewProps) {
         const file = await loadLayoutFile(owner, repo, slice.meta.commitSha);
         if (!alive) return;
         layoutFile.current = file;
+        autoFocus.current = slice.meta.suggestedFocus ?? null;
         onRootRef.current?.({ commitSha: slice.meta.commitSha, nodes: slice.nodes.length, ms });
         dispatch({
           type: 'init',
@@ -94,9 +100,12 @@ function Inner({ source, owner, repo, engine, onRootLoaded }: GraphViewProps) {
   }, [source, owner, repo]);
 
   const toggle = useCallback(
-    async (id: string) => {
+    async (id: string): Promise<boolean> => {
       setError(null);
-      if (state.expanded.has(id)) return dispatch({ type: 'collapse', id });
+      if (state.expanded.has(id)) {
+        dispatch({ type: 'collapse', id });
+        return true;
+      }
       if (!state.loaded.has(id)) {
         try {
           const slice = await source.loadChildren(id);
@@ -112,13 +121,40 @@ function Inner({ source, owner, repo, engine, onRootLoaded }: GraphViewProps) {
           setError(
             e instanceof SliceTooLargeError ? e.message : `加载 ${id} 失败:${userMessageOf(e)}`,
           );
-          return;
+          return false;
         }
       }
       dispatch({ type: 'expand', id });
+      return true;
     },
     [state.expanded, state.loaded, source],
   );
+
+  // 用户操作(▸、双击、全部收起)都会终止自动下探
+  const userToggle = useCallback(
+    (id: string) => {
+      autoFocus.current = null;
+      return toggle(id);
+    },
+    [toggle],
+  );
+
+  useEffect(() => {
+    const focus = autoFocus.current;
+    if (!focus || autoBusy.current || state.nodes.length === 0) return;
+    const step = nextFocusStep(state.nodes, state.expanded, focus);
+    if (!step) {
+      autoFocus.current = null;
+      return;
+    }
+    autoBusy.current = true;
+    void toggle(step).then((ok) => {
+      autoBusy.current = false;
+      // 请求失败时 toggle 已显示错误,停止下探;成功则触发下一步
+      if (!ok) autoFocus.current = null;
+      setAutoTick((t) => t + 1);
+    });
+  }, [state.nodes, state.expanded, toggle, autoTick]);
 
   const derived = useMemo(() => {
     const vis = makeVisibility(state.nodes, state.expanded, source.parentOf);
@@ -200,13 +236,16 @@ function Inner({ source, owner, repo, engine, onRootLoaded }: GraphViewProps) {
   }, []);
 
   return (
-    <ToggleContext.Provider value={toggle}>
+    <ToggleContext.Provider value={userToggle}>
       <div className="relative h-full w-full bg-canvas">
         <div className="absolute right-3 top-3 z-10 flex gap-2">
           <button
             type="button"
             className="rounded-control border border-line bg-panel px-3 py-1.5 text-[13px] text-fg shadow-soft hover:border-accent-strong"
-            onClick={() => dispatch({ type: 'collapseAll' })}
+            onClick={() => {
+              autoFocus.current = null;
+              dispatch({ type: 'collapseAll' });
+            }}
           >
             全部收起
           </button>
@@ -229,7 +268,7 @@ function Inner({ source, owner, repo, engine, onRootLoaded }: GraphViewProps) {
           // 单击 = 选中并高亮一跳邻居;展开只走卡片上的 ▸,双击 module/dir 作为附加快捷方式
           onNodeClick={(_, n) => setSelectedId(n.id)}
           onNodeDoubleClick={(_, n) =>
-            (n.type === 'module' || n.type === 'dir') && void toggle(n.id)
+            (n.type === 'module' || n.type === 'dir') && void userToggle(n.id)
           }
           onPaneClick={() => setSelectedId(null)}
           zoomOnDoubleClick={false}
