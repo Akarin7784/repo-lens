@@ -7,7 +7,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run --passWithNoTests --no-file-parallelism",
+    "test": "vitest run --passWithNoTests",
     "dev": "node --watch dist/index.js",
     "start": "node dist/index.js"
   },

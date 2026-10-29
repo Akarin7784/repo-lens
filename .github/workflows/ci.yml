@@ -45,7 +45,7 @@ jobs:
       - name: test(MySQL/Redis 集成测试必须真跑)
         run: |
           set -o pipefail
-          pnpm test 2>&1 | tee /tmp/test.log
+          pnpm test --concurrency=1 2>&1 | tee /tmp/test.log
           # 防静默跳过:各集成测试在服务不可达时只打 warn 并 skip,CI 里视为失败
           if grep -n '不可达' /tmp/test.log; then
             echo '::error::MySQL/Redis 集成测试被跳过(服务不可达),CI 要求真跑'; exit 1
