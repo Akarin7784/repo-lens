@@ -257,6 +257,7 @@ export function registerChatRoute(
       }
     };
 
+    let it: ReturnType<LlmGateway['stream']> | undefined;
     try {
       // 改写(只中文问题)
       let rewritten = question;
@@ -323,7 +324,7 @@ export function registerChatRoute(
       let fallback = false;
       let gotToken = false;
       try {
-        const it = chat.gateway.stream({
+        it = chat.gateway.stream({
           purpose: 'chat',
           model: chat.model,
           repoId,
@@ -398,6 +399,8 @@ export function registerChatRoute(
     } finally {
       clearInterval(ping);
       clearTimeout(timer);
+      // 超时 / 中止退出时关上游迭代器:吞掉错误,不 await(不理 signal 的上游不能阻塞退出)
+      if (it) void Promise.resolve(it.return?.(undefined as never)).catch(() => {});
       // 无条件 abort:网关只在 for-await 走完或抛错时记账,提前退出时靠它关上游
       ac.abort();
       if (!raw.writableEnded) raw.end();

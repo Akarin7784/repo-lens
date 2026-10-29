@@ -541,8 +541,17 @@ describe.skipIf(!hasRedis)(
       it(`总时限:永不结束的流(${honor ? '响应' : '不理'} signal)→ error 可重试,释放名额,不写 assistant`, async () => {
         const { repoId } = await seed();
         const rec = spyRows();
+        const gw = gatewayOf(new HangLlm('partial ', honor));
+        const origStream = gw.stream.bind(gw);
+        const returned = vi.fn();
+        vi.spyOn(gw, 'stream').mockImplementation((r) => {
+          const g = origStream(r);
+          const ret = g.return.bind(g);
+          g.return = (v) => (returned(), ret(v));
+          return g;
+        });
         const app = make({
-          gateway: gatewayOf(new HangLlm('partial ', honor)),
+          gateway: gw,
           streamTimeoutMs: 150,
           maxStreams: 1,
         });
@@ -556,6 +565,8 @@ describe.skipIf(!hasRedis)(
         expect(evs.some((e) => e.event === 'done')).toBe(false);
         expect(metrics.activeStreams).toBe(0);
         expect(rec.roles).toEqual(['user']);
+        // finally 里对上游迭代器调用了 return(不 await)
+        expect(returned).toHaveBeenCalled();
         // 响应 signal 的上游:网关按现有口径记一条 ok=0 的 chat usage
         if (honor)
           await vi.waitFor(() => expect(rec.usage).toEqual([{ purpose: 'chat', ok: false }]));
