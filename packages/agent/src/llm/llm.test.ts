@@ -312,7 +312,14 @@ describe('readLlmConfig', () => {
 
 describe('complete() 记账失败(与流式路径对齐)', () => {
   const boom = new Error('db down');
-  function setup(o: { insertFails?: (row: { ok: boolean }) => boolean; kvFails?: boolean } = {}) {
+  function setup(
+    o: {
+      insertFails?: (row: { ok: boolean }) => boolean;
+      /** insertFails 为真时抛出的错误;默认 boom */
+      insertError?: Error;
+      kvFails?: boolean;
+    } = {},
+  ) {
     const kv = new MemKv();
     if (o.kvFails)
       kv.incrby = async () => {
@@ -323,7 +330,7 @@ describe('complete() 记账失败(与流式路径对齐)', () => {
     let inserts = 0;
     usage.insertLlmUsage = async (row) => {
       inserts++;
-      if (o.insertFails?.(row)) throw boom;
+      if (o.insertFails?.(row)) throw o.insertError ?? boom;
       return orig(row);
     };
     const warns: { obj: Record<string, unknown>; msg: string }[] = [];
@@ -423,13 +430,46 @@ describe('complete() 记账失败(与流式路径对齐)', () => {
     expect(errMsg(new Error('task-sk-1 risk-free'))).toBe('task-sk-1 risk-free');
   });
 
-  it('补行 warn 的 err 已脱敏(insert 错误里带 sk-)', async () => {
+  it('errMsg:边界 — 不足 4 后续字符不脱敏、引号/括号、多 key、空串', () => {
+    // 模式要求 sk- 后至少 4 个 [A-Za-z0-9*._-];更短的保留原文
+    expect(errMsg('keep sk-ab and sk-abc here')).toBe('keep sk-ab and sk-abc here');
+    expect(errMsg('scrub sk-abcd only')).toBe('scrub *** only');
+    expect(errMsg('quoted "sk-abcdEFGH" and [sk-zzzz9999]')).toBe('quoted "***" and [***]');
+    expect(errMsg('a sk-aaaa1111 and SK-bbbb2222 z')).toBe('a *** and *** z');
+    expect(errMsg('')).toBe('');
+    expect(errMsg(new Error(''))).toBe('');
+  });
+
+  // 实际覆盖的是缓存写失败 warn(kv.set 抛错),不是补行/insert 路径 — 名称与断言对齐
+  it('缓存写失败 warn 的 err 已脱敏(set 错误里带 sk-)', async () => {
     const { gw, warns } = setup();
     const kv = (gw as unknown as { o: { kv: MemKv } }).o.kv;
     kv.set = async () => {
       throw new Error('auth sk-live1234abcd failed');
     };
     await gw.complete(req('hello'));
+    expect(warns.map((w) => w.msg)).toEqual(['llm cache write failed']);
+    expect(warns[0]!.obj.err).toBe('auth *** failed');
+  });
+
+  it('zero-cost insert 失败 warn 的 err 已脱敏(insert 错误里带 sk-)', async () => {
+    const skBoom = new Error('auth sk-live1234abcd failed');
+    const { gw, warns } = setup({
+      insertFails: (row) => row.ok,
+      insertError: skBoom,
+    });
+    (gw as unknown as { o: { prices: PriceTable } }).o.prices = {
+      ...PRICES,
+      'zero-model': { inputPerMTok: 0, outputPerMTok: 0 },
+    };
+    const err = (await gw
+      .complete(req('hello', { model: 'zero-model' }))
+      .catch((e: unknown) => e)) as LlmError;
+    expect(err.code).toBe('LLM_UNAVAILABLE');
+    expect(err.cause).toBe(skBoom);
+    expect(warns.map((w) => w.msg)).toEqual([
+      'llm usage insert failed (zero cost, no spend counted)',
+    ]);
     expect(warns[0]!.obj.err).toBe('auth *** failed');
   });
 

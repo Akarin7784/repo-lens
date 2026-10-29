@@ -6,7 +6,7 @@ import {
   redisKeys,
   type LlmUsageInput,
 } from '@repolens/db';
-import { SK_PATTERN } from './deepseek.js';
+import { redactSecrets } from './redact.js';
 import { costMicroUsd, priceOf, type PriceTable } from './pricing.js';
 import {
   LlmError,
@@ -50,9 +50,8 @@ export interface LlmGatewayOptions {
 
 const CENT = 10_000; // micro-USD
 
-/** 日志用错误文本:统一把 `sk-…` 形态(含部分打码回显)替换成 `***`,与 deepseek.ts 同一正则 */
-export const errMsg = (e: unknown) =>
-  (e instanceof Error ? e.message : String(e)).replace(SK_PATTERN, '***');
+/** 日志用错误文本:统一把 `sk-…` 形态(含部分打码回显)替换成 `***`,与 redact.ts 同一规则 */
+export const errMsg = (e: unknown) => redactSecrets(e instanceof Error ? e.message : String(e));
 
 /** 缓存 key 的 hash:模型 + 影响输出的全部请求字段 */
 export function cacheHash(req: LlmCall): string {
