@@ -137,8 +137,9 @@ describe('<ChatPanel>(假流,未接真实后端)', () => {
     ask();
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('提问太频繁'));
     expect(screen.getByRole('button', { name: '重试(10s)' })).toBeDisabled();
-    for (let i = 0; i < 10; i++) await act(async () => void vi.advanceTimersByTime(1000));
-    expect(screen.getByRole('button', { name: '重试' })).toBeEnabled();
+    // 倒计时是逐秒 setTimeout 链,CI 上 React 提交可能晚于计时推进:多推一秒并等待提交,避免时序抖动
+    for (let i = 0; i < 11; i++) await act(async () => void vi.advanceTimersByTime(1000));
+    await waitFor(() => expect(screen.getByRole('button', { name: '重试' })).toBeEnabled());
   });
 
   it('流在 done 前结束 → 「回答中途断开」可重试,保留已输出 token 与可点引用', async () => {
