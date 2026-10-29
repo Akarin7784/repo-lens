@@ -50,6 +50,8 @@ export type GraphViewProps = {
   onSelectionChange?: (sel: { id: string; deps: string[]; dependents: string[] } | null) => void;
   /** 外部请求跳转到某节点(详情面板里点列表/面包屑、URL ?node=):必要时按路径逐层展开后选中。n 变化即触发 */
   jumpRequest?: { id: string; n: number } | null;
+  /** 外部请求取消选中(窄屏抽屉的「关闭」):数值变化即触发,0 不触发 */
+  clearRequest?: number;
 };
 
 /** 节点 id 的 POSIX 路径(m:/d:/f: 去前缀) */
@@ -82,6 +84,7 @@ function Inner({
   onRootLoaded,
   onSelectionChange,
   jumpRequest,
+  clearRequest = 0,
 }: GraphViewProps) {
   const [state, dispatch] = useReducer(graphReducer, initialGraphState);
   const [flow, setFlow] = useState<{ nodes: RepoFlowNode[]; edges: RepoFlowEdge[] }>({
@@ -310,8 +313,19 @@ function Inner({
     return JSON.stringify({ id: selectedId, deps, dependents });
   }, [flow, selectedId]);
   useEffect(() => {
-    if (!selKey) return onSelRef.current?.(null);
-    if (selKey.endsWith('|')) return; // 选中节点暂不在可见图里(跳转展开中),保持上一状态
+    if (!selKey) {
+      // 不能写成 return onSel(null):回调的返回值会被 React 当成 effect 清理函数
+      onSelRef.current?.(null);
+      return;
+    }
+    if (selKey.endsWith('|')) {
+      // 跳转展开中:选中节点暂不在可见图里,保持上一状态
+      if (pendingJump.current) return;
+      // T-222d:选中节点因所在目录被折叠(或全部收起)而不在图中:清除选中、关闭详情,
+      // 避免右栏继续显示一个画布上看不到的节点(旧内容)
+      setSelectedId(null);
+      return;
+    }
     onSelRef.current?.(JSON.parse(selKey));
   }, [selKey]);
 
@@ -353,6 +367,28 @@ function Inner({
       setError(`图中找不到 ${idPath(id)}(可能被截断或不在当前图里)`);
     }
   }, [flow, state.nodes]);
+
+  // T-222d:图区尺寸变化(窄屏底部抽屉打开/关闭、窗口缩放)后重新适配视图,避免节点落在可视区外
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    let t: ReturnType<typeof setTimeout> | undefined;
+    let first = true;
+    const ro = new ResizeObserver(() => {
+      if (first) return void (first = false); // 首次回调是挂载本身,布局 effect 已负责 fitView
+      clearTimeout(t);
+      t = setTimeout(() => void fitView({ padding: 0.12, duration: 200 }), 150);
+    });
+    ro.observe(el);
+    return () => {
+      clearTimeout(t);
+      ro.disconnect();
+    };
+  }, [fitView]);
+
+  useEffect(() => {
+    if (clearRequest > 0) setSelectedId(null);
+  }, [clearRequest]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setSelectedId(null);
@@ -439,13 +475,13 @@ function Inner({
   );
 }
 
-/** 图例:投屏时靠颜色 + 线型 + 标记三重区分 */
+/** 图例:投屏时靠颜色 + 线型 + 标记三重区分。窄屏(<768px)隐藏,否则会盖住一半图区(T-222d) */
 function Legend() {
   const row = 'flex items-center gap-2';
   return (
     <div
       aria-label="图例"
-      className="absolute bottom-12 left-3 z-10 flex flex-col gap-1 rounded-control border border-line bg-panel px-3 py-2 text-[12px] text-fg shadow-soft"
+      className="absolute bottom-12 left-3 z-10 hidden flex-col gap-1 md:flex rounded-control border border-line bg-panel px-3 py-2 text-[12px] text-fg shadow-soft"
     >
       <div className={row}>
         <svg width="36" height="8" aria-hidden>

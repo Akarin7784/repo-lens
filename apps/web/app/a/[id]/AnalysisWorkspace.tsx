@@ -89,6 +89,8 @@ export function AnalysisWorkspace({ repoId, jobId, repoLabel, api: apiProp, even
   // T-222:右栏详情。选中来自 GraphView;?node= 写入 URL,打开链接时据此跳转
   const [sel, setSel] = useState<({ id: string } & GraphNeighbors) | null>(null);
   const [jump, setJump] = useState<{ id: string; n: number } | null>(null);
+  // T-222d:抽屉「关闭」= 取消选中(与 Esc / 点空白一致),计数变化即触发
+  const [closeTick, setCloseTick] = useState(0);
   const jumpTo = useCallback((id: string) => setJump((j) => ({ id, n: (j?.n ?? 0) + 1 })), []);
   const urlRead = useRef(false);
   useEffect(() => {
@@ -142,8 +144,8 @@ export function AnalysisWorkspace({ repoId, jobId, repoLabel, api: apiProp, even
           </p>
         </div>
       ) : showGraph ? (
-        <div className="flex min-h-0 flex-1">
-          <div className="relative min-w-0 flex-1">
+        <div className="flex min-h-0 flex-1 flex-col md:flex-row">
+          <div className="relative min-h-0 min-w-0 flex-1">
             {progress.status === 'running' && (
               <div className="absolute left-1/2 top-3 z-20 -translate-x-1/2 rounded-full border border-line bg-panel px-3 py-1 text-[12px] text-muted shadow-soft">
                 依赖图已生成,后续阶段进行中({Math.round(progress.progress)}%)
@@ -156,12 +158,34 @@ export function AnalysisWorkspace({ repoId, jobId, repoLabel, api: apiProp, even
               onRootLoaded={setRootInfo}
               onSelectionChange={setSel}
               jumpRequest={jump}
+              clearRequest={closeTick}
             />
           </div>
+          {/* T-222d:≥768px 为右栏;<768px 未选中时隐藏,选中后为占下方 55vh 的底部抽屉(在文档流里,图区随之缩到上方,不被遮挡),可关闭 */}
           <aside
             aria-label="详情"
-            className="w-[360px] shrink-0 overflow-y-auto border-l border-line bg-bg"
+            data-testid="detail-aside"
+            data-drawer={sel ? 'open' : 'closed'}
+            className={
+              'shrink-0 overflow-y-auto border-line bg-bg ' +
+              'md:block md:max-h-none md:w-[360px] md:rounded-none md:border-l md:border-t-0 md:shadow-none ' +
+              (sel
+                ? 'h-[55vh] max-h-[55vh] shrink-0 rounded-t-[12px] border-t shadow-soft md:h-auto'
+                : 'hidden')
+            }
           >
+            {sel && (
+              <div className="sticky top-0 z-10 flex justify-end border-b border-line bg-bg px-3 py-1.5 md:hidden">
+                <button
+                  type="button"
+                  aria-label="关闭详情"
+                  onClick={() => setCloseTick((t) => t + 1)}
+                  className="rounded-control border border-line bg-panel px-3 py-1 text-[13px] text-fg"
+                >
+                  关闭
+                </button>
+              </div>
+            )}
             {sel ? (
               <NodeDetail
                 repoId={repoId}

@@ -131,3 +131,74 @@ describe('<GraphView> 悬停预览(T-221)', () => {
     expect(screen.getByRole('status')).toHaveTextContent('已选中 src/middleware');
   });
 });
+
+describe('<GraphView> 折叠后清除选中(T-222d)', () => {
+  async function mountWith(onSel: (s: unknown) => void, clearRequest = 0) {
+    const s = SAMPLE_REPOS.zustand;
+    const engine = await createInlineEngine();
+    const ui = (c: number) => (
+      <div style={{ width: 1000, height: 700 }}>
+        <GraphView
+          source={createFixtureSource('pmndrs/zustand', s.data)}
+          owner={s.owner}
+          repo={s.repo}
+          engine={engine}
+          onSelectionChange={onSel}
+          clearRequest={c}
+        />
+      </div>
+    );
+    const r = render(ui(clearRequest));
+    return { ...r, rerenderClear: (c: number) => r.rerender(ui(c)) };
+  }
+
+  it('选中目录里的文件后折叠该目录:选中被清除,回调 null,状态栏不再显示「已选中」', async () => {
+    const calls: unknown[] = [];
+    const { container } = await mountWith((s) => calls.push(s));
+    fireEvent.click(await screen.findByRole('button', { name: '展开 middleware' }));
+    await waitFor(() => expect(container.querySelector(mwFile)).not.toBeNull());
+    const file = container.querySelector(mwFile)!;
+    const fileId = file.getAttribute('data-testid')!.slice('node-'.length);
+    fireEvent.click(file);
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('已选中'));
+    expect(calls.at(-1)).toMatchObject({ id: fileId });
+    fireEvent.click(await screen.findByRole('button', { name: '收起 middleware' }));
+    await waitFor(() => expect(container.querySelector(mwFile)).toBeNull());
+    await waitFor(() => expect(calls.at(-1)).toBeNull());
+    expect(screen.getByRole('status')).not.toHaveTextContent('已选中');
+  });
+
+  it('选中后「全部收起」同样清除选中', async () => {
+    const calls: unknown[] = [];
+    const { container } = await mountWith((s) => calls.push(s));
+    fireEvent.click(await screen.findByRole('button', { name: '展开 middleware' }));
+    await waitFor(() => expect(container.querySelector(mwFile)).not.toBeNull());
+    fireEvent.click(container.querySelector(mwFile)!);
+    await waitFor(() => expect(calls.at(-1)).not.toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: '全部收起' }));
+    await waitFor(() => expect(calls.at(-1)).toBeNull());
+  });
+
+  it('折叠的不是选中节点所在目录:选中保持', async () => {
+    const calls: unknown[] = [];
+    const { container } = await mountWith((s) => calls.push(s));
+    await screen.findByRole('button', { name: '展开 middleware' });
+    fireEvent.click(container.querySelector('[data-testid="node-m:src/middleware"]')!);
+    await waitFor(() => expect(calls.at(-1)).toMatchObject({ id: 'm:src/middleware' }));
+    fireEvent.click(screen.getByRole('button', { name: '展开 middleware' }));
+    await waitFor(() => expect(container.querySelector(mwFile)).not.toBeNull());
+    fireEvent.click(await screen.findByRole('button', { name: '收起 middleware' }));
+    await waitFor(() => expect(container.querySelector(mwFile)).toBeNull());
+    expect(calls.at(-1)).not.toBeNull();
+  });
+
+  it('clearRequest 变化(窄屏抽屉「关闭」)取消选中', async () => {
+    const calls: unknown[] = [];
+    const { container, rerenderClear } = await mountWith((s) => calls.push(s));
+    await screen.findByRole('button', { name: '展开 middleware' });
+    fireEvent.click(container.querySelector('[data-testid="node-m:src/middleware"]')!);
+    await waitFor(() => expect(calls.at(-1)).not.toBeNull());
+    rerenderClear(1);
+    await waitFor(() => expect(calls.at(-1)).toBeNull());
+  });
+});
