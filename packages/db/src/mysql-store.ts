@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { drizzle, type MySql2Database } from 'drizzle-orm/mysql2';
 import mysql from 'mysql2/promise';
 import * as schema from './schema.js';
@@ -103,6 +103,40 @@ export class MysqlStore implements Store {
       tokensIn: r.tokensIn ?? 0,
       tokensOut: r.tokensOut ?? 0,
     }));
+  }
+
+  async findSummaryByInput(
+    repoId: number,
+    level: SummaryLevel,
+    targetId: string,
+    inputHash: string,
+    preferCommit: string,
+  ): Promise<SummaryRow | null> {
+    const [r] = await this.db
+      .select()
+      .from(schema.summary)
+      .where(
+        and(
+          eq(schema.summary.inputHash, inputHash),
+          eq(schema.summary.repoId, repoId),
+          eq(schema.summary.level, level),
+          eq(schema.summary.targetId, targetId),
+        ),
+      )
+      .orderBy(sql`${schema.summary.commitSha} = ${preferCommit} desc`, desc(schema.summary.id))
+      .limit(1);
+    if (!r) return null;
+    return {
+      level: r.level,
+      targetId: r.targetId,
+      commitSha: r.commitSha,
+      inputHash: r.inputHash,
+      model: r.model ?? '',
+      source: r.source,
+      content: r.content ?? '',
+      tokensIn: r.tokensIn ?? 0,
+      tokensOut: r.tokensOut ?? 0,
+    };
   }
 
   async upsertSummary(repoId: number, commitSha: string, row: SummaryRow) {

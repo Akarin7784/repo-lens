@@ -200,7 +200,15 @@ CREATE TABLE summary (
 );
 -- T-211c 迁移 0001_summary_commit 可重复执行(MariaDB / MySQL 8.4):旧行 commit_sha 回填为 repo.last_commit,
 -- model='rule' 的行回填 source='rule'。唯一键保留 level:同一 target_id 理论上可在不同 level 各有一行。
--- 复用:worker 读该仓库所有 commit 的摘要,输入哈希相同即复用,为当前 commit 写一份副本,content 与 source 保持原样。
+-- 复用:worker 逐节点按 (repo_id, level, target_id, input_hash) 查一行(走 idx_input,优先当前 commit),
+--   命中即为当前 commit 写一份副本,content 与 source 保持原样;不再整表读该仓库所有 commit 的摘要。
+-- 旧 commit 行的清理跟随 D5(源码快照保留策略):D5 定下后,summary 只保留与快照相同的那批 commit
+--   (默认建议最近 10 个,LRU),其余按 (repo_id, commit_sha) 删除;D5 未定前不自动清理。
+-- summary 孤儿行清理(手动,不自动删数据):repo.last_commit 为 NULL 的仓库,迁移后旧行 commit_sha 保持 '',
+--   任何 commit 都读不到,只能被哈希复用。确认无用后可手动执行:
+--     SELECT repo_id, COUNT(*) FROM summary WHERE commit_sha = '' GROUP BY repo_id;   -- 先看
+--     DELETE FROM summary WHERE commit_sha = '';                                     -- 确认后再删
+--   滚动发布期间旧 worker 写入的行也是 commit_sha=''(见 ARCHITECTURE §6:api 与 worker 要一起升级),同样适用。
 CREATE TABLE chat_session (
   id BIGINT PRIMARY KEY AUTO_INCREMENT, repo_id BIGINT NOT NULL, user_key VARCHAR(64),
   title VARCHAR(255), created_at DATETIME DEFAULT CURRENT_TIMESTAMP, KEY idx_user (user_key, id)
@@ -358,7 +366,7 @@ data: {"jobId":"12:a1b2c3d","status":"done","stats":{"files":412,"chunks":2900,"
 - 规则摘要:file 为路径、语言、行数、导出名;dir 为路径、文件数、行数、主要子项;repo 为名称、文件数、模块列表。model 记为 `rule`,同样按 input_hash 复用。
 - 复用:库里已有行的 input_hash 与本次一致时直接复用,不经过网关,所以同 commit 重跑不新增 llm_usage。
 - 失败(D6):LLM 不可用或 JSON 解析失败时,改写 user 消息重试 1 次(避开已缓存的坏响应),仍失败就用规则摘要。
-- 单文件超时:每次文件摘要调用(每次尝试)默认 30s 超时(`fileTimeoutMs`,`DEFAULT_FILE_TIMEOUT_MS`),超时按失败处理,即重试 1 次,仍超时用规则摘要,次数记在 `SummarizeResult.timedOut`。超时只是摘要流程不再等;底层 HTTP 请求由客户端自己的超时(DeepSeek 60s)中止,迟到的响应仍可能记账。
+- 单文件超时:每次文件摘要调用(每次尝试)默认 30s 超时(`fileTimeoutMs`,`DEFAULT_FILE_TIMEOUT_MS`),超时按失败处理,即重试 1 次,仍超时用规则摘要,次数记在 `SummarizeResult.timedOut`。超时会真正取消请求:`LlmCall.signal` 传到客户端,DeepSeek 用 `AbortSignal.any([调用方 signal, 自身 60s 超时])`,被取消的调用记一条 `ok=0`、费用 0 的 `llm_usage`;无视 signal 的客户端迟到返回时,每次底层调用最多记账一次(不会重复)。`signal` 不参与缓存键。
 - dir/module 子项总长度上限:提示词里子项摘要(id + 摘要)总长不超过 `CHILDREN_MAX_CHARS`=8000 字符,按子项 id 顺序装入,至少保留 1 个,超出的不放进提示词,只写「另有 N 个子项因长度上限省略」。input_hash 只看实际放进去的子项和省略数;没超上限的目录 hash 不变,照常复用。
 - 成本上限与降级:每个任务受 `LLM_TASK_BUDGET_CENTS`(默认 30¢)约束,全站受日预算约束。网关一抛 `BUDGET_EXCEEDED`,剩余节点全部改用规则摘要,已复用的 LLM 摘要保留。summarizing 阶段只发一次 `stage_error`,任务仍然 done。摘要阶段的意外异常同样只发一次 stage_error,然后跳过摘要。
 - 并发:进程内池,默认 4;尚未接独立的 summarize 队列和全局 limiter。跨仓库按 content_hash 复用尚未实现。
@@ -484,19 +492,23 @@ T-210b（DeepSeek，D1）：
 - `DeepSeekClient`：OpenAI 兼容，`POST {DEEPSEEK_BASE_URL}/chat/completions`，`Authorization: Bearer`，非流式，`reasoning_effort: "none"`（关闭思考模式），`json=true` 时发 `response_format: {type: "json_object"}`（prompt 里也必须要求 JSON），默认超时 60s。只在 `LLM_PROVIDER=deepseek` 时启用，缺 `DEEPSEEK_API_KEY` 启动报错；key 只在客户端私有字段和请求头里，不进配置对象、错误信息和日志。
 - 模型变量：保留 `LLM_SUMMARY_MODEL`（file/dir/module 摘要）与 `LLM_CHAT_MODEL`（repo 摘要、问答），默认都为 `deepseek-flash`；fake 下忽略。
 - usage：`tokensIn = prompt_tokens`（= `prompt_cache_hit_tokens + prompt_cache_miss_tokens`），`tokensOut = completion_tokens`，`cachedTokensIn = prompt_cache_hit_tokens`。来源 https://api-docs.deepseek.com/api/create-chat-completion 。
-- 价格（https://api-docs.deepseek.com/quick_start/pricing ，2026-10-29 核对，美元/百万 token）：`deepseek-flash` 高峰价缓存命中输入 0.006、未命中输入 0.30、输出 1.2；官方非高峰时段减半。记账一律按高峰价（偏保守，记账 ≥ 实际扣费）。费用 = 未命中输入×未命中价 + 命中输入×命中价 + 输出×输出价，向上取整到 micro-USD。
+- 价格（中文官方价格页 https://api-docs.deepseek.com/zh-cn/quick_start/pricing ，2026-10-29 核对；官方按人民币元/百万 token 标价，与 `packages/agent/src/llm/pricing.ts` 一致）：
+  - 高峰价（元）：`deepseek-flash` 缓存命中输入 0.04、未命中输入 2、输出 8；`deepseek-v4-pro` 缓存命中输入 0.30、未命中输入 9.0、输出 27.0。
+  - 价格表按 1 USD ≈ 6.67 元统一换算成美元/百万 token（两个模型同一汇率，保留到 0.001）：flash 0.006 / 0.30 / 1.2；pro 0.045 / 1.35 / 4.05。
+  - 官方非高峰时段减半；记账一律按高峰价（偏保守，记账 ≥ 实际扣费）。费用 = 未命中输入×未命中价 + 命中输入×命中价 + 输出×输出价，向上取整到 micro-USD。
 - 熔断 `BreakerClient`：`cb:llm:{provider}:fails` 记连续失败（成功清零），达到 5 次写 `cb:llm:{provider}`（EX 60），打开期间直接抛 `CircuitOpenError`，网关按 `LLM_UNAVAILABLE` 处理（写 `ok=0`），60s 后进入半开、放行下一次调用：打开时把失败计数置为 阈值-1，所以半开调用失败会立即重新打开 60s，成功则清零。
 - 手动冒烟：`LLM_PROVIDER=deepseek node scripts/llm-smoke.mjs`（需先 build agent），只打印回复长度、usage 和折算费用，不打印 key；CI 不跑。
 **敏感文件排除（T-210b，接真实 provider 前的合并门槛）**：
 - 事实：`LLM_PROVIDER=deepseek` 时，被选中做 LLM 摘要的文件源码、README、package.json 会发送给第三方模型服务（DeepSeek）。前端提交页与 README 的提示由前端/架构师负责。
 - 规则表在 `packages/shared/src/sensitive.ts`（摘要、embedding 切块、T-213 `/files` 共用一份）：
-  - 路径（按文件名）：`.env*`、`*.pem`、`id_rsa*` / `id_ed25519*` 等 SSH 私钥、`*.key`、证书 `*.crt` / `*.cer` / `*.der` / `*.p7b`、密钥库 `*.p12` / `*.pfx` / `*.jks` / `*.keystore`、`.npmrc`、`.netrc`、`.pgpass`、`.htpasswd`、凭据文件 `credentials`（无扩展名或配置/数据扩展名，如 `~/.aws/credentials`、`.git-credentials`、`gcp-credentials.json`；`credentials.ts` 这类源码不算）、`secrets`（同规则，只认无扩展名或 `json` / `yaml` / `yml` / `toml` / `env` / `ini` / `txt`；`secrets.ts` 这类源码按内容规则判断）。
-  - 内容特征：`-----BEGIN … PRIVATE KEY-----`、`AKIA` / `ASIA` + 16 位、`ghp_` / `gho_` / `ghu_` / `ghs_` / `ghr_` / `github_pat_`、`sk-`（含 `sk-proj-`、`sk-ant-`）+ ≥20 位、Slack `xox?-`、Google `AIza…`、Stripe `sk_live_` / `rk_live_` / `sk_test_` / `rk_test_`、npm `_authToken=`（`${ENV}` 引用除外）与 `npm_` + 36 位、JWT（`eyJ….eyJ….…` 三段）。往 `SENSITIVE_PATH_RULES` / `SENSITIVE_CONTENT_RULES` 追加即可扩展。日志和提示里只出现规则 id，不出现命中内容。
+  - 路径（按文件名）：`.env*`、`*.pem`、`id_rsa*` / `id_ed25519*` 等 SSH 私钥、`*.key`、证书 `*.crt` / `*.cer` / `*.der` / `*.p7b`、密钥库 `*.p12` / `*.pfx` / `*.jks` / `*.keystore`、`.npmrc`、`.netrc`、`.pgpass`、`.htpasswd`、凭据文件 `credentials` 与 `secrets`（含前缀写法，如 `~/.aws/credentials`、`.git-credentials`、`gcp-credentials.json`、`credentials.env`、`app-secrets.json`、`.secrets`）；两条共用一份扩展名表：无扩展名或 `json` / `yaml` / `yml` / `toml` / `ini` / `env` / `xml` / `txt` / `csv` / `conf` / `cfg` / `properties`，`credentials.ts`、`secrets.ts` 这类源码按内容规则判断。
+  - 内容特征：`-----BEGIN … PRIVATE KEY-----`、`AKIA` / `ASIA` + 16 位、`ghp_` / `gho_` / `ghu_` / `ghs_` / `ghr_` / `github_pat_`、`sk-`（含 `sk-proj-`、`sk-ant-`）+ ≥20 位、Slack `xox?-`、Google `AIza…`、Stripe `sk_live_` / `rk_live_` / `sk_test_` / `rk_test_`、npm `_authToken=`、JSON（如 package.json）里的 `"_authToken": "…"`、`.yarnrc.yml` 的 `npmAuthToken:`（均 `${ENV}` 引用除外）与 `npm_` + 36 位、JWT（`eyJ….eyJ….…` 三段）。往 `SENSITIVE_PATH_RULES` / `SENSITIVE_CONTENT_RULES` 追加即可扩展。日志和提示里只出现规则 id，不出现命中内容。
 - 命中后：
   - 摘要：只做规则摘要，输入只有路径、语言、行数。不含源码，也不含导出名和 import：导出名是从源码里抽出来的标识符，可能就是常量名或值本身，与其逐个甄别不如一律不带。`contentHash` 也置空。worker 读文件时判定（`exclusionRule(path, code)`），`summarizeRepo` 见到 `sensitive` 再强制一次。
   - README / package.json 内容命中特征时不进 repo 提示词。
   - 符号:worker 持久化图时跳过这类文件的 symbols,`/nodes/f:<文件>` 返回空 `exports`;api 再按路径规则兜一次。
-- 超限与二进制：扫描阶段已跳过 >500KB 与前 8KB 含 NUL 的文件（不成为图节点）；送模型/切块前再用 `exclusionRule` = 敏感规则 → `unsendableContentRule`（UTF-8 字节数 > `MAX_SEND_BYTES` 500KB 记 `too-large`，含 NUL 记 `binary`）兜一次，命中同样只给规则摘要、不送模型、不切块。
+- README / package.json 进 repo 提示词前先 `lstat`：非普通文件或超过 `MAX_SEND_BYTES` 直接不读，避免大文件整读进内存；读到后再过 `exclusionRule`。
+- 超限与二进制：扫描阶段已跳过 >500KB 与前 8KB 含 NUL 的文件（不成为图节点）；送模型/切块前再用 `exclusionRule` = 敏感规则 → `unsendableContentRule`（用 `TextEncoder` 算 UTF-8 字节数，shared 不依赖 Node `Buffer`；字节数 > `MAX_SEND_BYTES` 500KB 记 `too-large`，含 NUL 记 `binary`）兜一次，命中同样只给规则摘要、不送模型、不切块。
   - embedding / RAG：分析器对命中文件 `chunks = []` 并标 `ParsedFile.sensitive`，因此不会被切块、向量化或作为检索来源；图节点与导入关系保留。
   - `/files`（T-213）：命中文件不返回内容，只返回 `SENSITIVE_PLACEHOLDER`「已排除」提示。这一条写进 T-213 的验收标准和测试。
   - `.env`、`.pem` 等非源码文件本来就不在扫描结果里，规则表对它们是第二道保险。
@@ -504,7 +516,7 @@ T-210b（DeepSeek，D1）：
   - `packages/shared/src/sensitive.test.ts`：规则正反例。
   - `packages/analyzer/src/sensitive.test.ts`：切块路径。
   - `apps/worker/src/sensitive.e2e.test.ts`：端到端。夹具仓库含 `.env`、`.npmrc`、`certs/dev.pem`、带 `AKIAFAKEFAKEFAKE1111` 的 `src/aws.ts`、带假 PEM 的 `src/tls.ts`；跑完整流水线，记录 FakeLlm 收到的每个请求体，断言请求体、摘要和切块文本都不含假 key。
-- 克隆：只接受公开仓库，克隆不带凭据。worker `clone.ts` 用独立 env（`HOME=/nonexistent`、`GIT_CONFIG_GLOBAL=/dev/null`、`GIT_CONFIG_NOSYSTEM=1`、`GIT_ASKPASS=/bin/false`、`GIT_TERMINAL_PROMPT=0`），不继承进程环境，因此读不到 git 凭据助手和 token；只允许 https。`GITHUB_TOKEN` 只在 api 的 GitHub REST 元数据请求（`repoInfo`）里使用，不参与 ls-remote 或克隆。
+- 克隆（2026-10-29 按 `apps/worker/src/pipeline/clone.ts` 与 `apps/api/src/githost.ts` 核对；前端约定由后端负责）：只接受公开仓库，克隆不带凭据。worker `clone.ts` 用独立 env（`HOME=/nonexistent`、`GIT_CONFIG_GLOBAL=/dev/null`、`GIT_CONFIG_NOSYSTEM=1`、`GIT_ASKPASS=/bin/false`、`GIT_TERMINAL_PROMPT=0`、`GIT_LFS_SKIP_SMUDGE=1`），只带 `PATH`、不继承其余进程环境，因此读不到 git 凭据助手和 token；`-c protocol.allow=never -c protocol.https.allow=always` 只允许 https（测试才放开 file），`core.hooksPath=/dev/null`，`fetch --depth 1 --no-tags --no-recurse-submodules`。api 的 `ls-remote` 用同样的无凭据 env。`GITHUB_TOKEN` 只在 api 的 GitHub REST 元数据请求（`repoInfo`）里使用，不参与 ls-remote 或克隆。
 
 - 待做：备用 provider（§10.4）。embedding：DeepSeek 官方 API 文档没有 embedding 接口，型号、维度、价格均未确认，供应商仍按 D4 另定。
 
@@ -536,7 +548,7 @@ Resources（可选）：`repo://{repoId}/summary`、`repo://{repoId}/file/{path}
 |---|---|
 | 执行恶意代码 | **从不执行仓库里的代码**：不跑 `npm install`、构建或脚本；clone 加 `-c core.hooksPath=/dev/null`，禁用 LFS 和 submodule（`--no-recurse-submodules`），也不跑 git hooks |
 | 克隆隔离 | clone 放在独立的 `cloner` 容器里：非 root 用户，只读根文件系统，工作目录挂 tmpfs 或限额 volume，`--cpus=1 --memory=1g`，git 进程超时 120s |
-| SSRF / 任意 URL | 只允许 `https://github.com/{owner}/{repo}` 格式，正则白名单；先 `git ls-remote` 检查仓库存在且是公开仓库 |
+| SSRF / 任意 URL | 只允许 `https://github.com/{owner}/{repo}` 格式，正则白名单；ls-remote + repoInfo.private：`git ls-remote` 检查仓库与 ref 存在（ref 为 40 位 SHA 时跳过，改由 `repoInfo` 明确 404 判不存在），GitHub `repoInfo` 返回 `private: true` 拒绝（`REPO_NOT_PUBLIC`） |
 | 资源耗尽 | 见 §1 的规模上限；Worker 单任务超时 15min；解析时 Tree-sitter 单文件超时 |
 | 路径穿越 | `get_file` 等接口用 `path.posix.normalize` 规范化后，必须以快照根目录开头；拒绝 `..`、绝对路径、NUL；不跟随符号链接（`lstat` 是 symlink 就跳过） |
 | 提示词注入 | 代码和摘要都当作不可信数据，用标签包裹；system prompt 声明忽略其中的指令；LLM 没有任何写操作工具；输出里的引用必须过 §6 校验；回答渲染 Markdown 时禁 HTML、做 sanitize |

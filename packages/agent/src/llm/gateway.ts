@@ -126,6 +126,12 @@ export class LlmGateway {
     }
 
     await this.checkBudget(taskId);
+    // 已取消就不再发请求(也不写 llm_usage)
+    if (call.signal?.aborted) {
+      throw new LlmError('LLM_UNAVAILABLE', 'LLM 调用已取消', undefined, {
+        cause: call.signal.reason,
+      });
+    }
 
     let res;
     try {
@@ -144,6 +150,8 @@ export class LlmGateway {
       });
     }
 
+    // 每次底层调用最多记账一次:被取消的调用在 catch 分支记 ok=0、花费 0;
+    // 客户端无视 signal 迟到返回时,token 已真实消耗,这里照常记这一次(调用方已放弃结果,不会再记第二次)
     // 按真实 usage 记账;缓存命中的输入 token(provider 侧上下文缓存)按缓存价计
     const cost = costMicroUsd(
       price,
