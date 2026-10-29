@@ -3,7 +3,9 @@
 // 用法:pnpm build && node scripts/rag-eval.mjs <tuning|holdout|s1> [--fake-llm]
 //   HONO_DIR(默认 /tmp/hono)  EMBEDDING_MODEL_DIR(必填,含 Xenova/multilingual-e5-small)
 //   改写:有 DEEPSEEK_API_KEY 且未加 --fake-llm 时走真实 DeepSeek;否则 FakeLlm(结果须标「改写未运行」)。
-// 只打印题目、命中与 usage;绝不打印 key(输出前抹掉)。向量缓存在 /tmp/rl-eval-vectors.json(只含公开仓库切块向量)。
+// 只打印题目、命中与 usage;绝不打印 key(输出前抹掉)。向量缓存在 /tmp/rl-eval-vectors.json(只含公开仓库切块向量),
+// 按 embedding digest(模型 + revision + 切块版本 + 文本模板版本 + 每块内容 hash)判断复用,不按块数;
+// 改写缓存在 /tmp/rl-eval-rewrites.json,key = 问题 + 提示词版本 + 模型(同一问题重跑不再调模型)。
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { analyzeRepo, scanSourceFiles } from '../packages/analyzer/dist/index.js';
@@ -19,6 +21,9 @@ import {
   stem,
   indexChunks,
   pointId,
+  chunksDigest,
+  CURRENT_EMBEDDING_VERSIONS,
+  DEFAULT_EMBEDDING_MODEL_REVISION,
 } from '../packages/rag/dist/index.js';
 import {
   DEFAULT_PRICES,
@@ -28,6 +33,7 @@ import {
   createLlmClient,
   readLlmConfig,
   rewriteQuery,
+  REWRITE_PROMPT_VERSION,
 } from '../packages/agent/dist/index.js';
 import { MemoryStore } from '../packages/db/dist/index.js';
 
@@ -145,15 +151,33 @@ for (const c of chunks) {
     }),
   });
 }
-const emb = new OnnxEmbedder('Xenova/multilingual-e5-small', modelDir);
+// 本地模型目录须是 Dockerfile 固定的 revision(EMBEDDING_MODEL_REVISION 可覆盖)
+const revision = process.env.EMBEDDING_MODEL_REVISION || DEFAULT_EMBEDDING_MODEL_REVISION;
+const emb = new OnnxEmbedder(
+  'Xenova/multilingual-e5-small',
+  modelDir,
+  undefined,
+  undefined,
+  revision,
+);
+const digest = chunksDigest(emb, chunks);
+const V = CURRENT_EMBEDDING_VERSIONS;
+out(
+  `EVAL versions chunker=${V.chunker} embedText=${V.embedText} model=${emb.model}@${revision} prompt=${REWRITE_PROMPT_VERSION} digest=${digest.slice(0, 12)}`,
+);
 const vs = new MemoryVectorStore();
 const cache = '/tmp/rl-eval-vectors.json';
-if (existsSync(cache) && JSON.parse(readFileSync(cache, 'utf8')).n === chunks.length) {
-  for (const p of JSON.parse(readFileSync(cache, 'utf8')).points) vs.points.set(p.id, p);
+const cached = existsSync(cache) ? JSON.parse(readFileSync(cache, 'utf8')) : null;
+if (cached?.digest === digest && cached.points?.length === chunks.length) {
+  for (const p of cached.points) vs.points.set(p.id, p);
+  out(`EVAL vectors reused (digest match)`);
 } else {
   const t0 = Date.now();
   await indexChunks({ repoId: 1, commitSha: SHA, chunks, batchSize: 16 }, emb, vs);
-  writeFileSync(cache, JSON.stringify({ n: chunks.length, points: [...vs.points.values()] }));
+  writeFileSync(
+    cache,
+    JSON.stringify({ digest, n: chunks.length, points: [...vs.points.values()] }),
+  );
   out(`EVAL embedded ${chunks.length} chunks in ${((Date.now() - t0) / 1000).toFixed(0)}s`);
 }
 
@@ -168,6 +192,19 @@ const gateway = new LlmGateway({
   prices: DEFAULT_PRICES,
   dailyBudgetCents: 100,
 });
+
+const rwFile = '/tmp/rl-eval-rewrites.json';
+const rwStore = existsSync(rwFile) ? JSON.parse(readFileSync(rwFile, 'utf8')) : {};
+// fake LLM 的改写不写缓存(避免污染真实改写结果)
+const rwCache = fake
+  ? undefined
+  : {
+      get: (k) => rwStore[k] ?? null,
+      set: (k, v) => {
+        rwStore[k] = v;
+        writeFileSync(rwFile, JSON.stringify(rwStore, null, 1));
+      },
+    };
 
 const okFile = (path, want) =>
   want.some((w) => (w.endsWith('/') ? path.startsWith(w) : path === w));
@@ -187,6 +224,7 @@ if (ATTRIB) {
     const rewritten = await rewriteQuery(q, {
       gateway,
       model: cfg.chatModel,
+      cache: rwCache,
       log: (l) => (log = l),
     });
     const kwQuery = rewritten === q ? q : `${rewritten} ${q}`;
@@ -243,7 +281,12 @@ if (DIAG) {
       out(`   ${i + 1}. ${c.path}:${c.startLine}-${c.endLine} ${c.symbol ?? '-'}${extra(c, i)}`);
   };
   let log;
-  const rewritten = await rewriteQuery(q, { gateway, model: cfg.chatModel, log: (l) => (log = l) });
+  const rewritten = await rewriteQuery(q, {
+    gateway,
+    model: cfg.chatModel,
+    cache: rwCache,
+    log: (l) => (log = l),
+  });
   out(
     `DIAG q="${q}" rewritten="${rewritten}" used=${log?.used} costMicroUsd=${log?.costMicroUsd ?? 0}`,
   );
@@ -312,9 +355,14 @@ let cost = 0;
 const per = { 中: [0, 0, 0, 0, 0], 英: [0, 0, 0, 0, 0], H: [0, 0, 0, 0, 0], S: [0, 0, 0, 0, 0] };
 for (const [id, q, want, syms] of SETS[setName]) {
   let log;
-  const rewritten = await rewriteQuery(q, { gateway, model: cfg.chatModel, log: (l) => (log = l) });
+  const rewritten = await rewriteQuery(q, {
+    gateway,
+    model: cfg.chatModel,
+    cache: rwCache,
+    log: (l) => (log = l),
+  });
   if (
-    log?.used ||
+    (log?.used && !log?.cacheHit) ||
     ['budget', 'breaker', 'unavailable', 'empty', 'error'].includes(log?.reason ?? '')
   )
     calls++;
@@ -344,7 +392,7 @@ for (const [id, q, want, syms] of SETS[setName]) {
   top5 += hit ? 1 : 0;
   top1 += first ? 1 : 0;
   out(
-    `EVAL ${id} hit5=${hit ? 1 : 0} top1=${first ? 1 : 0} vecOnly(原问题)hit5=${bHit ? 1 : 0} top1=${bFirst ? 1 : 0} retrieval=${r.retrieval} rewrite=${log?.used ? 'used' : log?.reason} q="${q}" rw="${rewritten}"`,
+    `EVAL ${id} hit5=${hit ? 1 : 0} top1=${first ? 1 : 0} vecOnly(原问题)hit5=${bHit ? 1 : 0} top1=${bFirst ? 1 : 0} retrieval=${r.retrieval} rewrite=${log?.used ? (log?.cacheHit ? 'cached' : 'used') : log?.reason} q="${q}" rw="${rewritten}"`,
   );
   for (const [i, h] of r.hits.entries())
     out(
@@ -357,5 +405,5 @@ for (const [k, [n, a, b, c, d]] of Object.entries(per))
       `EVAL group ${k}: top5 ${a}/${n} top1 ${b}/${n} | 仅向量(原问题,无改写)基线 top5 ${c}/${n} top1 ${d}/${n}`,
     );
 out(
-  `EVAL ${setName} total top5=${top5}/${SETS[setName].length} top1=${top1}/${SETS[setName].length} chunks=${chunks.length} llm=${fake ? 'fake(改写未运行)' : 'deepseek'} rewriteCalls=${calls} costMicroUsd=${cost} prompt=rw-1`,
+  `EVAL ${setName} total top5=${top5}/${SETS[setName].length} top1=${top1}/${SETS[setName].length} chunks=${chunks.length} llm=${fake ? 'fake(改写未运行)' : 'deepseek'} rewriteCalls=${calls} costMicroUsd=${cost} prompt=${REWRITE_PROMPT_VERSION} chunker=${V.chunker} embedText=${V.embedText} revision=${revision}`,
 );

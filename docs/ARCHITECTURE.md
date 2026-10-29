@@ -381,14 +381,14 @@ Qdrant collection `code_chunks`:命名向量 `dense`,384 维(multilingual-e5-sma
 - **TTL 与续期**:`EMBEDDING_LOCK_TTL_SEC`(≥60,默认 300)。持有者每 TTL/3 用 Lua 心跳续期,只续自己 token 的锁,所以向量化耗时不受 TTL 限制;TTL 只决定持有者崩溃后多久释放。实测(hono ed1d5f7,1434 块,e5-small fp32,batch 16):单核(taskset 单核 + intraOp 1 线程,平均 0.99 核)3.6 块/秒。
 - **持锁校验**:每次 `deleteCommit`/`upsert` 前校验锁仍属于自己(同时续期);已丢失(续期失败或被接管)则抛 `EmbedLockLostError` 中止写入,不写 `:done`。释放用 Lua 校验 token,只删自己的锁。
 - **等待者**:拿不到锁的任务不写、轮询等待,并发一次进度事件 `embedding 85「等待同 commit 的另一任务完成向量化」`;最长等待 `EMBEDDING_LOCK_MAX_WAIT_SEC`(默认 3600,按单核 3.6 块/秒约覆盖 1.3 万块),超时本任务 `embeddingStatus=failed`(图与摘要不受影响)。
-- **完成标记**:持有者成功后写 `:done = <embeddingDigest>`。等待者只有在标记等于自己算出的 digest、且锁已释放时才记 `reused`;不一致(内容变了)或持有者失败/过期则接手重建。
+- **完成标记**:持有者成功后写 `:done = <embeddingDigest>`。digest(`chunksDigest`)= sha256(版本头 + 按 id 排序的切块行),版本头包含 embedding 模型名、模型 revision(`EMBEDDING_MODEL_REVISION`,Dockerfile 与 config 默认值一致)、`CHUNKER_VERSION`(packages/shared)与 `EMBED_TEXT_VERSION`(packages/rag,向量化文本格式);任一版本变化 digest 即变,旧 `:done` 与旧任务 digest 都不再复用(T-214b)。等待者只有在标记等于自己算出的 digest、且锁已释放时才记 `reused`;不一致(内容变了)或持有者失败/过期则接手重建。
 - **跨任务复用**:按 (repo, commit) 取最近一次 done 任务的 `stats.embeddingDigest` 作为基线(`analysis_task` 有 `uk_repo_commit`,同 commit 重跑复用同一行,因此同时在流水线开始时读取本行旧 digest);digest 一致且点数一致则 `reused`,内容变化则重建。
 
 与架构师口径 `ok|failed|skipped` 的对应:`ready`、`reused` 都算 **ok**(向量可用),`failed`→failed,`skipped`→skipped;细分 ready/reused 只为观测复用率。
 
 降级约定:检索只在 `ready|reused` 时走向量路;其余情况(含 `null`)或查询时 Qdrant 不可用,只用关键词/精确匹配路做 RRF,不报错、不返回 5xx;问答 `done` 事件用可选字段 `retrieval: "hybrid" | "keyword-only"` 标注(见 SSE `done` 一节,shared `chat.ts` 已加)。降级原因只进日志,不进响应:`status:<embeddingStatus>`、`no-vector-store`、`vector-error`。
 
-**查询改写(T-214 PR-2)**:中文问题先经 LLM(DeepSeek,`purpose: chat`,提示词版本 `rw-1`)改写为英文关键词串,改写结果用于向量查询,关键词路用「改写结果 + 原问题」;非中文问题不改写。改写失败一律回退原问题、不报错、不新增错误码,回退原因只记日志:`not-chinese`、`budget`(超出 LLM 预算)、`breaker`(熔断打开,`LLM_UNAVAILABLE` 且 cause 为 `CircuitOpenError`)、`unavailable`、`empty`、`error`。
+**查询改写(T-214 PR-2)**:中文问题先经 LLM(DeepSeek,`purpose: chat`,提示词版本 `rw-3`,temperature 固定 0)改写为英文概念关键词串(保留通用类别词及其标识符形态,不输出文件名/路径/扩展名,模型仍输出时由后处理剔除),改写结果用于向量查询,关键词路用「改写结果 + 原问题」;非中文问题不改写。改写结果按 `rewrite:<提示词版本>:<模型>:sha256(问题)` 缓存(`RewriteCache` 接口,回退结果不缓存),同一问题同一提示词版本改写稳定。向量缓存键的模型段为 `model@revision`,因此部署后旧 Redis 向量缓存会各失配一次。检索侧(T-214b):stem 不把 `router` 合并为 `route`,丢弃长度 <2 的词;精确匹配路先符号(含 `类.方法` 的方法名)后路径,按文件去重,最多 10 条。改写失败一律回退原问题、不报错、不新增错误码,回退原因只记日志:`not-chinese`、`budget`(超出 LLM 预算)、`breaker`(熔断打开,`LLM_UNAVAILABLE` 且 cause 为 `CircuitOpenError`)、`unavailable`、`empty`、`error`。
 
 ### 5.4 Redis key 设计
 | Key | 类型 | TTL | 用途 |

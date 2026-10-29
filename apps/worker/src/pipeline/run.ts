@@ -620,7 +620,7 @@ export async function runEmbedding(
   const doneDigest = (await store.latestDoneTaskForCommit(repoId, commitSha))?.stats
     .embeddingDigest;
   const baseline = typeof doneDigest === 'string' ? doneDigest : prevDigest;
-  const digest = chunksDigest(deps.embedder!.model, chunks);
+  const digest = chunksDigest(deps.embedder!, chunks);
   const index = (beforeWrite?: () => Promise<void>) =>
     indexChunks(
       { repoId, commitSha, chunks, batchSize: config.embedding.batchSize, prevDigest: baseline },
