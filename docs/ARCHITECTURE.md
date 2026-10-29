@@ -367,6 +367,8 @@ Qdrant collection `code_chunks`:命名向量 `dense`,384 维(multilingual-e5-sma
 | `skipped` | 未配置向量库(EMBEDDER/QDRANT 未设),未向量化 |
 | `failed` | 向量化出错;已发一次 `stage_error{stage:"embedding"}`,任务仍 `done`,图与摘要可用 |
 
+与架构师口径 `ok|failed|skipped` 的对应:`ready`、`reused` 都算 **ok**(向量可用),`failed`→failed,`skipped`→skipped;细分 ready/reused 只为观测复用率。
+
 降级约定:检索只在 `ready|reused` 时走向量路;其余情况(含 `null`)或查询时 Qdrant 不可用,只用关键词/精确匹配路做 RRF,不报错、不返回 5xx;问答 `done` 事件上如何标注本次未用向量检索,在 T-214 第二部分与前端约定(**未定**,不擅自加字段)。
 
 ### 5.4 Redis key 设计
